@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --orange-primary: #f59321;
+  --orange-light: #ffb03b;
+  --yellow-accent: #ffd338;
+  --navy-panel: #182234;
+  --navy-deep: #111827;
+  --green-success: #24782b;
+  --blue-info: #14498a;
+  --cream-bg: #fdf5e4;
+  --cream-soft: #f3e5cb;
+  --wood-dark: #4e2b11;
+  --wood-text: #2e1908;
+  --sky-top: #4b94e6;
+  --sky-bottom: #a8d8ff;
+}
+
+body {
+  @apply bg-[var(--cream-bg)] text-[var(--wood-text)] antialiased;
+  font-family: var(--font-nunito), system-ui, sans-serif;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-fredoka), var(--font-nunito), system-ui, sans-serif;
+}
+
+@layer components {
+  .btn-chunky {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-3 font-display text-base font-semibold transition-transform active:translate-y-0.5;
+    box-shadow: 0 4px 0 0 rgba(0, 0, 0, 0.25);
+  }
+  .btn-primary {
+    @apply btn-chunky bg-[var(--orange-primary)] text-[#2e1502];
+  }
+  .btn-secondary {
+    @apply btn-chunky bg-[var(--navy-panel)] text-white;
+  }
+  .btn-success {
+    @apply btn-chunky bg-[var(--green-success)] text-white;
+  }
+  .card-panel {
+    @apply rounded-3xl border-2 border-[#e8d5b0] bg-white/90 p-6 shadow-lg;
+  }
+  .card-navy {
+    @apply rounded-3xl bg-[var(--navy-panel)] p-6 text-white shadow-lg;
+  }
+  .input-field {
+    @apply w-full rounded-2xl border-2 border-[#e8d5b0] bg-white px-4 py-3 text-[var(--wood-text)] outline-none focus:border-[var(--orange-primary)];
+  }
+  .label-field {
+    @apply mb-1 block text-sm font-semibold text-[var(--wood-text)];
+  }
+}
