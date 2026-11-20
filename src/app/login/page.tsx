@@ -39,9 +39,11 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-[var(--sky-top)] to-[var(--sky-bottom)] px-4">
       <div className="card-panel w-full max-w-md">
         <div className="mb-6 text-center">
-          <span className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--orange-primary)] text-3xl shadow-md">
-            🎓
-          </span>
+          <img
+            src="/icons/icon-192.png"
+            alt="Logo llysSmart"
+            className="mx-auto mb-3 h-16 w-16 rounded-2xl shadow-md"
+          />
           <h1 className="font-display text-2xl font-bold">Masuk llysSmart</h1>
           <p className="text-sm text-[var(--wood-text)]/70">Let&apos;s Learn Your Skills</p>
         </div>

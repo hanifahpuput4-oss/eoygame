@@ -20,8 +20,9 @@ export default async function TeacherLayout({ children }: { children: React.Reac
     <div className="min-h-screen bg-[var(--cream-bg)]">
       <header className="bg-[var(--navy-panel)] text-white">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-6 py-4">
-          <Link href="/dashboard/teacher" className="font-display text-xl font-bold">
-            🎓 llysSmart Guru
+          <Link href="/dashboard/teacher" className="flex items-center gap-2.5 font-display text-xl font-bold">
+            <img src="/icons/icon-192.png" alt="Logo llysSmart" className="h-9 w-9 rounded-xl shadow" />
+            <span>llysSmart Guru</span>
           </Link>
           <nav className="flex flex-wrap gap-2">
             {nav.map((n) => (

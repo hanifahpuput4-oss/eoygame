@@ -8,9 +8,11 @@ export default async function LandingPage() {
     <main className="min-h-screen bg-gradient-to-b from-[var(--sky-top)] to-[var(--sky-bottom)]">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
         <div className="flex items-center gap-3">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--orange-primary)] text-2xl shadow-md">
-            🎓
-          </span>
+          <img
+            src="/icons/icon-192.png"
+            alt="Logo llysSmart"
+            className="h-12 w-12 rounded-2xl shadow-md"
+          />
           <div>
             <span className="block font-display text-2xl font-bold leading-none text-white drop-shadow">llysSmart</span>
             <span className="text-xs font-bold text-white/85">Let&apos;s Learn Your Skills</span>
