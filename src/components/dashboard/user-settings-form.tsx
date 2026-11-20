@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
+import DashboardLoader from '@/components/dashboard/dashboard-loader';
 
 type AvatarKey = 'cat-blue' | 'cat-pink' | 'cat-green' | 'cat-orange' | 'cat-purple';
 
@@ -131,7 +132,7 @@ export default function UserSettingsForm() {
   }
 
   if (loading) {
-    return <p className="text-sm text-[var(--wood-text)]/70">Memuat pengaturan akun...</p>;
+    return <DashboardLoader label="Memuat pengaturan akun..." cards={1} />;
   }
 
   return (

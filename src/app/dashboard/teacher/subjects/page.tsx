@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
+import DashboardLoader from '@/components/dashboard/dashboard-loader';
 
 type LevelRow = {
   id: string;
@@ -512,7 +513,7 @@ export default function SubjectsManagementPage() {
         </form>
 
         {loading ? (
-          <p className="text-sm">Memuat daftar mapel...</p>
+          <DashboardLoader label="Memuat daftar mata pelajaran & soal..." compact />
         ) : subjectGroups.length === 0 ? (
           <p className="text-sm text-[var(--wood-text)]/60">
             Belum ada mata pelajaran. Tambahkan mapel baru pada form di atas.

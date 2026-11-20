@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
+import DashboardLoader from '@/components/dashboard/dashboard-loader';
 
 type Room = {
   id: string;
@@ -377,7 +378,7 @@ export default function RoomsPage() {
       </form>
 
       {loading ? (
-        <p className="mt-8 text-center text-sm">Memuat...</p>
+        <DashboardLoader label="Memuat daftar ruang game..." cards={2} />
       ) : rooms.length === 0 ? (
         <p className="mt-8 text-center text-sm text-[var(--wood-text)]/60">Belum ada ruang game.</p>
       ) : (

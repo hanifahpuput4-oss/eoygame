@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
+import DashboardLoader from '@/components/dashboard/dashboard-loader';
 
 type Classroom = {
   id: string;
@@ -193,7 +194,7 @@ export default function ClassroomsPage() {
       </form>
 
       {loading ? (
-        <p className="mt-8 text-center text-sm">Memuat...</p>
+        <DashboardLoader label="Memuat daftar kelas..." cards={2} />
       ) : classrooms.length === 0 ? (
         <p className="mt-8 text-center text-sm text-[var(--wood-text)]/60">
           Belum ada kelas. Buat kelas pertama di form atas.
