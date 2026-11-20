@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
 
 type ActiveRoom = {
   id: string;
@@ -36,25 +37,43 @@ function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
 
 export default function StudentDashboard() {
   const router = useRouter();
-  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+  const [classrooms, setClassrooms] = useState<Classroom[]>(() => getCachedData<Classroom[]>('student:classrooms') ?? []);
   const [joinCode, setJoinCode] = useState('');
   const [joinError, setJoinError] = useState('');
   const [joiningClass, setJoiningClass] = useState(false);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
-  const [profile, setProfile] = useState<{ username: string; totalPoints: number; totalStars: number; avatar: string } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<{ username: string; totalPoints: number; totalStars: number; avatar: string } | null>(
+    () => getCachedData('user:profile'),
+  );
+  const [loading, setLoading] = useState(() => getCachedData<Classroom[]>('student:classrooms') === null);
 
   const load = useCallback(async () => {
     try {
-      const [cRes, pRes] = await Promise.all([fetch('/api/classrooms'), fetch('/api/profile')]);
-      if (cRes.ok) setClassrooms((await cRes.json()).classrooms);
-      if (pRes.ok) setProfile((await pRes.json()).profile);
+      const res = await fetch('/api/classrooms?withProfile=1');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.classrooms)) {
+          setClassrooms(data.classrooms);
+          setCachedData('student:classrooms', data.classrooms);
+        }
+        if (data.profile) {
+          setProfile(data.profile);
+          setCachedData('user:profile', data.profile);
+        }
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    const cachedClassrooms = getPersistedCache<Classroom[]>('student:classrooms');
+    const cachedProfile = getPersistedCache<{ username: string; totalPoints: number; totalStars: number; avatar: string }>('user:profile');
+    if (cachedClassrooms) {
+      setClassrooms(cachedClassrooms);
+      setLoading(false);
+    }
+    if (cachedProfile) setProfile(cachedProfile);
     load();
     const timer = setInterval(load, 3000);
     return () => clearInterval(timer);

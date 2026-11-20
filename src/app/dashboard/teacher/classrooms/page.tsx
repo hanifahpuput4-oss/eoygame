@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
 
 type Classroom = {
   id: string;
@@ -23,26 +24,35 @@ type StudentMember = {
 const emptyForm = { name: '', subject: '', grade: '', description: '' };
 
 export default function ClassroomsPage() {
-  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+  const [classrooms, setClassrooms] = useState<Classroom[]>(() => getCachedData<Classroom[]>('teacher:classrooms') ?? []);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => getCachedData<Classroom[]>('teacher:classrooms') === null);
 
   const [selectedClassroom, setSelectedClassroom] = useState<Classroom | null>(null);
   const [students, setStudents] = useState<StudentMember[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/classrooms');
-    if (res.ok) {
-      const data = await res.json();
-      setClassrooms(data.classrooms);
+    try {
+      const res = await fetch('/api/classrooms');
+      if (res.ok) {
+        const data = await res.json();
+        setClassrooms(data.classrooms);
+        setCachedData('teacher:classrooms', data.classrooms);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
+    const cached = getPersistedCache<Classroom[]>('teacher:classrooms');
+    if (cached) {
+      setClassrooms(cached);
+      setLoading(false);
+    }
     load();
   }, [load]);
 
@@ -77,14 +87,26 @@ export default function ClassroomsPage() {
     }
     setForm(emptyForm);
     setEditingId(null);
-    load();
+    if (data.classroom) {
+      setClassrooms((prev) =>
+        editingId
+          ? prev.map((c) => (c.id === editingId ? data.classroom : c))
+          : [data.classroom, ...prev],
+      );
+    } else {
+      load();
+    }
   }
 
   async function onDelete(id: string) {
     if (!confirm('Hapus kelas ini? Semua data terkait ikut terhapus.')) return;
-    await fetch(`/api/classrooms/${id}`, { method: 'DELETE' });
+    const prevList = classrooms;
+    setClassrooms((prev) => prev.filter((c) => c.id !== id));
     if (selectedClassroom?.id === id) setSelectedClassroom(null);
-    load();
+    const res = await fetch(`/api/classrooms/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setClassrooms(prevList);
+    }
   }
 
   async function onRegenerate(id: string) {
@@ -93,7 +115,14 @@ export default function ClassroomsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'regenerate-code' }),
     });
-    if (res.ok) load();
+    if (res.ok) {
+      const data = await res.json();
+      if (data.joinCode) {
+        setClassrooms((prev) => prev.map((c) => (c.id === id ? { ...c, joinCode: data.joinCode } : c)));
+      } else {
+        load();
+      }
+    }
   }
 
   return (

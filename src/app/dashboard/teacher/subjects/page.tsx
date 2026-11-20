@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
 
 type LevelRow = {
   id: string;
@@ -72,9 +73,9 @@ function parseMapMeta(lvl: LevelRow): { subjectName: string; grade: string; obje
 }
 
 export default function SubjectsManagementPage() {
-  const [levels, setLevels] = useState<LevelRow[]>([]);
-  const [questions, setQuestions] = useState<QuestionRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [levels, setLevels] = useState<LevelRow[]>(() => getCachedData<LevelRow[]>('teacher:levels') ?? []);
+  const [questions, setQuestions] = useState<QuestionRow[]>(() => getCachedData<QuestionRow[]>('teacher:questions') ?? []);
+  const [loading, setLoading] = useState(() => getCachedData<LevelRow[]>('teacher:levels') === null);
 
   const [newSubject, setNewSubject] = useState({ subjectName: '', grade: '', firstObjective: '' });
   const [selectedSubjectKey, setSelectedSubjectKey] = useState<string>('');
@@ -102,19 +103,30 @@ export default function SubjectsManagementPage() {
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const load = useCallback(async () => {
-    const [lvRes, qRes] = await Promise.all([fetch('/api/levels'), fetch('/api/questions')]);
-    if (lvRes.ok) {
-      const lvData = await lvRes.json();
-      setLevels(lvData.levels ?? []);
+    try {
+      const res = await fetch('/api/levels?withQuestions=1');
+      if (res.ok) {
+        const data = await res.json();
+        const lv = data.levels ?? [];
+        const qs = data.questions ?? [];
+        setLevels(lv);
+        setQuestions(qs);
+        setCachedData('teacher:levels', lv);
+        setCachedData('teacher:questions', qs);
+      }
+    } finally {
+      setLoading(false);
     }
-    if (qRes.ok) {
-      const qData = await qRes.json();
-      setQuestions(qData.questions ?? []);
-    }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
+    const cachedLevels = getPersistedCache<LevelRow[]>('teacher:levels');
+    const cachedQuestions = getPersistedCache<QuestionRow[]>('teacher:questions');
+    if (cachedLevels) {
+      setLevels(cachedLevels);
+      setLoading(false);
+    }
+    if (cachedQuestions) setQuestions(cachedQuestions);
     load();
   }, [load]);
 
@@ -235,8 +247,12 @@ export default function SubjectsManagementPage() {
 
   async function onDeleteObjective(levelId: string, label: string) {
     if (!confirm(`Hapus tujuan pembelajaran "${label}"?`)) return;
-    await fetch(`/api/levels/${levelId}`, { method: 'DELETE' });
-    await load();
+    const prevLevels = levels;
+    setLevels((prev) => prev.filter((l) => l.id !== levelId));
+    const res = await fetch(`/api/levels/${levelId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setLevels(prevLevels);
+    }
   }
 
   async function onSaveQuestion(e: React.FormEvent) {
@@ -309,23 +325,20 @@ export default function SubjectsManagementPage() {
   async function onDeleteQuestion(qId: string) {
     if (!activeObjective) return;
     if (!confirm('Hapus soal ini dari tujuan pembelajaran?')) return;
-    await fetch(`/api/questions/${qId}`, { method: 'DELETE' });
-    const nextIds = activeObjective.level.questionIds.filter((id) => id !== qId);
-    const meta = parseMapMeta(activeObjective.level);
-    await fetch(`/api/levels/${activeObjective.level.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: activeObjective.level.name,
-        description: activeObjective.level.description,
-        difficulty: activeObjective.level.difficulty,
-        completionRequirement: Math.max(1, nextIds.length),
-        rewardConfig: { stars: 3 },
-        mapConfig: meta,
-        questionIds: nextIds,
-      }),
-    });
-    await load();
+    const targetLevelId = activeObjective.level.id;
+    const prevQuestions = questions;
+    const prevLevels = levels;
+    setQuestions((prev) => prev.filter((q) => q.id !== qId));
+    setLevels((prev) =>
+      prev.map((l) =>
+        l.id === targetLevelId ? { ...l, questionIds: l.questionIds.filter((id) => id !== qId) } : l,
+      ),
+    );
+    const res = await fetch(`/api/questions/${qId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setQuestions(prevQuestions);
+      setLevels(prevLevels);
+    }
   }
 
   function downloadTemplateCsv() {

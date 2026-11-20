@@ -1,4 +1,4 @@
-import { and, eq, count, desc } from 'drizzle-orm';
+import { and, eq, count, desc, inArray } from 'drizzle-orm';
 import { db } from '@/db';
 import {
   classroomMembers,
@@ -125,7 +125,45 @@ export async function listTeacherRooms(hostId: string) {
     .from(rooms)
     .where(eq(rooms.hostId, hostId))
     .orderBy(desc(rooms.createdAt));
-  return Promise.all(rows.map(withDetails));
+
+  if (rows.length === 0) return [];
+
+  const roomIds = rows.map((r) => r.id);
+  const levelIds = Array.from(new Set(rows.map((r) => r.levelId)));
+  const classroomIds = Array.from(new Set(rows.map((r) => r.classroomId)));
+
+  const [allPlayers, allLevels, allClassrooms] = await Promise.all([
+    db
+      .select({
+        id: roomPlayers.id,
+        roomId: roomPlayers.roomId,
+        userId: roomPlayers.userId,
+        username: users.username,
+        fullName: users.fullName,
+        avatar: roomPlayers.avatar,
+        role: users.role,
+        lastX: roomPlayers.lastX,
+        lastY: roomPlayers.lastY,
+        lastFacing: roomPlayers.lastFacing,
+        ready: roomPlayers.ready,
+      })
+      .from(roomPlayers)
+      .innerJoin(users, eq(roomPlayers.userId, users.id))
+      .where(inArray(roomPlayers.roomId, roomIds)),
+    db.select().from(levels).where(inArray(levels.id, levelIds)),
+    db.select().from(classrooms).where(inArray(classrooms.id, classroomIds)),
+  ]);
+
+  const levelMap = new Map(allLevels.map((l) => [l.id, l]));
+  const classroomMap = new Map(allClassrooms.map((c) => [c.id, c]));
+
+  return rows.map((room) => ({
+    ...room,
+    settings: JSON.parse(room.settings || '{}'),
+    players: allPlayers.filter((p) => p.roomId === room.id),
+    level: levelMap.get(room.levelId) ?? null,
+    classroom: classroomMap.get(room.classroomId) ?? null,
+  }));
 }
 
 export async function joinRoom(code: string, userId: string, avatar: string, role: string) {

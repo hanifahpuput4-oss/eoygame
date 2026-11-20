@@ -34,6 +34,7 @@ export function updatePlayerPhysics(
   otherPlayers: Iterable<Player> = [],
   extraPlatforms: Platform[] = [],
   onTouchQuestionBlock?: (questionId: string) => void,
+  dtScale = 1,
 ) {
   const allPlatforms = extraPlatforms.length > 0 ? [...PLATFORMS, ...extraPlatforms] : PLATFORMS;
 
@@ -60,7 +61,7 @@ export function updatePlayerPhysics(
     p.vx = PHYSICS.moveSpeed;
     p.facing = 1;
   } else {
-    p.vx *= 0.6;
+    p.vx *= Math.pow(0.6, dtScale);
     if (Math.abs(p.vx) < 0.1) p.vx = 0;
   }
 
@@ -71,10 +72,12 @@ export function updatePlayerPhysics(
     p.lastCarrierX = undefined;
   }
 
-  p.vy = Math.min(p.vy + PHYSICS.gravity, PHYSICS.maxFallSpeed);
+  const prevVy = p.vy;
+  p.vy = Math.min(p.vy + PHYSICS.gravity * dtScale, PHYSICS.maxFallSpeed);
+  const stepVy = Math.min(prevVy + 0.5 * PHYSICS.gravity * (dtScale + 1), PHYSICS.maxFallSpeed);
 
   const prevX = p.x;
-  p.x += p.vx;
+  p.x += p.vx * dtScale;
   p.x = Math.max(0, Math.min(WORLD.width - PLAYER_W, p.x));
 
   // Horizontal collision with solid block obstacles (crates, qblocks)
@@ -99,7 +102,7 @@ export function updatePlayerPhysics(
   }
 
   const prevY = p.y;
-  p.y += p.vy;
+  p.y += stepVy * dtScale;
   p.onGround = false;
   let newCarrierId: string | null = null;
   let newCarrierX: number | undefined;

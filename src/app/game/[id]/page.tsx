@@ -7,6 +7,7 @@ import { updatePlayerPhysics, type Player, PLAYER_W, PLAYER_H } from '@/game-eng
 import { drawWorld, drawPlatforms, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
 import { PLATFORMS, SPAWN_POINTS, WORLD, generateQuestionBlocks, type Platform } from '@/game-engine/maps/world';
 import { useAblyRoom } from '@/features/multiplayer/use-ably-room';
+import { clearCachedData } from '@/lib/client-cache';
 import '../game.css';
 
 type RoomPlayer = {
@@ -116,10 +117,56 @@ export default function GamePage() {
   const seenMsgIdsRef = useRef<Set<string>>(new Set());
   const chatCursorRef = useRef<number>(-1);
   const myUsernameRef = useRef<string>('');
+  const sessionIdRef = useRef<string>('');
+  const lastSyncedPosRef = useRef<{ x: number; y: number; facing: number }>({ x: -9999, y: -9999, facing: 1 });
+  const hasLeftRef = useRef(false);
   const chatMinimizedRef = useRef(chatMinimized);
   const [unreadCount, setUnreadCount] = useState(0);
   const ablyEnabled = Boolean(process.env.NEXT_PUBLIC_ABLY_CLIENT_KEY);
   const ably = useAblyRoom(roomId, ablyEnabled);
+
+  function notifyLeaveRoom() {
+    if (hasLeftRef.current || !roomId) return;
+    hasLeftRef.current = true;
+    const payload = JSON.stringify({ roomId });
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        const blob = new Blob([payload], { type: 'application/json' });
+        if (navigator.sendBeacon('/api/game/leave', blob)) return;
+      }
+    } catch {
+      // fallback to keepalive fetch
+    }
+    fetch('/api/game/leave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,
+    }).catch(() => {});
+  }
+
+  function handleSessionReplaced() {
+    hasLeftRef.current = true;
+    clearCachedData();
+    window.location.replace('/login?reason=session_replaced');
+  }
+
+  function handleLeaveGame() {
+    notifyLeaveRoom();
+    router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+  }
+
+  useEffect(() => {
+    hasLeftRef.current = false;
+    const onUnload = () => notifyLeaveRoom();
+    window.addEventListener('pagehide', onUnload);
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('pagehide', onUnload);
+      window.removeEventListener('beforeunload', onUnload);
+      notifyLeaveRoom();
+    };
+  }, [roomId]);
 
   useEffect(() => {
     chatMinimizedRef.current = chatMinimized;
@@ -169,47 +216,39 @@ export default function GamePage() {
     setUnreadCount(0);
 
     async function init() {
-      const pRes = await fetch('/api/profile');
-      if (!pRes.ok) {
+      const res = await fetch('/api/rooms/' + roomId + '?bootstrap=1');
+      if (res.status === 401) {
         router.replace('/login');
         return;
       }
-      const { profile: p } = await pRes.json();
+      if (!res.ok) {
+        setError('Ruang tidak ditemukan');
+        return;
+      }
+      const data = await res.json();
       if (cancelled) return;
+
+      const p = data.profile;
+      const r: RoomData = data.room;
       myIdRef.current = p.id;
       myUsernameRef.current = p.username;
       setMyRole(p.role);
 
-      const rRes = await fetch('/api/rooms/' + roomId);
-      if (!rRes.ok) {
-        setError('Ruang tidak ditemukan');
-        return;
+      if (typeof data.sessionId === 'string' && data.sessionId) {
+        sessionIdRef.current = data.sessionId;
       }
-      let r: RoomData = (await rRes.json()).room;
+      if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
+        chatCursorRef.current = data.chatCursor;
+      }
+
       if (r.status === 'completed' || (p.role !== 'teacher' && r.status !== 'in_progress')) {
         router.replace(p.role === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
         return;
       }
-      const myEntry = (r.players ?? []).find((pl: RoomPlayer) => pl.userId === p.id);
-      if (!myEntry) {
-        const reRes = await fetch('/api/rooms', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId }),
-        });
-        if (!reRes.ok) {
-          router.replace(p.role === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
-          return;
-        }
-        const rd = await reRes.json();
-        if (rd.room) {
-          setRoom(rd.room);
-          r = rd.room;
-        }
-      } else {
-        setRoom(r);
-      }
+
+      setRoom(r);
       roomRef.current = r;
+      const myEntry = (r.players ?? []).find((pl: RoomPlayer) => pl.userId === p.id);
 
       for (const pl of r.players ?? []) {
         const isMe = pl.userId === p.id;
@@ -249,27 +288,13 @@ export default function GamePage() {
         });
       }
 
-      const cRes = await fetch('/api/rooms/' + roomId + '/chat');
-      if (cRes.ok) {
-        const cData = await cRes.json();
-        if (typeof cData.chatCursor === 'number' && cData.chatCursor > chatCursorRef.current) {
-          chatCursorRef.current = cData.chatCursor;
-        }
-      }
-
-      if (r.level?.id) {
-        const lRes = await fetch('/api/levels/' + r.level.id + '/questions');
-        if (lRes.ok) {
-          const data = await lRes.json();
-          const qs: Question[] = data.questions ?? [];
-          setLevelQuestions(qs);
-          levelQuestionsRef.current = qs;
-          questionBlocksRef.current = generateQuestionBlocks(
-            qs.map((q) => q.id),
-            `${p.id}:${roomId}`,
-          );
-        }
-      }
+      const qs: Question[] = data.questions ?? [];
+      setLevelQuestions(qs);
+      levelQuestionsRef.current = qs;
+      questionBlocksRef.current = generateQuestionBlocks(
+        qs.map((q) => q.id),
+        `${p.id}:${roomId}`,
+      );
     }
 
     init();
@@ -532,9 +557,17 @@ export default function GamePage() {
     let prevSentX = -1;
     let prevSentY = -1;
     let prevSentFacing = 0;
+    let lastFrameTime = performance.now();
 
-    function loop() {
+    function loop(now = performance.now()) {
       if (!ctx || !canvas) return;
+      const elapsedMs = now - lastFrameTime;
+      lastFrameTime = now;
+      // Normalisasi delta-time ke basis 60 FPS (16.6667ms) supaya layar Android 90Hz/120Hz/144Hz
+      // punya kecepatan jalan & lompat yang persis sama dengan iOS dan PC 60Hz
+      const dtScale = elapsedMs > 0 ? Math.min(2.5, Math.max(0.1, elapsedMs / (1000 / 60))) : 1;
+      const remoteLerp = 1 - Math.pow(1 - 0.22, dtScale);
+      const camLerp = 1 - Math.pow(1 - 0.12, dtScale);
       tick += 1;
 
       const me = playersRef.current.get(myIdRef.current);
@@ -548,7 +581,7 @@ export default function GamePage() {
           } else if (Math.abs(dx) < 0.35) {
             p.x = p.targetX;
           } else {
-            p.x += dx * 0.22;
+            p.x += dx * remoteLerp;
           }
         }
         if (p.targetY !== undefined) {
@@ -558,7 +591,7 @@ export default function GamePage() {
           } else if (Math.abs(dy) < 0.35) {
             p.y = p.targetY;
           } else {
-            p.y += dy * 0.22;
+            p.y += dy * remoteLerp;
           }
         }
       }
@@ -571,28 +604,35 @@ export default function GamePage() {
       });
 
       if (me && (room?.status === 'in_progress' || room?.status === 'waiting')) {
-        updatePlayerPhysics(me, keysRef.current, playersRef.current.values(), dynBlocks, (qid) => {
-          if (myRole === 'teacher') return;
-          if (answeredIdsRef.current.has(qid)) return;
-          if (questionRef.current?.id === qid) {
-            setQuestionMinimized(false);
-            return;
-          }
-          const found = levelQuestionsRef.current.find((q) => q.id === qid);
-          if (found) {
-            questionRef.current = found;
-            setQuestion(found);
-            setQuestionMinimized(false);
-            setSelected('');
-          }
-        });
+        updatePlayerPhysics(
+          me,
+          keysRef.current,
+          playersRef.current.values(),
+          dynBlocks,
+          (qid) => {
+            if (myRole === 'teacher') return;
+            if (answeredIdsRef.current.has(qid)) return;
+            if (questionRef.current?.id === qid) {
+              setQuestionMinimized(false);
+              return;
+            }
+            const found = levelQuestionsRef.current.find((q) => q.id === qid);
+            if (found) {
+              questionRef.current = found;
+              setQuestion(found);
+              setQuestionMinimized(false);
+              setSelected('');
+            }
+          },
+          dtScale,
+        );
       }
 
       if (me && ablyEnabled && ably.connected && tick % 3 === 0) {
-        const now = Date.now();
+        const nowMs = Date.now();
         const moved = Math.abs(me.x - prevSentX) > 0.5 || Math.abs(me.y - prevSentY) > 0.5 || me.facing !== prevSentFacing;
-        if (moved && now - lastSentRef.current > 60) {
-          lastSentRef.current = now;
+        if (moved && nowMs - lastSentRef.current > 60) {
+          lastSentRef.current = nowMs;
           prevSentX = me.x;
           prevSentY = me.y;
           prevSentFacing = me.facing;
@@ -600,7 +640,7 @@ export default function GamePage() {
         }
       }
 
-      camera.follow(me ? me.x + PLAYER_W / 2 : WORLD.width / 2, me ? me.y : WORLD.height / 2);
+      camera.follow(me ? me.x + PLAYER_W / 2 : WORLD.width / 2, me ? me.y : WORLD.height / 2, camLerp);
 
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -618,7 +658,7 @@ export default function GamePage() {
       ctx.restore();
       raf = requestAnimationFrame(loop);
     }
-    loop();
+    raf = requestAnimationFrame(loop);
 
     return () => {
       cancelAnimationFrame(raf);
@@ -640,17 +680,31 @@ export default function GamePage() {
             chatCursor: chatCursorRef.current,
           };
           if (me) {
-            payload.x = Math.round(me.x * 10) / 10;
-            payload.y = Math.round(me.y * 10) / 10;
-            payload.facing = me.facing;
+            const rx = Math.round(me.x * 10) / 10;
+            const ry = Math.round(me.y * 10) / 10;
+            const prev = lastSyncedPosRef.current;
+            if (Math.abs(rx - prev.x) > 0.5 || Math.abs(ry - prev.y) > 0.5 || me.facing !== prev.facing) {
+              payload.x = rx;
+              payload.y = ry;
+              payload.facing = me.facing;
+              lastSyncedPosRef.current = { x: rx, y: ry, facing: me.facing };
+            }
           }
           const res = await fetch('/api/game/room-sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
+          if (res.status === 401) {
+            active = false;
+            handleSessionReplaced();
+            return;
+          }
           if (!res.ok || !active) return;
           const data = await res.json();
+          if (typeof data.sessionId === 'string' && data.sessionId) {
+            sessionIdRef.current = data.sessionId;
+          }
           const serverPlayers: RoomPlayer[] = data.players ?? [];
           setScores((prev) => {
             const next = { ...prev };
@@ -892,21 +946,22 @@ export default function GamePage() {
     setSubmitting(true);
     try {
       const answeredId = question.id;
-      const sessionRes = await fetch('/api/rooms/' + roomId);
-      const { room: r } = await sessionRes.json();
-      const sRes = await fetch('/api/game/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, levelId: r.level?.id }),
-      });
-      const { sessionId } = await sRes.json();
-
       const res = await fetch('/api/game/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, questionId: answeredId, answer: selected, timeSpent: 0 }),
+        body: JSON.stringify({
+          sessionId: sessionIdRef.current || undefined,
+          roomId,
+          levelId: roomRef.current?.level?.id,
+          questionId: answeredId,
+          answer: selected,
+          timeSpent: 0,
+        }),
       });
       const data = await res.json();
+      if (typeof data.sessionId === 'string' && data.sessionId) {
+        sessionIdRef.current = data.sessionId;
+      }
       if (res.ok) {
         const result = data.result ?? data;
         answerResultsRef.current.set(answeredId, Boolean(result.isCorrect));
@@ -1059,7 +1114,7 @@ export default function GamePage() {
                       </svg>
                     )}
                   </button>
-                  <button type="button" className="pause-btn" aria-label="Kembali" title="Kembali" onClick={() => router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student')}>
+                  <button type="button" className="pause-btn" aria-label="Kembali" title="Kembali" onClick={handleLeaveGame}>
                     <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M20 6l-12 10 12 10v-6h8v-8h-8V6z" fill="#fff" /></svg>
                   </button>
                   <button

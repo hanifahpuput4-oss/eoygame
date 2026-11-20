@@ -3,17 +3,27 @@ import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { db } from '@/db';
 import { roomPlayers } from '@/db/schema';
-import { requireUser, requireRole } from '@/server/auth/session';
+import { requireUser } from '@/server/auth/session';
 import { createRoom, listTeacherRooms, joinRoom, getRoom, assertHost } from '@/server/services/room-service';
+import { listClassrooms } from '@/server/services/classroom-service';
+import { listLevels } from '@/server/services/level-service';
 import { roomSchema, joinRoomSchema } from '@/server/middleware/validation';
 import { ok, fail, handleError } from '@/server/middleware/http';
 import { generateId } from '@/server/auth/crypto';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const user = await requireUser();
     if (user.role === 'teacher') {
-      await requireRole('teacher');
+      const bootstrap = req.nextUrl.searchParams.get('bootstrap') === '1';
+      if (bootstrap) {
+        const [rooms, classrooms, levels] = await Promise.all([
+          listTeacherRooms(user.id),
+          listClassrooms(user.id),
+          listLevels(user.id),
+        ]);
+        return ok({ rooms, classrooms, levels });
+      }
       return ok({ rooms: await listTeacherRooms(user.id) });
     }
     return ok({ rooms: [] });
@@ -28,7 +38,6 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     if (user.role === 'teacher') {
-      await requireRole('teacher');
       const input = roomSchema.parse(body);
       const room = await createRoom(user.id, input);
       return ok({ room }, 201);

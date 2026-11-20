@@ -8,32 +8,39 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
+const DISMISS_STORAGE_KEY = 'llys_pwa_banner_dismissed_v1';
+
 export default function PwaInstaller() {
   const pathname = usePathname();
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(true);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(true);
   const [showGuideModal, setShowGuideModal] = useState(false);
   const [platform, setPlatform] = useState<'ios' | 'android' | 'desktop'>('android');
   const [installing, setInstalling] = useState(false);
 
   useEffect(() => {
-    // Register service worker for PWA installability
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
-        // Ignore on non-HTTPS local LAN IPs where browser restricts SW
-      });
+      navigator.serviceWorker
+        .register('/sw.js', { scope: '/' })
+        .then((reg) => {
+          void reg.update();
+        })
+        .catch(() => {});
     }
 
-    const checkStandalone = () => {
-      const standaloneMatch =
-        window.matchMedia('(display-mode: standalone)').matches ||
-        window.matchMedia('(display-mode: fullscreen)').matches ||
-        Boolean((window.navigator as unknown as { standalone?: boolean }).standalone);
-      setIsStandalone(standaloneMatch);
-    };
+    const standaloneMatch =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: fullscreen)').matches ||
+      Boolean((window.navigator as unknown as { standalone?: boolean }).standalone);
+    setIsStandalone(standaloneMatch);
 
-    checkStandalone();
+    try {
+      const wasDismissed = window.localStorage.getItem(DISMISS_STORAGE_KEY) === '1';
+      setDismissed(wasDismissed);
+    } catch {
+      setDismissed(false);
+    }
 
     const ua = window.navigator.userAgent.toLowerCase();
     if (/iphone|ipad|ipod/.test(ua)) {
@@ -53,6 +60,11 @@ export default function PwaInstaller() {
       setDeferredPrompt(null);
       setIsStandalone(true);
       setShowGuideModal(false);
+      try {
+        window.localStorage.setItem(DISMISS_STORAGE_KEY, '1');
+      } catch {
+        // ignore storage restrictions
+      }
     };
 
     window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
@@ -63,6 +75,15 @@ export default function PwaInstaller() {
       window.removeEventListener('appinstalled', onAppInstalled);
     };
   }, []);
+
+  function handleDismiss() {
+    setDismissed(true);
+    try {
+      window.localStorage.setItem(DISMISS_STORAGE_KEY, '1');
+    } catch {
+      // ignore storage restrictions
+    }
+  }
 
   // Hide installer while inside an active game arena or if already running as installed standalone app
   if (isStandalone || pathname?.startsWith('/game')) {
@@ -77,6 +98,7 @@ export default function PwaInstaller() {
         const choice = await deferredPrompt.userChoice;
         if (choice.outcome === 'accepted') {
           setDeferredPrompt(null);
+          handleDismiss();
         }
       } catch {
         setShowGuideModal(true);
@@ -121,7 +143,7 @@ export default function PwaInstaller() {
             </button>
             <button
               type="button"
-              onClick={() => setDismissed(true)}
+              onClick={handleDismiss}
               aria-label="Tutup banner install"
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white"
             >
@@ -140,7 +162,6 @@ export default function PwaInstaller() {
             className="w-full max-w-md rounded-3xl border-[3px] border-[#7aa6eb] bg-gradient-to-b from-[#23385e] to-[#162238] p-5 text-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* App Store / Play Store style header */}
             <div className="flex items-center gap-4 border-b border-white/15 pb-4">
               <img
                 src="/icons/icon-192.png"
@@ -159,7 +180,6 @@ export default function PwaInstaller() {
               </div>
             </div>
 
-            {/* Platform switcher tabs */}
             <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-black/25 p-1">
               <button
                 type="button"

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getCurrentUser } from '@/server/auth/session';
 import { redirect } from 'next/navigation';
 import LogoutButton from '@/components/auth/logout-button';
+import DashboardPrefetcher from '@/components/dashboard/dashboard-prefetcher';
 
 export default async function StudentLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -42,6 +43,7 @@ export default async function StudentLayout({ children }: { children: React.Reac
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
+      <DashboardPrefetcher role="student" />
     </div>
   );
 }

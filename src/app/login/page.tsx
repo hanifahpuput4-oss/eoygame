@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { clearCachedData } from '@/lib/client-cache';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -10,6 +11,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('reason') === 'session_replaced') {
+        setError('Sesi Anda di perangkat ini telah keluar otomatis karena akun login di perangkat lain.');
+      }
+    }
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -26,8 +36,8 @@ export default function LoginPage() {
         setError(data.error ?? 'Login gagal');
         return;
       }
+      clearCachedData();
       router.push(data.user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
-      router.refresh();
     } catch {
       setError('Tidak dapat terhubung ke server');
     } finally {

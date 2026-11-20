@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { clearCachedData } from '@/lib/client-cache';
 
 export default function LogoutButton() {
   const router = useRouter();
@@ -9,9 +10,9 @@ export default function LogoutButton() {
 
   async function onLogout() {
     setLoading(true);
+    clearCachedData();
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
-    router.refresh();
   }
 
   return (
@@ -24,3 +25,4 @@ export default function LogoutButton() {
     </button>
   );
 }
+

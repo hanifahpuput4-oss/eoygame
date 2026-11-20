@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { requireUser, requireRole } from '@/server/auth/session';
+import { requireUser } from '@/server/auth/session';
 import {
   createClassroom,
   listClassrooms,
@@ -10,13 +10,30 @@ import { classroomSchema } from '@/server/middleware/validation';
 import { ok, fail, handleError } from '@/server/middleware/http';
 import { z } from 'zod';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const user = await requireUser();
+    const withProfile = req.nextUrl.searchParams.get('withProfile') === '1';
+    const profilePayload = withProfile
+      ? {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          fullName: user.fullName,
+          role: user.role,
+          avatar: user.avatar,
+          totalPoints: user.totalPoints,
+          totalStars: user.totalStars,
+        }
+      : undefined;
+
     if (user.role === 'teacher') {
-      return ok({ classrooms: await listClassrooms(user.id) });
+      const classrooms = await listClassrooms(user.id);
+      return ok(withProfile ? { classrooms, profile: profilePayload } : { classrooms });
     }
-    return ok({ classrooms: await listStudentClassrooms(user.id) });
+
+    const classrooms = await listStudentClassrooms(user.id);
+    return ok(withProfile ? { classrooms, profile: profilePayload } : { classrooms });
   } catch (err) {
     return handleError(err);
   }
@@ -35,7 +52,9 @@ export async function POST(req: NextRequest) {
       return ok({ classroom }, 201);
     }
 
-    await requireRole('teacher');
+    if (user.role !== 'teacher') {
+      return fail('Hanya guru yang dapat membuat kelas', 403);
+    }
     const input = classroomSchema.parse(body);
     const classroom = await createClassroom(user.id, input);
     return ok({ classroom }, 201);

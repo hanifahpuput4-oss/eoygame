@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { eq, and, ne, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { roomPlayers, users } from '@/db/schema';
-import { requireUser } from '@/server/auth/session';
+import { invalidateUserSessionCache, requireUser } from '@/server/auth/session';
 import { hashPassword, verifyPassword } from '@/server/auth/crypto';
 import { moveSchema } from '@/server/middleware/validation';
 import { ok, fail, handleError } from '@/server/middleware/http';
@@ -50,6 +50,7 @@ export async function PATCH(req: NextRequest) {
       const { avatar } = z.object({ avatar: avatarEnum }).parse(body);
       await db.update(users).set({ avatar, updatedAt: new Date() }).where(eq(users.id, user.id));
       await db.update(roomPlayers).set({ avatar }).where(eq(roomPlayers.userId, user.id));
+      invalidateUserSessionCache(user.id);
       return ok({ avatar });
     }
 
@@ -88,6 +89,7 @@ export async function PATCH(req: NextRequest) {
       if (input.avatar) {
         await db.update(roomPlayers).set({ avatar: input.avatar }).where(eq(roomPlayers.userId, user.id));
       }
+      invalidateUserSessionCache(user.id);
       return ok({
         profile: {
           id: user.id,
@@ -114,6 +116,7 @@ export async function PATCH(req: NextRequest) {
         .update(users)
         .set({ passwordHash, updatedAt: new Date() })
         .where(eq(users.id, user.id));
+      invalidateUserSessionCache(user.id);
       return ok({ success: true });
     }
 

@@ -1,6 +1,8 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
 
 type Room = {
   id: string;
@@ -77,9 +79,9 @@ function parseLevelMeta(lvl: LevelRow): { subjectName: string; grade: string; ob
 }
 
 export default function RoomsPage() {
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
-  const [levels, setLevels] = useState<LevelRow[]>([]);
+  const [rooms, setRooms] = useState<Room[]>(() => getCachedData<Room[]>('teacher:rooms') ?? []);
+  const [classrooms, setClassrooms] = useState<Classroom[]>(() => getCachedData<Classroom[]>('teacher:classrooms') ?? []);
+  const [levels, setLevels] = useState<LevelRow[]>(() => getCachedData<LevelRow[]>('teacher:levels') ?? []);
 
   const [classroomId, setClassroomId] = useState('');
   const [subjectKey, setSubjectKey] = useState('');
@@ -88,24 +90,46 @@ export default function RoomsPage() {
   const [maxPlayers, setMaxPlayers] = useState(40);
 
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => getCachedData<Room[]>('teacher:rooms') === null);
+  const [creating, setCreating] = useState(false);
+  const [, setBusyRoomId] = useState<string | null>(null);
 
   const [recapModal, setRecapModal] = useState<RecapData | null>(null);
   const [loadingRecapId, setLoadingRecapId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [rRes, cRes, lRes] = await Promise.all([
-      fetch('/api/rooms'),
-      fetch('/api/classrooms'),
-      fetch('/api/levels'),
-    ]);
-    if (rRes.ok) setRooms((await rRes.json()).rooms);
-    if (cRes.ok) setClassrooms((await cRes.json()).classrooms);
-    if (lRes.ok) setLevels((await lRes.json()).levels);
-    setLoading(false);
+    try {
+      const res = await fetch('/api/rooms?bootstrap=1');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.rooms)) {
+          setRooms(data.rooms);
+          setCachedData('teacher:rooms', data.rooms);
+        }
+        if (Array.isArray(data.classrooms)) {
+          setClassrooms(data.classrooms);
+          setCachedData('teacher:classrooms', data.classrooms);
+        }
+        if (Array.isArray(data.levels)) {
+          setLevels(data.levels);
+          setCachedData('teacher:levels', data.levels);
+        }
+      }
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
+    const cachedRooms = getPersistedCache<Room[]>('teacher:rooms');
+    const cachedClassrooms = getPersistedCache<Classroom[]>('teacher:classrooms');
+    const cachedLevels = getPersistedCache<LevelRow[]>('teacher:levels');
+    if (cachedRooms) {
+      setRooms(cachedRooms);
+      setLoading(false);
+    }
+    if (cachedClassrooms) setClassrooms(cachedClassrooms);
+    if (cachedLevels) setLevels(cachedLevels);
     load();
   }, [load]);
 
@@ -152,35 +176,57 @@ export default function RoomsPage() {
       customName.trim() ||
       `${cls?.name ?? 'Kelas'} - ${activeSubjectGroup?.subjectName ?? 'Mapel'}: ${obj?.objectiveName ?? 'Sesi'}`.slice(0, 75);
 
-    const res = await fetch('/api/rooms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: autoName,
-        classroomId,
-        levelId,
-        maxPlayers,
-        settings: {},
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error ?? 'Gagal membuat ruang');
-      return;
+    setCreating(true);
+    try {
+      const res = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: autoName,
+          classroomId,
+          levelId,
+          maxPlayers,
+          settings: {},
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? 'Gagal membuat ruang');
+        return;
+      }
+      setCustomName('');
+      if (data.room) {
+        setRooms((prev) => [data.room, ...prev]);
+      } else {
+        void load();
+      }
+    } finally {
+      setCreating(false);
     }
-    setCustomName('');
-    load();
   }
 
   async function setStatus(id: string, status: string) {
-    await fetch(`/api/rooms/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
-    await load();
-    if (status === 'completed') {
-      openRecap(id);
+    setBusyRoomId(id);
+    setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+    try {
+      const res = await fetch(`/api/rooms/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.room) {
+          setRooms((prev) => prev.map((r) => (r.id === id ? data.room : r)));
+        }
+      } else {
+        void load();
+      }
+      if (status === 'completed') {
+        openRecap(id);
+      }
+    } finally {
+      setBusyRoomId(null);
     }
   }
 
@@ -225,8 +271,19 @@ export default function RoomsPage() {
 
   async function onDelete(id: string) {
     if (!confirm('Hapus ruang ini?')) return;
-    await fetch(`/api/rooms/${id}`, { method: 'DELETE' });
-    load();
+    const previous = rooms;
+    setRooms((prev) => prev.filter((r) => r.id !== id));
+    try {
+      const res = await fetch(`/api/rooms/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        setRooms(previous);
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? 'Gagal menghapus ruang');
+      }
+    } catch {
+      setRooms(previous);
+      setError('Gagal menghapus ruang');
+    }
   }
 
   return (
@@ -314,8 +371,8 @@ export default function RoomsPage() {
         </div>
 
         {error && <p className="text-sm text-red-600 md:col-span-3">{error}</p>}
-        <button type="submit" className="btn-primary md:col-span-3">
-          🎮 Buat Ruang Game Sekarang
+        <button type="submit" disabled={creating} className="btn-primary disabled:opacity-60 md:col-span-3">
+          {creating ? '⏳ Membuat Ruang Game...' : '🎮 Buat Ruang Game Sekarang'}
         </button>
       </form>
 
@@ -381,12 +438,12 @@ export default function RoomsPage() {
                   </button>
                 )}
                 {r.status !== 'completed' && (
-                  <a
+                  <Link
                     className="rounded-xl bg-[var(--blue-info)] px-4 py-2 text-sm font-semibold text-white"
                     href={`/game/${r.id}`}
                   >
                     Masuk Ruang
-                  </a>
+                  </Link>
                 )}
                 {r.status === 'completed' && (
                   <button

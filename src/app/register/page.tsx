@@ -37,7 +37,6 @@ export default function RegisterPage() {
         return;
       }
       router.push(data.user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
-      router.refresh();
     } catch {
       setError('Tidak dapat terhubung ke server');
     } finally {

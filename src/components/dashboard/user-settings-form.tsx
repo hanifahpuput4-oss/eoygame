@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getCachedData, getPersistedCache, setCachedData } from '@/lib/client-cache';
 
 type AvatarKey = 'cat-blue' | 'cat-pink' | 'cat-green' | 'cat-orange' | 'cat-purple';
 
@@ -13,14 +14,23 @@ const AVATAR_OPTIONS: { id: AvatarKey; label: string; color: string }[] = [
   { id: 'cat-purple', label: 'Kucing Ungu', color: '#a855f7' },
 ];
 
+type CachedProfile = {
+  email?: string;
+  role?: string;
+  fullName?: string;
+  username?: string;
+  avatar?: AvatarKey;
+};
+
 export default function UserSettingsForm() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [email, setEmail] = useState('');
-  const [role, setRole] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [username, setUsername] = useState('');
-  const [avatar, setAvatar] = useState<AvatarKey>('cat-blue');
+  const initialProfile = getCachedData<CachedProfile>('user:profile');
+  const [loading, setLoading] = useState(() => !initialProfile);
+  const [email, setEmail] = useState(initialProfile?.email ?? '');
+  const [role, setRole] = useState(initialProfile?.role ?? '');
+  const [fullName, setFullName] = useState(initialProfile?.fullName ?? '');
+  const [username, setUsername] = useState(initialProfile?.username ?? '');
+  const [avatar, setAvatar] = useState<AvatarKey>(initialProfile?.avatar ?? 'cat-blue');
 
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -32,6 +42,15 @@ export default function UserSettingsForm() {
   const [passwordMsg, setPasswordMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   useEffect(() => {
+    const persisted = getPersistedCache<CachedProfile>('user:profile');
+    if (persisted) {
+      setEmail(persisted.email ?? '');
+      setRole(persisted.role ?? '');
+      setFullName(persisted.fullName ?? '');
+      setUsername(persisted.username ?? '');
+      if (persisted.avatar) setAvatar(persisted.avatar);
+      setLoading(false);
+    }
     async function load() {
       const res = await fetch('/api/profile');
       if (res.ok) {
@@ -41,6 +60,7 @@ export default function UserSettingsForm() {
         setFullName(profile.fullName ?? '');
         setUsername(profile.username ?? '');
         if (profile.avatar) setAvatar(profile.avatar as AvatarKey);
+        setCachedData('user:profile', profile);
       }
       setLoading(false);
     }
