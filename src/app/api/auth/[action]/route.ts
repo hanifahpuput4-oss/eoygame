@@ -6,7 +6,7 @@ import { ok, handleError } from '@/server/middleware/http';
 export async function POST(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
   try {
     const { action } = await ctx.params;
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
 
     if (action === 'register') {
       const input = registerSchema.parse(body);

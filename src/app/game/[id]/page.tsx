@@ -30,7 +30,7 @@ type RoomData = {
   level: { id: string; name: string } | null;
 };
 
-type ChatMsg = { id: string; userId?: string; senderName: string; text: string; createdAt: string };
+type ChatMsg = { seq?: number; id: string; userId?: string; senderName: string; text: string; createdAt: string };
 
 type Question = {
   id: string;
@@ -89,9 +89,9 @@ export default function GamePage() {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [myRole, setMyRole] = useState('student');
-  const [chatMinimized, setChatMinimized] = useState(false);
-  const [leaderboardMinimized, setLeaderboardMinimized] = useState(false);
-  const [playersMinimized, setPlayersMinimized] = useState(true);
+  const [chatMinimized, setChatMinimized] = useState(true);
+  const [leaderboardMinimized, setLeaderboardMinimized] = useState(true);
+
   const [missionMinimized, setMissionMinimized] = useState(true);
   const [questionMinimized, setQuestionMinimized] = useState(true);
   const [panelsHidden, setPanelsHidden] = useState(false);
@@ -114,12 +114,59 @@ export default function GamePage() {
   const [error, setError] = useState('');
   const bubblesRef = useRef<Map<string, BubbleEntry>>(new Map());
   const seenMsgIdsRef = useRef<Set<string>>(new Set());
-  const chatInitializedRef = useRef(false);
+  const chatCursorRef = useRef<number>(-1);
+  const myUsernameRef = useRef<string>('');
+  const chatMinimizedRef = useRef(chatMinimized);
+  const [unreadCount, setUnreadCount] = useState(0);
   const ablyEnabled = Boolean(process.env.NEXT_PUBLIC_ABLY_CLIENT_KEY);
   const ably = useAblyRoom(roomId, ablyEnabled);
 
   useEffect(() => {
+    chatMinimizedRef.current = chatMinimized;
+    if (!chatMinimized) {
+      setUnreadCount(0);
+    }
+  }, [chatMinimized]);
+
+  function ingestMessages(incoming: ChatMsg[]) {
+    if (!incoming || incoming.length === 0) return;
+    const newMsgs: ChatMsg[] = [];
+    let unreadAdded = 0;
+
+    for (const m of incoming) {
+      if (!m || !m.id || seenMsgIdsRef.current.has(m.id)) continue;
+      seenMsgIdsRef.current.add(m.id);
+      newMsgs.push(m);
+
+      const player =
+        (m.userId ? playersRef.current.get(m.userId) : undefined) ??
+        Array.from(playersRef.current.values()).find((pl) => pl.username === m.senderName);
+      if (player) {
+        bubblesRef.current.set(player.id, { text: m.text, at: Date.now() });
+      }
+
+      const isMe =
+        (Boolean(m.userId) && m.userId === myIdRef.current) ||
+        (Boolean(myUsernameRef.current) && m.senderName === myUsernameRef.current);
+      if (chatMinimizedRef.current && !isMe) {
+        unreadAdded += 1;
+      }
+    }
+
+    if (newMsgs.length > 0) {
+      setChat((prev) => [...prev.slice(-49), ...newMsgs]);
+    }
+    if (unreadAdded > 0) {
+      setUnreadCount((prev) => prev + unreadAdded);
+    }
+  }
+
+  useEffect(() => {
     let cancelled = false;
+    chatCursorRef.current = -1;
+    seenMsgIdsRef.current.clear();
+    setChat([]);
+    setUnreadCount(0);
 
     async function init() {
       const pRes = await fetch('/api/profile');
@@ -130,6 +177,7 @@ export default function GamePage() {
       const { profile: p } = await pRes.json();
       if (cancelled) return;
       myIdRef.current = p.id;
+      myUsernameRef.current = p.username;
       setMyRole(p.role);
 
       const rRes = await fetch('/api/rooms/' + roomId);
@@ -203,13 +251,10 @@ export default function GamePage() {
 
       const cRes = await fetch('/api/rooms/' + roomId + '/chat');
       if (cRes.ok) {
-        const data = await cRes.json();
-        const initialMsgs: ChatMsg[] = data.messages ?? [];
-        for (const m of initialMsgs) seenMsgIdsRef.current.add(m.id);
-        chatInitializedRef.current = true;
-        setChat(initialMsgs);
-      } else {
-        chatInitializedRef.current = true;
+        const cData = await cRes.json();
+        if (typeof cData.chatCursor === 'number' && cData.chatCursor > chatCursorRef.current) {
+          chatCursorRef.current = cData.chatCursor;
+        }
       }
 
       if (r.level?.id) {
@@ -232,6 +277,173 @@ export default function GamePage() {
       cancelled = true;
     };
   }, [roomId, router]);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
+  const manualExitFsRef = useRef(false);
+
+  function getFullscreenElement(): Element | null {
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
+  }
+
+  async function requestElementFullscreen(el: HTMLElement | null): Promise<boolean> {
+    if (!el) return false;
+    const anyEl = el as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    try {
+      if (typeof el.requestFullscreen === 'function') {
+        await el.requestFullscreen({ navigationUI: 'hide' });
+        return true;
+      }
+      if (typeof anyEl.webkitRequestFullscreen === 'function') {
+        await anyEl.webkitRequestFullscreen();
+        return true;
+      }
+    } catch {
+      // ignore and allow fallback
+    }
+    return false;
+  }
+
+  async function enterFullscreen() {
+    if (getFullscreenElement()) return;
+    const okMain = await requestElementFullscreen(mainRef.current);
+    if (!okMain) {
+      await requestElementFullscreen(document.documentElement);
+    }
+    try {
+      const scr = screen as Screen & { orientation?: { lock?: (o: string) => Promise<void> } };
+      await scr.orientation?.lock?.('landscape');
+    } catch {
+      // orientation lock optional
+    }
+  }
+
+  useEffect(() => {
+    function onFsChange() {
+      const active = Boolean(getFullscreenElement());
+      setIsFullscreen(active);
+      window.dispatchEvent(new Event('resize'));
+    }
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    function onFirstTouch() {
+      if (manualExitFsRef.current) return;
+      if (window.matchMedia('(pointer: coarse)').matches && !getFullscreenElement()) {
+        void enterFullscreen();
+      }
+    }
+    el.addEventListener('pointerdown', onFirstTouch, { passive: true });
+    return () => el.removeEventListener('pointerdown', onFirstTouch);
+  }, []);
+
+  async function toggleFullscreen() {
+    try {
+      if (getFullscreenElement()) {
+        manualExitFsRef.current = true;
+        const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+        if (typeof document.exitFullscreen === 'function') {
+          await document.exitFullscreen();
+        } else if (typeof doc.webkitExitFullscreen === 'function') {
+          await doc.webkitExitFullscreen();
+        }
+      } else {
+        manualExitFsRef.current = false;
+        await enterFullscreen();
+      }
+    } catch {
+      // iOS Safari tidak mendukung requestFullscreen pada elemen; abaikan
+    }
+  }
+
+  useEffect(() => {
+    function blockContext(e: Event) {
+      e.preventDefault();
+    }
+    const el = mainRef.current;
+    el?.addEventListener('contextmenu', blockContext);
+    return () => el?.removeEventListener('contextmenu', blockContext);
+  }, []);
+
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevBodyPos = body.style.position;
+    const prevBodyInset = body.style.inset;
+    const prevBodyWidth = body.style.width;
+    const prevBodyHeight = body.style.height;
+    const prevBodyBg = body.style.backgroundColor;
+
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    body.style.position = 'fixed';
+    body.style.inset = '0';
+    body.style.width = '100%';
+    body.style.height = '100%';
+    body.style.backgroundColor = '#1e2d42';
+
+    let lockedH = window.innerHeight;
+
+    function isInputFocused() {
+      const a = document.activeElement as HTMLElement | null;
+      return Boolean(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable));
+    }
+
+    function syncViewportLock() {
+      const el = mainRef.current;
+      if (!el) return;
+
+      if (!isInputFocused() || window.innerHeight > lockedH) {
+        lockedH = window.innerHeight;
+      }
+
+      el.style.height = `${lockedH}px`;
+    }
+
+    function onOrientationChange() {
+      setTimeout(() => {
+        lockedH = window.innerHeight;
+        syncViewportLock();
+      }, 150);
+    }
+
+    syncViewportLock();
+    window.addEventListener('resize', syncViewportLock);
+    window.addEventListener('scroll', syncViewportLock, { passive: true });
+    window.addEventListener('orientationchange', onOrientationChange);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', syncViewportLock);
+    vv?.addEventListener('scroll', syncViewportLock);
+
+    return () => {
+      window.removeEventListener('resize', syncViewportLock);
+      window.removeEventListener('scroll', syncViewportLock);
+      window.removeEventListener('orientationchange', onOrientationChange);
+      vv?.removeEventListener('resize', syncViewportLock);
+      vv?.removeEventListener('scroll', syncViewportLock);
+
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      body.style.position = prevBodyPos;
+      body.style.inset = prevBodyInset;
+      body.style.width = prevBodyWidth;
+      body.style.height = prevBodyHeight;
+      body.style.backgroundColor = prevBodyBg;
+    };
+  }, []);
 
   useEffect(() => {
     for (const rp of ably.presencePlayers) {
@@ -307,6 +519,10 @@ export default function GamePage() {
     }
     resize();
     window.addEventListener('resize', resize);
+    const ro = typeof ResizeObserver !== 'undefined' && canvas.parentElement
+      ? new ResizeObserver(() => resize())
+      : null;
+    if (ro && canvas.parentElement) ro.observe(canvas.parentElement);
 
     const camera = new Camera(canvas.width, canvas.height);
     cameraRef.current = camera;
@@ -407,6 +623,7 @@ export default function GamePage() {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
+      ro?.disconnect();
     };
   }, [room?.status, room?.hostId, roomId, myRole, ablyEnabled, ably.connected, ably.publishPosition]);
 
@@ -418,7 +635,10 @@ export default function GamePage() {
         if (!active) return;
         try {
           const me = playersRef.current.get(myIdRef.current);
-          const payload: Record<string, unknown> = { roomId };
+          const payload: Record<string, unknown> = {
+            roomId,
+            chatCursor: chatCursorRef.current,
+          };
           if (me) {
             payload.x = Math.round(me.x * 10) / 10;
             payload.y = Math.round(me.y * 10) / 10;
@@ -488,13 +708,11 @@ export default function GamePage() {
               players: serverPlayers,
             };
           });
-          if (Array.isArray(data.messages)) {
-            setChat((prev) => {
-              if (prev.length === data.messages.length && prev[prev.length - 1]?.id === data.messages[data.messages.length - 1]?.id) {
-                return prev;
-              }
-              return data.messages;
-            });
+          if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
+            chatCursorRef.current = data.chatCursor;
+          }
+          if (Array.isArray(data.messages) && data.messages.length > 0) {
+            ingestMessages(data.messages);
           }
           if (data.answerResults && typeof data.answerResults === 'object') {
             for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
@@ -544,28 +762,22 @@ export default function GamePage() {
   }, [ably.kickedPlayerId, myRole, router]);
 
   useEffect(() => {
-    const box = chatBoxRef.current;
-    if (box) box.scrollTop = box.scrollHeight;
-  }, [chat, ably.chatMessages]);
+    if (!chatMinimized) {
+      const box = chatBoxRef.current;
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+  }, [chat, chatMinimized]);
 
   useEffect(() => {
-    const msgs: ChatMsg[] = ably.chatMessages.length > 0 ? (ably.chatMessages as ChatMsg[]) : chat;
-    if (!chatInitializedRef.current || msgs.length === 0) return;
-    for (const m of msgs) {
-      if (seenMsgIdsRef.current.has(m.id)) continue;
-      seenMsgIdsRef.current.add(m.id);
-      const player =
-        (m.userId ? playersRef.current.get(m.userId) : undefined) ??
-        Array.from(playersRef.current.values()).find((pl) => pl.username === m.senderName);
-      if (player) {
-        bubblesRef.current.set(player.id, { text: m.text, at: Date.now() });
-      }
+    if (ably.chatMessages.length > 0) {
+      ingestMessages(ably.chatMessages as ChatMsg[]);
     }
-  }, [chat, ably.chatMessages]);
+  }, [ably.chatMessages]);
 
   function onPointerDown(e: React.PointerEvent) {
     draggingRef.current = { active: true, x: e.clientX, y: e.clientY };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setChatMinimized(true);
   }
   function onPointerMove(e: React.PointerEvent) {
     if (!draggingRef.current.active || !cameraRef.current) return;
@@ -634,20 +846,22 @@ export default function GamePage() {
     if (res.ok) {
       const data = await res.json();
       if (data.message) {
-        seenMsgIdsRef.current.add(data.message.id);
-        setChat((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]));
+        if (typeof data.message.seq === 'number' && data.message.seq > chatCursorRef.current) {
+          chatCursorRef.current = data.message.seq;
+        }
+        ingestMessages([data.message]);
       }
     }
   }
 
-  const displayChat = ably.chatMessages.length > 0 ? ably.chatMessages : chat;
+  const displayChat = chat;
   const players = room?.players ?? [];
   const totalSteps = Math.max(levelQuestions.length, 1);
   const doneSteps = Math.min(correctCount, totalSteps);
   const sortedPlayers = [...players].sort((a, b) => (scores[b.userId] ?? 0) - (scores[a.userId] ?? 0) || a.username.localeCompare(b.username));
   const hasVisibleQuestion = Boolean(question && myRole !== 'teacher' && !answeredQuestionIds.includes(question.id));
-  const allBottomMinimized =
-    panelsHidden || (chatMinimized && playersMinimized && missionMinimized && (!hasVisibleQuestion || questionMinimized));
+  const questionActive = hasVisibleQuestion;
+  const allBottomMinimized = panelsHidden || !hasVisibleQuestion;
   const controlsPosClass = allBottomMinimized ? '' : ' mp-elevated';
 
   async function endGame() {
@@ -742,8 +956,8 @@ export default function GamePage() {
   }
 
   return (
-    <main className="h-screen w-screen overflow-hidden bg-[#1e2d42] p-2 md:p-4">
-      <div className="game-viewport">
+    <main ref={mainRef} className="fixed top-0 left-0 right-0 h-screen w-full overflow-hidden bg-[#1e2d42] p-0 md:p-4 game-shell">
+      <div className={`game-viewport${questionActive ? ' question-focus' : ''}`}>
         <canvas
           ref={canvasRef}
           className="h-full w-full touch-none"
@@ -769,25 +983,31 @@ export default function GamePage() {
                   </div>
                 </div>
 
-                <div className="mp-team-cards" role="group" aria-label="Pemain di ruang">
-                  {sortedPlayers.slice(0, 3).map((p) => {
-                    const color = chipColor(p.userId);
-                    const active = p.userId === myIdRef.current;
-                    return (
-                      <div key={p.userId} className={`mp-player-chip ${color}${active ? ' active' : ''}`}>
-                        <span className="mp-cat-avatar">
-                          <CatAvatarSvg color={color} />
-                        </span>
-                        <span className="mp-chip-info">
-                          <span className="mp-chip-name">{p.username}</span>
-                          <span className="mp-mini-bar">
-                            <span className={`mp-mini-fill ${color}`} style={{ width: active ? '100%' : '45%' }} />
-                          </span>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                {!panelsHidden && (
+                  <button
+                    type="button"
+                    className="pause-btn mp-chat-top-btn"
+                    aria-pressed={!chatMinimized}
+                    aria-label={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
+                    title={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
+                    onClick={() => {
+                      setChatMinimized((prev) => !prev);
+                      setUnreadCount(0);
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"
+                        fill="#fff"
+                      />
+                      <circle cx="8.5" cy="11.5" r="1.3" fill="#6b3806" />
+                      <circle cx="12" cy="11.5" r="1.3" fill="#6b3806" />
+                      <circle cx="15.5" cy="11.5" r="1.3" fill="#6b3806" />
+                    </svg>
+                    {unreadCount > 0 && <span className="mp-chat-badge">{unreadCount}</span>}
+                  </button>
+                )}
               </div>
 
               <div className="mp-center-stage-pill">
@@ -801,6 +1021,24 @@ export default function GamePage() {
 
               <div className="mp-top-right">
                 <div className="mp-timer-row">
+                  {myRole === 'teacher' && (
+                    <div className="mp-teacher-actions">
+                      <button
+                        type="button"
+                        className="btn-blue-action mp-menu-btn"
+                        onClick={() => setKickModalOpen(true)}
+                      >
+                        <span aria-hidden="true">👥</span> Pemain
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-orange-action mp-menu-btn"
+                        onClick={endGame}
+                      >
+                        <span aria-hidden="true">🏁</span> Akhiri
+                      </button>
+                    </div>
+                  )}
                   <button
                     type="button"
                     className="pause-btn"
@@ -824,57 +1062,166 @@ export default function GamePage() {
                   <button type="button" className="pause-btn" aria-label="Kembali" title="Kembali" onClick={() => router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student')}>
                     <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M20 6l-12 10 12 10v-6h8v-8h-8V6z" fill="#fff" /></svg>
                   </button>
+                  <button
+                    type="button"
+                    className="pause-btn mp-fullscreen-btn"
+                    aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
+                    title={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
+                    onClick={toggleFullscreen}
+                  >
+                    {isFullscreen ? (
+                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 3v3H6v3H3V3h6zm6 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm15 0h3v6h-6v-3h3v-3z" fill="#fff" />
+                      </svg>
+                    ) : (
+                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 3h6v3H6v3H3V3zm12 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm18 0v6h-6v-3h3v-3h3z" fill="#fff" />
+                      </svg>
+                    )}
+                  </button>
                 </div>
 
                 {!panelsHidden && (
-                  leaderboardMinimized ? (
+                  <div className="mp-right-tool-rail">
+                    <div className="mp-tool-slot">
+                      <button
+                        type="button"
+                        className={`mp-icon-badge${!leaderboardMinimized ? ' is-active' : ''}`}
+                        aria-pressed={!leaderboardMinimized}
+                        aria-label={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
+                        title={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
+                        onClick={() => setLeaderboardMinimized((v) => !v)}
+                        onContextMenu={(e) => e.preventDefault()}
+                      >
+                        <span aria-hidden="true">🏆</span>
+                      </button>
+                      {!leaderboardMinimized && (
+                        <aside className="mp-dark-panel mp-leaderboard-box mp-tool-popover" aria-label="Papan peringkat" style={panelStyle('leaderboard')}>
+                          <h2
+                            className="mp-panel-heading mp-drag-handle"
+                            onPointerDown={(e) => startPanelDrag('leaderboard', e)}
+                            onPointerMove={movePanelDrag}
+                            onPointerUp={(e) => endPanelDrag(e)}
+                            onPointerCancel={(e) => endPanelDrag(e)}
+                          >
+                            <span className="mp-panel-heading-title">
+                              <span aria-hidden="true">🏆</span> Leaderboard
+                            </span>
+                            <button
+                              type="button"
+                              className="mp-win-btn"
+                              aria-label="Perkecil leaderboard"
+                              title="Perkecil"
+                              onClick={() => setLeaderboardMinimized(true)}
+                            >
+                              −
+                            </button>
+                          </h2>
+                          <ol className="mp-rank-list">
+                            {sortedPlayers.slice(0, 5).map((p, i) => (
+                              <li key={p.userId} className="mp-rank-row">
+                                <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
+                                <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
+                                <span className="rank-name">{p.username}</span>
+                                <span className="rank-score">{scores[p.userId] ?? 0}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        </aside>
+                      )}
+                    </div>
+
+                    <div className="mp-tool-slot">
+                      <button
+                        type="button"
+                        className={`mp-icon-badge${!missionMinimized ? ' is-active' : ''}`}
+                        aria-pressed={!missionMinimized}
+                        aria-label={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
+                        title={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
+                        onClick={() => setMissionMinimized((v) => !v)}
+                        onContextMenu={(e) => e.preventDefault()}
+                      >
+                        <span aria-hidden="true">🎯</span>
+                      </button>
+                      {!missionMinimized && (
+                        <aside className="mp-dark-panel mp-topic-card mp-tool-popover" aria-label="Progres misi" style={panelStyle('mission')}>
+                          <h3
+                            className="mp-panel-heading mp-drag-handle"
+                            onPointerDown={(e) => startPanelDrag('mission', e)}
+                            onPointerMove={movePanelDrag}
+                            onPointerUp={(e) => endPanelDrag(e)}
+                            onPointerCancel={(e) => endPanelDrag(e)}
+                          >
+                            <span className="mp-panel-heading-title">
+                              <span aria-hidden="true">🎯</span> Misi
+                            </span>
+                            <button
+                              type="button"
+                              className="mp-win-btn"
+                              aria-label="Perkecil misi"
+                              title="Perkecil misi"
+                              onClick={() => setMissionMinimized(true)}
+                            >
+                              −
+                            </button>
+                          </h3>
+                          <ul className="mp-topic-checklist">
+                            <li><span className="check-green" aria-hidden="true">✔</span> Masuk arena</li>
+                            <li>
+                              <span className={doneSteps > 0 ? 'check-green' : 'check-pending'} aria-hidden="true">
+                                {doneSteps > 0 ? '✔' : '○'}
+                              </span>{' '}
+                              Jawab tantangan soal ({doneSteps}/{totalSteps})
+                            </li>
+                          </ul>
+                          <div className="mp-goal-bar-row">
+                            <span aria-hidden="true">🚩</span>
+                            <div className="mp-goal-track">
+                              <div className="mp-goal-fill" style={{ width: `${(doneSteps / totalSteps) * 100}%` }} />
+                            </div>
+                            <span className="mp-goal-fraction">{doneSteps} / {totalSteps}</span>
+                          </div>
+                        </aside>
+                      )}
+                    </div>
+
                     <button
                       type="button"
                       className="mp-icon-badge"
-                      aria-label="Buka Leaderboard"
-                      title="Buka Leaderboard"
-                      style={panelStyle('leaderboard')}
-                      onPointerDown={(e) => startPanelDrag('leaderboard', e, true)}
-                      onPointerMove={movePanelDrag}
-                      onPointerUp={(e) => endPanelDrag(e, () => setLeaderboardMinimized(false))}
-                      onPointerCancel={(e) => endPanelDrag(e)}
+                      aria-label="Perbesar Kamera (Zoom In)"
+                      title="Perbesar (Zoom In)"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        cameraRef.current?.zoomBy(0.12);
+                      }}
+                      onContextMenu={(e) => e.preventDefault()}
                     >
-                      <span aria-hidden="true">🏆</span>
+                      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
+                        <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
+                        <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
+                        <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
+                        <line x1="14" y1="10.5" x2="14" y2="17.5" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
+                      </svg>
                     </button>
-                  ) : (
-                    <aside className="mp-dark-panel mp-leaderboard-box" aria-label="Papan peringkat" style={panelStyle('leaderboard')}>
-                      <h2
-                        className="mp-panel-heading mp-drag-handle"
-                        onPointerDown={(e) => startPanelDrag('leaderboard', e)}
-                        onPointerMove={movePanelDrag}
-                        onPointerUp={(e) => endPanelDrag(e)}
-                        onPointerCancel={(e) => endPanelDrag(e)}
-                      >
-                        <span className="mp-panel-heading-title">
-                          <span aria-hidden="true">🏆</span> Leaderboard
-                        </span>
-                        <button
-                          type="button"
-                          className="mp-win-btn"
-                          aria-label="Perkecil leaderboard"
-                          title="Perkecil"
-                          onClick={() => setLeaderboardMinimized(true)}
-                        >
-                          −
-                        </button>
-                      </h2>
-                      <ol className="mp-rank-list">
-                        {sortedPlayers.slice(0, 5).map((p, i) => (
-                          <li key={p.userId} className="mp-rank-row">
-                            <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
-                            <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
-                            <span className="rank-name">{p.username}</span>
-                            <span className="rank-score">{scores[p.userId] ?? 0}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </aside>
-                  )
+
+                    <button
+                      type="button"
+                      className="mp-icon-badge"
+                      aria-label="Perkecil Kamera (Zoom Out)"
+                      title="Perkecil (Zoom Out)"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        cameraRef.current?.zoomBy(-0.12);
+                      }}
+                      onContextMenu={(e) => e.preventDefault()}
+                    >
+                      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
+                        <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
+                        <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
+                        <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#a8d8ff" strokeWidth="2.8" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
                 )}
               </div>
           </div>
@@ -882,73 +1229,46 @@ export default function GamePage() {
           <div className={`onscreen-controls${controlsPosClass}`}>
             <div className="dpad-group">
               <button type="button" className="ctrl-circle" aria-label="Gerak ke Kiri"
-                onPointerDown={() => touchControl('left', true)} onPointerUp={() => touchControl('left', false)}
-                onPointerLeave={() => touchControl('left', false)}>
-                <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+                onPointerDown={(e) => { e.preventDefault(); touchControl('left', true); }}
+                onPointerUp={() => touchControl('left', false)}
+                onPointerCancel={() => touchControl('left', false)}
+                onPointerLeave={() => touchControl('left', false)}
+                onContextMenu={(e) => e.preventDefault()}>
+                <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
                   <path d="M18 7l-9 9 9 9v-5h8v-8h-8V7z" fill="#fff" />
                 </svg>
               </button>
               <button type="button" className="ctrl-circle" aria-label="Gerak ke Kanan"
-                onPointerDown={() => touchControl('right', true)} onPointerUp={() => touchControl('right', false)}
-                onPointerLeave={() => touchControl('right', false)}>
-                <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+                onPointerDown={(e) => { e.preventDefault(); touchControl('right', true); }}
+                onPointerUp={() => touchControl('right', false)}
+                onPointerCancel={() => touchControl('right', false)}
+                onPointerLeave={() => touchControl('right', false)}
+                onContextMenu={(e) => e.preventDefault()}>
+                <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
                   <path d="M14 7l9 9-9 9v-5H6v-8h8V7z" fill="#fff" />
                 </svg>
               </button>
             </div>
 
             <div className="dpad-group">
-              <button type="button" className="ctrl-circle" aria-label="Perbesar"
-                onClick={() => { cameraRef.current?.zoomBy(0.1); }}>
-                <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
-                  <circle cx="14" cy="14" r="8" fill="none" stroke="#fff" strokeWidth="3" />
-                  <line x1="20" y1="20" x2="27" y2="27" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
-                  <line x1="11" y1="14" x2="17" y2="14" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" />
-                </svg>
-              </button>
-              <button type="button" className="ctrl-circle" aria-label="Perkecil"
-                onClick={() => { cameraRef.current?.zoomBy(-0.1); }}>
-                <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
-                  <circle cx="14" cy="14" r="8" fill="none" stroke="#fff" strokeWidth="3" />
-                  <line x1="20" y1="20" x2="27" y2="27" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
-                  <line x1="11" y1="14" x2="17" y2="14" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" />
-                </svg>
-              </button>
               <button type="button" className="ctrl-circle" aria-label="Lompat"
-                onPointerDown={() => touchControl('jump', true)} onPointerUp={() => touchControl('jump', false)}
-                onPointerLeave={() => touchControl('jump', false)}>
-                <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">
+                onPointerDown={(e) => { e.preventDefault(); touchControl('jump', true); }}
+                onPointerUp={() => touchControl('jump', false)}
+                onPointerCancel={() => touchControl('jump', false)}
+                onPointerLeave={() => touchControl('jump', false)}
+                onContextMenu={(e) => e.preventDefault()}>
+                <svg width="38" height="38" viewBox="0 0 32 32" aria-hidden="true">
                   <path d="M16 6l-9 9h5v11h8V15h5l-9-9z" fill="#fff" />
                 </svg>
               </button>
             </div>
           </div>
 
-          {!panelsHidden && (
+          {(!panelsHidden || hasVisibleQuestion) && (
           <div className="mp-bottom-dock">
-              {chatMinimized ? (
-                <button
-                  type="button"
-                  className="mp-icon-badge"
-                  aria-label="Buka Chat Room"
-                  title="Buka Chat Room"
-                  style={panelStyle('chat')}
-                  onPointerDown={(e) => startPanelDrag('chat', e, true)}
-                  onPointerMove={movePanelDrag}
-                  onPointerUp={(e) => endPanelDrag(e, () => setChatMinimized(false))}
-                  onPointerCancel={(e) => endPanelDrag(e)}
-                >
-                  <span aria-hidden="true">💬</span>
-                </button>
-              ) : (
-                <aside className="mp-dark-panel mp-chat-panel" aria-label="Ruang obrolan" style={panelStyle('chat')}>
-                  <div
-                    className="mp-chat-header mp-drag-handle"
-                    onPointerDown={(e) => startPanelDrag('chat', e)}
-                    onPointerMove={movePanelDrag}
-                    onPointerUp={(e) => endPanelDrag(e)}
-                    onPointerCancel={(e) => endPanelDrag(e)}
-                  >
+              {!panelsHidden && !chatMinimized && (
+                <aside className="mp-dark-panel mp-chat-panel mp-chat-fixed" aria-label="Ruang obrolan">
+                  <div className="mp-chat-header">
                     <div className="mp-chat-title">
                       <span aria-hidden="true">💬</span> Chat Room
                     </div>
@@ -1004,202 +1324,52 @@ export default function GamePage() {
               )}
 
               {question && myRole !== 'teacher' && !answeredQuestionIds.includes(question.id) && (
-                questionMinimized ? (
-                  <div className="flex justify-center">
-                    <button
-                      type="button"
-                      className="mp-icon-badge mp-icon-badge-parchment"
-                      aria-label="Buka Tantangan Soal"
-                      title="Buka Tantangan Soal"
-                      style={panelStyle('question')}
-                      onPointerDown={(e) => startPanelDrag('question', e, true)}
-                      onPointerMove={movePanelDrag}
-                      onPointerUp={(e) => endPanelDrag(e, () => setQuestionMinimized(false))}
-                      onPointerCancel={(e) => endPanelDrag(e)}
-                    >
-                      <span aria-hidden="true">📖</span>
-                    </button>
+                <section className="parchment-card mp-question-dock" aria-label="Tantangan soal" style={panelStyle('question')}>
+                  <div
+                    className="mp-dock-ribbon mp-drag-handle"
+                    onPointerDown={(e) => startPanelDrag('question', e)}
+                    onPointerMove={movePanelDrag}
+                    onPointerUp={(e) => endPanelDrag(e)}
+                    onPointerCancel={(e) => endPanelDrag(e)}
+                  >
+                    <span className="mp-panel-heading-title">
+                      <span aria-hidden="true">📖</span> Tantangan Soal
+                    </span>
                   </div>
-                ) : (
-                  <section className="parchment-card mp-question-dock" aria-label="Tantangan soal" style={panelStyle('question')}>
-                    <div
-                      className="mp-dock-ribbon mp-drag-handle"
-                      onPointerDown={(e) => startPanelDrag('question', e)}
-                      onPointerMove={movePanelDrag}
-                      onPointerUp={(e) => endPanelDrag(e)}
-                      onPointerCancel={(e) => endPanelDrag(e)}
-                    >
-                      <span className="mp-panel-heading-title">
-                        <span aria-hidden="true">📖</span> Tantangan Soal
-                      </span>
-                      <button
-                        type="button"
-                        className="mp-win-btn"
-                        aria-label="Perkecil soal"
-                        title="Perkecil soal"
-                        onClick={() => setQuestionMinimized(true)}
-                      >
-                        −
+
+                  <div className="mp-bonus-badge" aria-label={`Bonus ${question.points} poin`}>
+                    <span aria-hidden="true">⏱</span> +{question.points}
+                  </div>
+
+                  <div className="mp-q-header-row">
+                    <h2 className="mp-q-heading">{question.content}</h2>
+                  </div>
+
+                  <form onSubmit={submitAnswer}>
+                    <div className="mp-options-grid-2x2" role="radiogroup" aria-label="Pilihan jawaban">
+                      {question.options.map((o) => (
+                        <button
+                          key={o.label}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected === o.label}
+                          className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}`}
+                          onClick={() => setSelected(o.label)}
+                        >
+                          <span className="opt-badge">{o.label}</span>
+                          {o.content}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex items-center justify-end">
+                      <button type="submit" className="btn-orange-action" disabled={!selected || submitting}>
+                        <span aria-hidden="true">✔</span> {submitting ? 'Mengirim...' : 'Submit'}
                       </button>
                     </div>
-
-                    <div className="mp-bonus-badge" aria-label={`Bonus ${question.points} poin`}>
-                      <span aria-hidden="true">⏱</span> +{question.points}
-                    </div>
-
-                    <div className="mp-q-header-row">
-                      <h2 className="mp-q-heading">{question.content}</h2>
-                    </div>
-
-                    <form onSubmit={submitAnswer}>
-                      <div className="mp-options-grid-2x2" role="radiogroup" aria-label="Pilihan jawaban">
-                        {question.options.map((o) => (
-                          <button
-                            key={o.label}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected === o.label}
-                            className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}`}
-                            onClick={() => setSelected(o.label)}
-                          >
-                            <span className="opt-badge">{o.label}</span>
-                            {o.content}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="mt-3 flex items-center justify-end">
-                        <button type="submit" className="btn-orange-action" disabled={!selected || submitting}>
-                          <span aria-hidden="true">✔</span> {submitting ? 'Mengirim...' : 'Submit'}
-                        </button>
-                      </div>
-                    </form>
-                  </section>
-                )
+                  </form>
+                </section>
               )}
 
-              <aside className={`mp-right-progress-stack${playersMinimized && missionMinimized ? ' is-compact-icons' : ''}`} aria-label="Progres belajar">
-                {playersMinimized ? (
-                  <button
-                    type="button"
-                    className="mp-icon-badge"
-                    aria-label="Buka Daftar Pemain"
-                    title="Buka Daftar Pemain"
-                    style={panelStyle('players')}
-                    onPointerDown={(e) => startPanelDrag('players', e, true)}
-                    onPointerMove={movePanelDrag}
-                    onPointerUp={(e) => endPanelDrag(e, () => setPlayersMinimized(false))}
-                    onPointerCancel={(e) => endPanelDrag(e)}
-                  >
-                    <span aria-hidden="true">📊</span>
-                  </button>
-                ) : (
-                  <div className="mp-dark-panel mp-progress-mini-card" style={panelStyle('players')}>
-                    <h2
-                      className="mp-panel-heading mp-drag-handle"
-                      onPointerDown={(e) => startPanelDrag('players', e)}
-                      onPointerMove={movePanelDrag}
-                      onPointerUp={(e) => endPanelDrag(e)}
-                      onPointerCancel={(e) => endPanelDrag(e)}
-                    >
-                      <span className="mp-panel-heading-title">
-                        <span aria-hidden="true">📊</span> Pemain
-                      </span>
-                      <button
-                        type="button"
-                        className="mp-win-btn"
-                        aria-label="Perkecil daftar pemain"
-                        title="Perkecil daftar pemain"
-                        onClick={() => setPlayersMinimized(true)}
-                      >
-                        −
-                      </button>
-                    </h2>
-                    <ol className="mp-rank-list">
-                      {sortedPlayers.slice(0, 3).map((p, i) => (
-                        <li key={p.userId} className="mp-rank-row">
-                          <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'bronze'}`}>{i + 1}</span>
-                          <span className="rank-name">{p.username}</span>
-                          <span className="rank-score">{scores[p.userId] ?? 0}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                )}
-
-                {missionMinimized ? (
-                  <button
-                    type="button"
-                    className="mp-icon-badge"
-                    aria-label="Buka Misi"
-                    title="Buka Misi"
-                    style={panelStyle('mission')}
-                    onPointerDown={(e) => startPanelDrag('mission', e, true)}
-                    onPointerMove={movePanelDrag}
-                    onPointerUp={(e) => endPanelDrag(e, () => setMissionMinimized(false))}
-                    onPointerCancel={(e) => endPanelDrag(e)}
-                  >
-                    <span aria-hidden="true">🎯</span>
-                  </button>
-                ) : (
-                  <div className="mp-dark-panel mp-topic-card" style={panelStyle('mission')}>
-                    <h3
-                      className="mp-panel-heading mp-drag-handle"
-                      onPointerDown={(e) => startPanelDrag('mission', e)}
-                      onPointerMove={movePanelDrag}
-                      onPointerUp={(e) => endPanelDrag(e)}
-                      onPointerCancel={(e) => endPanelDrag(e)}
-                    >
-                      <span className="mp-panel-heading-title">
-                        <span aria-hidden="true">🎯</span> Misi
-                      </span>
-                      <button
-                        type="button"
-                        className="mp-win-btn"
-                        aria-label="Perkecil misi"
-                        title="Perkecil misi"
-                        onClick={() => setMissionMinimized(true)}
-                      >
-                        −
-                      </button>
-                    </h3>
-                    <ul className="mp-topic-checklist">
-                      <li><span className="check-green" aria-hidden="true">✔</span> Masuk arena</li>
-                      <li>
-                        <span className={doneSteps > 0 ? 'check-green' : 'check-pending'} aria-hidden="true">
-                          {doneSteps > 0 ? '✔' : '○'}
-                        </span>{' '}
-                        Jawab tantangan soal ({doneSteps}/{totalSteps})
-                      </li>
-                    </ul>
-                    <div className="mp-goal-bar-row">
-                      <span aria-hidden="true">🚩</span>
-                      <div className="mp-goal-track">
-                        <div className="mp-goal-fill" style={{ width: `${(doneSteps / totalSteps) * 100}%` }} />
-                      </div>
-                      <span className="mp-goal-fraction">{doneSteps} / {totalSteps}</span>
-                    </div>
-                  </div>
-                )}
-
-                {myRole === 'teacher' && (
-                  <div className="mp-teacher-actions">
-                    <button
-                      type="button"
-                      className="btn-blue-action mp-menu-btn"
-                      onClick={() => setKickModalOpen(true)}
-                    >
-                      <span aria-hidden="true">👥</span> Pemain
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-orange-action mp-menu-btn"
-                      onClick={endGame}
-                    >
-                      <span aria-hidden="true">🏁</span> Akhiri
-                    </button>
-                  </div>
-                )}
-              </aside>
             </div>
           )}
         </div>

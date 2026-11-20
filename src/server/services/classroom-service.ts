@@ -1,6 +1,6 @@
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, desc } from 'drizzle-orm';
 import { db } from '@/db';
-import { classroomMembers, classrooms, users } from '@/db/schema';
+import { classroomMembers, classrooms, rooms, users } from '@/db/schema';
 import { generateCode, generateId } from '@/server/auth/crypto';
 
 export class ClassroomError extends Error {
@@ -114,13 +114,28 @@ export async function listStudentClassrooms(studentId: string) {
     .from(classroomMembers)
     .where(eq(classroomMembers.studentId, studentId));
   if (memberships.length === 0) return [];
-  return db
-    .select()
-    .from(classrooms)
-    .where(
-      inArray(
-        classrooms.id,
-        memberships.map((m) => m.classroomId),
-      ),
-    );
+  const classIds = memberships.map((m) => m.classroomId);
+  const [classRows, activeRoomRows] = await Promise.all([
+    db.select().from(classrooms).where(inArray(classrooms.id, classIds)),
+    db
+      .select({
+        id: rooms.id,
+        classroomId: rooms.classroomId,
+        name: rooms.name,
+        code: rooms.code,
+        status: rooms.status,
+      })
+      .from(rooms)
+      .where(and(inArray(rooms.classroomId, classIds), eq(rooms.status, 'in_progress')))
+      .orderBy(desc(rooms.createdAt)),
+  ]);
+
+  return classRows.map((c) => {
+    const classRooms = activeRoomRows.filter((r) => r.classroomId === c.id);
+    return {
+      ...c,
+      activeRoom: classRooms[0] ?? null,
+      activeRooms: classRooms,
+    };
+  });
 }

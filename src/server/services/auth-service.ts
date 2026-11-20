@@ -50,15 +50,16 @@ export async function register(input: RegisterInput) {
 }
 
 export async function login(input: LoginInput) {
+  const identifier = input.email.trim().toLowerCase();
   const rows = await db
     .select()
     .from(users)
-    .where(eq(users.email, input.email.toLowerCase()))
+    .where(or(eq(users.email, identifier), eq(users.username, input.email.trim())))
     .limit(1);
 
   const user = rows[0];
   if (!user || !verifyPassword(input.password, user.passwordHash)) {
-    throw new AuthServiceError('Email atau password salah', 401);
+    throw new AuthServiceError('Email/username atau password salah', 401);
   }
 
   await createSession(user.id);

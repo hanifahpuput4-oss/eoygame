@@ -1,13 +1,14 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db } from '@/db';
-import { chatMessages, gameSessions, playerAnswers, questions, questionOptions, users, gameEvents, roomPlayers, rooms } from '@/db/schema';
+import { gameSessions, playerAnswers, questions, questionOptions, users, roomPlayers, rooms } from '@/db/schema';
 import { requireUser } from '@/server/auth/session';
 import { generateId } from '@/server/auth/crypto';
 import { answerSchema, chatSchema } from '@/server/middleware/validation';
 import { ok, fail, handleError } from '@/server/middleware/http';
 import { publishToRoom } from '@/server/services/realtime-service';
+import { addEphemeralChat, getEphemeralChatSince } from '@/server/services/chat-store';
 import { assertHost } from '@/server/services/room-service';
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
@@ -86,21 +87,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const schema = z.object({ roomId: z.string().min(1) });
       const { roomId } = schema.parse(body);
 
-      const message = {
+      const message = addEphemeralChat(roomId, {
         id: generateId('msg'),
         roomId,
         userId: user.id,
         senderName: user.username,
         text: input.text,
-        createdAt: new Date(),
-      };
-      await db.insert(chatMessages).values(message);
-      await db.insert(gameEvents).values({
-        id: generateId('evt'),
-        roomId,
-        userId: user.id,
-        eventType: 'chat',
-        payload: JSON.stringify(message),
+        createdAt: new Date().toISOString(),
       });
       await publishToRoom(roomId, 'chat', message);
 
@@ -150,8 +143,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         x: z.number().min(-10000).max(10000).optional(),
         y: z.number().min(-10000).max(10000).optional(),
         facing: z.number().int().min(-1).max(1).optional(),
+        chatCursor: z.number().int().optional(),
       });
-      const { roomId, x, y, facing } = schema.parse(body);
+      const { roomId, x, y, facing, chatCursor } = schema.parse(body);
       if (x !== undefined && y !== undefined) {
         await db
           .update(roomPlayers)
@@ -167,12 +161,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         .from(roomPlayers)
         .innerJoin(users, eq(roomPlayers.userId, users.id))
         .where(eq(roomPlayers.roomId, roomId));
-      const messages = await db
-        .select()
-        .from(chatMessages)
-        .where(eq(chatMessages.roomId, roomId))
-        .orderBy(asc(chatMessages.createdAt))
-        .limit(50);
       const mySession = await db
         .select({ id: gameSessions.id })
         .from(gameSessions)
@@ -189,6 +177,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       for (const a of myAnswers) {
         answerResults[a.questionId] = Boolean(a.isCorrect);
       }
+      const chatSync = getEphemeralChatSince(roomId, chatCursor);
       return ok({
         room: rows[0] ? { id: rows[0].id, status: rows[0].status, name: rows[0].name, activeQuestionId: rows[0].activeQuestionId } : null,
         players: players.map((p) => ({
@@ -196,7 +185,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
           score: scores.find((s) => s.userId === p.userId)?.score ?? 0,
           stars: scores.find((s) => s.userId === p.userId)?.stars ?? 0,
         })),
-        messages,
+        messages: chatSync.messages,
+        chatCursor: chatSync.chatCursor,
         answeredQuestionIds: myAnswers.map((a) => a.questionId),
         answerResults,
         correctCount: myAnswers.filter((a) => a.isCorrect).length,

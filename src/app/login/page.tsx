@@ -46,17 +46,17 @@ export default function LoginPage() {
           <p className="text-sm text-[var(--wood-text)]/70">Let&apos;s Learn Your Skills</p>
         </div>
 
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form onSubmit={onSubmit} className="space-y-4" autoComplete='off'>
           <div>
-            <label htmlFor="email" className="label-field">Email</label>
+            <label htmlFor="email" className="label-field">Email atau Username</label>
             <input
               id="email"
-              type="email"
+              type="text"
               required
               className="input-field"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="nama@sekolah.sch.id"
+              placeholder="username atau email"
             />
           </div>
           <div>
