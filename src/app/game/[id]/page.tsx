@@ -263,6 +263,8 @@ export default function GamePage() {
             role: isMe ? p.role : pl.role,
             x: px,
             y: py,
+            spawnX: spawn.x,
+            spawnY: spawn.y,
             targetX: px,
             targetY: py,
             vx: 0,
@@ -281,6 +283,8 @@ export default function GamePage() {
           role: p.role,
           x: myEntry?.lastX ?? spawn.x,
           y: myEntry?.lastY ?? spawn.y,
+          spawnX: spawn.x,
+          spawnY: spawn.y,
           vx: 0,
           vy: 0,
           facing: (myEntry?.lastFacing as 1 | -1) ?? 1,
@@ -594,6 +598,18 @@ export default function GamePage() {
             p.y += dy * remoteLerp;
           }
         }
+        for (const plat of PLATFORMS) {
+          if (
+            plat.type === 'fire' &&
+            p.x + PLAYER_W > plat.x &&
+            p.x < plat.x + plat.w &&
+            p.y + PLAYER_H > plat.y &&
+            p.y < plat.y + plat.h
+          ) {
+            p.burnUntil = Date.now() + 5000;
+            break;
+          }
+        }
       }
 
       const dynBlocks: Platform[] = questionBlocksRef.current.map((b) => {
@@ -652,7 +668,19 @@ export default function GamePage() {
 
       for (const p of playersRef.current.values()) {
         const role = p.id === myIdRef.current ? myRole : (p.role ?? (room?.hostId === p.id ? 'teacher' : 'student'));
-        drawCat(ctx, p.x, p.y, PLAYER_W, PLAYER_H, p.avatar, p.facing, p.username, role, bubblesRef.current.get(p.id) ?? null);
+        drawCat(
+          ctx,
+          p.x,
+          p.y,
+          PLAYER_W,
+          PLAYER_H,
+          p.avatar,
+          p.facing,
+          p.username,
+          role,
+          bubblesRef.current.get(p.id) ?? null,
+          { isDying: p.isDying, deathStartedAt: p.deathStartedAt, burnUntil: p.burnUntil },
+        );
       }
 
       ctx.restore();

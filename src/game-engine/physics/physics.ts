@@ -15,6 +15,11 @@ export type Player = {
   onGround: boolean;
   ridingPlayerId?: string | null;
   lastCarrierX?: number;
+  spawnX?: number;
+  spawnY?: number;
+  isDying?: boolean;
+  deathStartedAt?: number;
+  burnUntil?: number;
 };
 
 const PLAYER_W = 36;
@@ -28,6 +33,19 @@ function isQuestionBox(type: string) {
   return type === 'qblock' || type === 'qblock-correct' || type === 'qblock-wrong';
 }
 
+function respawnToStart(p: Player) {
+  p.isDying = false;
+  p.deathStartedAt = undefined;
+  p.burnUntil = undefined;
+  p.x = p.spawnX ?? 120;
+  p.y = p.spawnY ?? WORLD.groundY - PLAYER_H - 20;
+  p.vx = 0;
+  p.vy = 0;
+  p.onGround = false;
+  p.ridingPlayerId = null;
+  p.lastCarrierX = undefined;
+}
+
 export function updatePlayerPhysics(
   p: Player,
   input: { left: boolean; right: boolean; jump: boolean },
@@ -36,7 +54,27 @@ export function updatePlayerPhysics(
   onTouchQuestionBlock?: (questionId: string) => void,
   dtScale = 1,
 ) {
+  const now = Date.now();
+
+  // Super Mario Bros style death animation sequence when hitting spikes
+  if (p.isDying) {
+    const elapsed = now - (p.deathStartedAt ?? now);
+    // 0-180ms: freeze in shock before flying up & falling through screen
+    if (elapsed >= 180) {
+      const prevVy = p.vy;
+      p.vy = Math.min(p.vy + PHYSICS.gravity * 0.92 * dtScale, PHYSICS.maxFallSpeed);
+      const stepVy = Math.min(prevVy + 0.5 * PHYSICS.gravity * 0.92 * (dtScale + 1), PHYSICS.maxFallSpeed);
+      p.y += stepVy * dtScale;
+    }
+    if (elapsed >= 1200 || p.y > WORLD.height + 240) {
+      respawnToStart(p);
+    }
+    return;
+  }
+
   const allPlatforms = extraPlatforms.length > 0 ? [...PLATFORMS, ...extraPlatforms] : PLATFORMS;
+  const isBurning = Boolean(p.burnUntil && p.burnUntil > now);
+  const activeMoveSpeed = isBurning ? PHYSICS.moveSpeed * 1.2 : PHYSICS.moveSpeed;
 
   // Carry rider horizontally when standing on another player
   if (p.ridingPlayerId) {
@@ -55,10 +93,10 @@ export function updatePlayerPhysics(
   }
 
   if (input.left) {
-    p.vx = -PHYSICS.moveSpeed;
+    p.vx = -activeMoveSpeed;
     p.facing = -1;
   } else if (input.right) {
-    p.vx = PHYSICS.moveSpeed;
+    p.vx = activeMoveSpeed;
     p.facing = 1;
   } else {
     p.vx *= Math.pow(0.6, dtScale);
@@ -112,11 +150,23 @@ export function updatePlayerPhysics(
     if (!rectsOverlap(box, plat)) continue;
 
     if (plat.type === 'spike') {
-      p.vy = -10.5;
-      p.vx = -p.facing * 5;
-      p.y = plat.y - PLAYER_H - 2;
+      p.isDying = true;
+      p.deathStartedAt = now;
+      p.vx = 0;
+      p.vy = -13.2;
       p.onGround = false;
-      box.y = p.y;
+      p.ridingPlayerId = null;
+      p.lastCarrierX = undefined;
+      return;
+    }
+
+    if (plat.type === 'fire') {
+      const alreadyBurning = Boolean(p.burnUntil && p.burnUntil > now + 4400);
+      p.burnUntil = now + 5000;
+      if (!alreadyBurning && p.vy >= -4) {
+        p.vy = -8.6;
+        p.onGround = false;
+      }
       continue;
     }
 

@@ -1,5 +1,5 @@
 export const WORLD = {
-  width: 3600,
+  width: 5600,
   height: 1100,
   groundY: 820,
 };
@@ -12,7 +12,19 @@ export const PHYSICS = {
   maxFallSpeed: 16,
 };
 
-export type PlatformType = 'ground' | 'grass' | 'wood' | 'stone' | 'crate' | 'qblock' | 'qblock-correct' | 'qblock-wrong' | 'bounce' | 'spike' | 'roof';
+export type PlatformType =
+  | 'ground'
+  | 'grass'
+  | 'wood'
+  | 'stone'
+  | 'crate'
+  | 'qblock'
+  | 'qblock-correct'
+  | 'qblock-wrong'
+  | 'bounce'
+  | 'spike'
+  | 'fire'
+  | 'roof';
 
 export type Platform = {
   x: number;
@@ -24,8 +36,8 @@ export type Platform = {
 };
 
 export const PLATFORMS: Platform[] = [
-  // Main ground
-  { x: 0, y: 820, w: 3600, h: 280, type: 'ground' },
+  // Main ground (expanded to 5600px)
+  { x: 0, y: 820, w: 5600, h: 280, type: 'ground' },
 
   // Starting zone & Signboard platform (left)
   { x: 40, y: 710, w: 220, h: 28, type: 'grass' },
@@ -41,15 +53,33 @@ export const PLATFORMS: Platform[] = [
   { x: 890, y: 630, w: 210, h: 28, type: 'grass' },
   { x: 1150, y: 700, w: 220, h: 28, type: 'grass' },
 
-  // Spikes hazard on ground & between platforms (touching launches/resets slightly)
+  // Spikes hazard on ground & between platforms (Mario Bros death + respawn to start!)
   { x: 850, y: 794, w: 66, h: 26, type: 'spike' },
   { x: 1410, y: 794, w: 66, h: 26, type: 'spike' },
   { x: 2220, y: 794, w: 88, h: 26, type: 'spike' },
+  { x: 3290, y: 794, w: 88, h: 26, type: 'spike' },
+  { x: 4040, y: 794, w: 88, h: 26, type: 'spike' },
+  { x: 4720, y: 794, w: 88, h: 26, type: 'spike' },
+
+  // Fire hazards (touching sets character on fire for 5 seconds!)
+  { x: 635, y: 794, w: 64, h: 26, type: 'fire' },
+  { x: 1225, y: 676, w: 56, h: 24, type: 'fire' },
+  { x: 1830, y: 794, w: 68, h: 26, type: 'fire' },
+  { x: 2535, y: 596, w: 56, h: 24, type: 'fire' },
+  { x: 2840, y: 794, w: 68, h: 26, type: 'fire' },
+  { x: 3560, y: 794, w: 72, h: 26, type: 'fire' },
+  { x: 3720, y: 596, w: 56, h: 24, type: 'fire' },
+  { x: 4340, y: 794, w: 72, h: 26, type: 'fire' },
+  { x: 4520, y: 516, w: 56, h: 24, type: 'fire' },
+  { x: 5010, y: 794, w: 68, h: 26, type: 'fire' },
 
   // Bounce / trampoline pads (super jump!)
   { x: 770, y: 798, w: 64, h: 22, type: 'bounce' },
   { x: 1650, y: 798, w: 64, h: 22, type: 'bounce' },
   { x: 2540, y: 798, w: 64, h: 22, type: 'bounce' },
+  { x: 3440, y: 798, w: 64, h: 22, type: 'bounce' },
+  { x: 4220, y: 798, w: 64, h: 22, type: 'bounce' },
+  { x: 4880, y: 798, w: 64, h: 22, type: 'bounce' },
 
   // School building walkable ledges & roof (center-left)
   { x: 960, y: 510, w: 360, h: 20, type: 'stone' },
@@ -68,7 +98,7 @@ export const PLATFORMS: Platform[] = [
   { x: 1730, y: 310, w: 210, h: 28, type: 'grass' },
   { x: 1380, y: 220, w: 190, h: 26, type: 'stone' },
 
-  // Right-side obstacle tower & stair pyramid
+  // Center-right obstacle tower & stair pyramid
   { x: 2260, y: 710, w: 170, h: 28, type: 'stone' },
   { x: 2470, y: 620, w: 200, h: 28, type: 'grass' },
   { x: 2720, y: 540, w: 200, h: 28, type: 'grass' },
@@ -76,7 +106,7 @@ export const PLATFORMS: Platform[] = [
   { x: 2740, y: 370, w: 210, h: 28, type: 'stone' },
   { x: 2990, y: 280, w: 220, h: 28, type: 'grass' },
 
-  // Crate pyramid near finish gate
+  // Crate pyramid mid-map
   { x: 2960, y: 772, w: 48, h: 48, type: 'crate' },
   { x: 3010, y: 772, w: 48, h: 48, type: 'crate' },
   { x: 3060, y: 772, w: 48, h: 48, type: 'crate' },
@@ -84,9 +114,30 @@ export const PLATFORMS: Platform[] = [
   { x: 3035, y: 724, w: 48, h: 48, type: 'crate' },
   { x: 3010, y: 676, w: 48, h: 48, type: 'crate' },
 
-  // Finish gate fortress terrace
-  { x: 3180, y: 700, w: 340, h: 32, type: 'grass' },
-  { x: 3240, y: 540, w: 220, h: 26, type: 'stone' },
+  // NEW EXPANDED ZONE 1: Volcano Canyon & Fire Bridges (3180 - 4100)
+  { x: 3180, y: 700, w: 220, h: 28, type: 'stone' },
+  { x: 3420, y: 610, w: 210, h: 26, type: 'wood' },
+  { x: 3650, y: 620, w: 230, h: 28, type: 'stone' },
+  { x: 3520, y: 450, w: 200, h: 26, type: 'grass' },
+  { x: 3780, y: 350, w: 220, h: 28, type: 'roof' },
+  { x: 3930, y: 690, w: 190, h: 28, type: 'grass' },
+  { x: 3860, y: 772, w: 48, h: 48, type: 'crate' },
+  { x: 4030, y: 520, w: 210, h: 26, type: 'wood' },
+
+  // NEW EXPANDED ZONE 2: Sky Citadel & High Parkour (4150 - 5050)
+  { x: 4180, y: 670, w: 220, h: 28, type: 'grass' },
+  { x: 4440, y: 540, w: 230, h: 28, type: 'stone' },
+  { x: 4260, y: 390, w: 210, h: 26, type: 'grass' },
+  { x: 4540, y: 280, w: 220, h: 28, type: 'roof' },
+  { x: 4720, y: 640, w: 210, h: 28, type: 'wood' },
+  { x: 4820, y: 450, w: 210, h: 28, type: 'grass' },
+  { x: 4630, y: 772, w: 48, h: 48, type: 'crate' },
+  { x: 4680, y: 772, w: 48, h: 48, type: 'crate' },
+  { x: 4655, y: 724, w: 48, h: 48, type: 'crate' },
+
+  // NEW EXPANDED ZONE 3: Fortress Finish Terrace (5100 - 5520)
+  { x: 5120, y: 700, w: 380, h: 32, type: 'grass' },
+  { x: 5180, y: 540, w: 260, h: 26, type: 'stone' },
 ];
 
 export const DECOR = {
@@ -105,6 +156,12 @@ export const DECOR = {
     { x: 2890, y: 820, s: 0.95 },
     { x: 3140, y: 820, s: 1.1 },
     { x: 3510, y: 820, s: 1.0 },
+    { x: 3810, y: 820, s: 1.1 },
+    { x: 4150, y: 820, s: 0.95 },
+    { x: 4480, y: 820, s: 1.15 },
+    { x: 4830, y: 820, s: 1.0 },
+    { x: 5100, y: 820, s: 1.05 },
+    { x: 5480, y: 820, s: 1.1 },
   ],
   clouds: [
     { x: 180, y: 130, s: 1.0 },
@@ -115,13 +172,17 @@ export const DECOR = {
     { x: 2340, y: 95, s: 1.2 },
     { x: 2820, y: 125, s: 0.9 },
     { x: 3280, y: 85, s: 1.15 },
+    { x: 3740, y: 110, s: 1.2 },
+    { x: 4220, y: 80, s: 1.05 },
+    { x: 4720, y: 125, s: 1.25 },
+    { x: 5210, y: 90, s: 1.1 },
   ],
   sign: { x: 95, y: 625, text: 'Kerja sama tim untuk menyelesaikan setiap tantangan!' },
-  gate: { x: 3300, y: 540 },
+  gate: { x: 5240, y: 540 },
 };
 
 export const SPAWN_POINTS = Array.from({ length: 48 }, (_, i) => ({
-  x: 100 + (i % 16) * 65,
+  x: 100 + (i % 16) * 45,
   y: 740 - Math.floor(i / 16) * 60,
 }));
 
@@ -157,8 +218,20 @@ export const QBLOCK_CANDIDATE_SPOTS: { x: number; y: number }[] = [
   { x: 3075, y: 155 },
   { x: 3010, y: 555 },
   { x: 3255, y: 575 },
-  { x: 3325, y: 415 },
-  { x: 3440, y: 575 },
+  { x: 3480, y: 485 },
+  { x: 3585, y: 325 },
+  { x: 3740, y: 495 },
+  { x: 3850, y: 225 },
+  { x: 3985, y: 565 },
+  { x: 4100, y: 395 },
+  { x: 4255, y: 545 },
+  { x: 4330, y: 265 },
+  { x: 4510, y: 415 },
+  { x: 4610, y: 160 },
+  { x: 4785, y: 515 },
+  { x: 4890, y: 325 },
+  { x: 5180, y: 575 },
+  { x: 5280, y: 415 },
 ];
 
 export function generateQuestionBlocks(questionIds: string[], seedStr: string): Platform[] {

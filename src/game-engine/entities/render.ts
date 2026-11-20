@@ -16,6 +16,12 @@ function hashHue(seed: string) {
 
 export type BubbleEntry = { text: string; at: number };
 
+export type CatHazardState = {
+  isDying?: boolean;
+  deathStartedAt?: number;
+  burnUntil?: number;
+};
+
 function drawCat(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -27,17 +33,54 @@ function drawCat(
   name: string,
   role: string,
   bubble?: BubbleEntry | null,
+  hazard?: CatHazardState,
 ) {
+  const now = Date.now();
+  const isDying = Boolean(hazard?.isDying);
+  const deathElapsed = isDying ? now - (hazard?.deathStartedAt ?? now) : 0;
+  const isBurning = Boolean(!isDying && hazard?.burnUntil && hazard.burnUntil > now);
+  const burnRemainingMs = isBurning ? (hazard!.burnUntil! - now) : 0;
+
   const base = AVATAR_COLORS[avatar] ?? AVATAR_COLORS['cat-blue'];
   const hue = hashHue(name + avatar);
-  const colors = role === 'teacher'
-    ? { body: 'hsl(45, 90%, 55%)', belly: 'hsl(45, 95%, 80%)', ear: 'hsl(40, 85%, 40%)' }
-    : { body: `hsl(${hue}, 70%, 55%)`, belly: `hsl(${hue}, 75%, 82%)`, ear: `hsl(${hue}, 70%, 38%)` };
+  const flickerFire = isBurning && Math.floor(now / 70) % 2 === 0;
+  const colors = isBurning
+    ? flickerFire
+      ? { body: '#ea580c', belly: '#fed7aa', ear: '#9a3412' }
+      : { body: '#451a03', belly: '#fdba74', ear: '#dc2626' }
+    : role === 'teacher'
+      ? { body: 'hsl(45, 90%, 55%)', belly: 'hsl(45, 95%, 80%)', ear: 'hsl(40, 85%, 40%)' }
+      : { body: `hsl(${hue}, 70%, 55%)`, belly: `hsl(${hue}, 75%, 82%)`, ear: `hsl(${hue}, 70%, 38%)` };
   void base;
+
+  const shakeX = isDying && deathElapsed < 180 ? Math.sin(now * 0.12) * 3.5 : isBurning ? Math.sin(now * 0.09) * 1.4 : 0;
+  const drawX = x + shakeX;
+
+  // Smoke & flame aura behind cat when burning
+  if (isBurning) {
+    ctx.save();
+    for (let i = 0; i < 4; i += 1) {
+      const phase = ((now * 0.005 + i * 0.25) % 1);
+      const sx = drawX + w * 0.2 + ((i * 11) % (w * 0.6)) + Math.sin(now * 0.01 + i) * 5;
+      const sy = y + 6 - phase * 28;
+      const r = 4 + phase * 6;
+      ctx.fillStyle = `rgba(55, 65, 81, ${(1 - phase) * 0.45})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   ctx.save();
-  ctx.translate(x + w / 2, y + h);
+  ctx.translate(drawX + w / 2, y + h / 2);
+  if (isDying && deathElapsed >= 180) {
+    // Super Mario Bros death flip & spin
+    const angle = Math.min(Math.PI, ((deathElapsed - 180) / 380) * Math.PI) + Math.sin(deathElapsed * 0.02) * 0.2;
+    ctx.rotate(angle);
+  }
   ctx.scale(facing, 1);
-  ctx.translate(-w / 2, -h);
+  ctx.translate(-w / 2, -h / 2);
 
   ctx.fillStyle = colors.ear;
   ctx.beginPath();
@@ -55,17 +98,76 @@ function drawCat(
   roundRect(ctx, w / 2 - 8, h * 0.55, 16, h * 0.35, 6);
   ctx.fill();
 
-  ctx.fillStyle = '#111827';
-  ctx.beginPath();
-  ctx.arc(w * 0.32, 22, 3, 0, Math.PI * 2);
-  ctx.arc(w * 0.68, 22, 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(w * 0.44, 30); ctx.lineTo(w * 0.5, 33); ctx.lineTo(w * 0.56, 30);
-  ctx.strokeStyle = '#111827';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+  if (isDying) {
+    // X_X knocked-out Mario Bros eyes
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.25, 19); ctx.lineTo(w * 0.38, 25);
+    ctx.moveTo(w * 0.38, 19); ctx.lineTo(w * 0.25, 25);
+    ctx.moveTo(w * 0.62, 19); ctx.lineTo(w * 0.75, 25);
+    ctx.moveTo(w * 0.75, 19); ctx.lineTo(w * 0.62, 25);
+    ctx.stroke();
+    // Open shocked mouth
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(w * 0.5, 32, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (isBurning) {
+    // Panicked wide eyes O_O + screaming mouth when on fire!
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(w * 0.32, 22, 4.4, 0, Math.PI * 2);
+    ctx.arc(w * 0.68, 22, 4.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(w * 0.32, 22, 2, 0, Math.PI * 2);
+    ctx.arc(w * 0.68, 22, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#7f1d1d';
+    ctx.beginPath();
+    ctx.ellipse(w * 0.5, 31.5, 4.2, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(w * 0.32, 22, 3, 0, Math.PI * 2);
+    ctx.arc(w * 0.68, 22, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(w * 0.44, 30); ctx.lineTo(w * 0.5, 33); ctx.lineTo(w * 0.56, 30);
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
   ctx.restore();
+
+  // Animated dancing flames on top of the cat while burning!
+  if (isBurning) {
+    ctx.save();
+    const tongues = 4;
+    for (let i = 0; i < tongues; i += 1) {
+      const fx = drawX + 5 + i * ((w - 10) / (tongues - 1));
+      const wave = Math.sin(now * 0.022 + i * 1.7) * 4;
+      const fh = 14 + Math.cos(now * 0.028 + i * 2.1) * 5;
+      // Outer orange-red flame
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(239, 68, 68, 0.92)' : 'rgba(249, 115, 22, 0.92)';
+      ctx.beginPath();
+      ctx.moveTo(fx - 6, y + 12);
+      ctx.quadraticCurveTo(fx + wave, y + 10 - fh, fx + 6, y + 12);
+      ctx.closePath();
+      ctx.fill();
+      // Inner yellow core
+      ctx.fillStyle = 'rgba(253, 224, 71, 0.95)';
+      ctx.beginPath();
+      ctx.moveTo(fx - 3, y + 12);
+      ctx.quadraticCurveTo(fx + wave * 0.6, y + 12 - fh * 0.62, fx + 3, y + 12);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
 
   if (role === 'teacher') {
     ctx.save();
@@ -74,7 +176,7 @@ function drawCat(
     ctx.strokeStyle = 'rgba(255, 211, 56, 0.9)';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(x + w / 2, y + h / 2, Math.max(w, h) * 0.72, 0, Math.PI * 2);
+    ctx.arc(drawX + w / 2, y + h / 2, Math.max(w, h) * 0.72, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }
@@ -82,11 +184,28 @@ function drawCat(
   ctx.fillStyle = role === 'teacher' ? '#8c5308' : '#111827';
   ctx.font = 'bold 11px Nunito, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(name, x + w / 2, y - 14);
+  ctx.fillText(name, drawX + w / 2, y - 14);
   if (role === 'teacher') {
     ctx.fillStyle = '#ffd338';
     ctx.font = 'bold 9px Nunito, sans-serif';
-    ctx.fillText('TEACHER', x + w / 2, y - 26);
+    ctx.fillText('TEACHER', drawX + w / 2, y - 26);
+  }
+
+  if (isBurning && (!bubble || now - bubble.at >= 5000)) {
+    const sec = Math.max(1, Math.ceil(burnRemainingMs / 1000));
+    const burnLabel = `🔥 PANAS! ${sec}s`;
+    ctx.font = 'bold 10px Nunito, sans-serif';
+    const tw = ctx.measureText(burnLabel).width + 12;
+    const bx = drawX + w / 2 - tw / 2;
+    const by = y - (role === 'teacher' ? 46 : 34);
+    ctx.fillStyle = '#dc2626';
+    ctx.strokeStyle = '#fef08a';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, bx, by - 14, tw, 19, 7);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(burnLabel, drawX + w / 2, by - 1);
   }
   if (bubble && Date.now() - bubble.at < 5000) {
     const text = bubble.text.length > 40 ? bubble.text.slice(0, 37) + '...' : bubble.text;
@@ -432,6 +551,46 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+      }
+    } else if (p.type === 'fire') {
+      const now = Date.now();
+      // Charcoal stone pit base
+      ctx.fillStyle = '#1e293b';
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2;
+      roundRect(ctx, p.x, p.y + p.h - 9, p.w, 9, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      // Glowing ember coals bed
+      ctx.fillStyle = '#dc2626';
+      roundRect(ctx, p.x + 4, p.y + p.h - 7, p.w - 8, 5, 3);
+      ctx.fill();
+
+      // Animated dancing flame tongues
+      const flameCount = Math.max(3, Math.floor(p.w / 14));
+      const step = (p.w - 8) / flameCount;
+      for (let i = 0; i < flameCount; i += 1) {
+        const cx = p.x + 4 + i * step + step * 0.5;
+        const baseY = p.y + p.h - 6;
+        const sway = Math.sin(now * 0.015 + i * 1.9 + p.x) * 3.5;
+        const fh = p.h - 2 + Math.cos(now * 0.02 + i * 2.3) * 5;
+
+        // Outer red-orange flame
+        ctx.fillStyle = i % 2 === 0 ? '#ef4444' : '#f97316';
+        ctx.beginPath();
+        ctx.moveTo(cx - step * 0.65, baseY);
+        ctx.quadraticCurveTo(cx + sway, baseY - fh, cx + step * 0.65, baseY);
+        ctx.closePath();
+        ctx.fill();
+
+        // Inner bright yellow flame core
+        ctx.fillStyle = '#fde047';
+        ctx.beginPath();
+        ctx.moveTo(cx - step * 0.34, baseY);
+        ctx.quadraticCurveTo(cx + sway * 0.5, baseY - fh * 0.58, cx + step * 0.34, baseY);
+        ctx.closePath();
+        ctx.fill();
       }
     } else {
       ctx.fillStyle = '#8b5a2b';
