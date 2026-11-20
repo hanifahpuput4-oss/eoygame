@@ -1,4 +1,4 @@
-import { eq, or } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 import { hashPassword, verifyPassword, generateId } from '@/server/auth/crypto';
@@ -15,11 +15,17 @@ export class AuthServiceError extends Error {
 }
 
 export async function register(input: RegisterInput) {
+  const normalizedEmail = input.email.trim().toLowerCase();
+  const normalizedUsername = input.username.trim().toLowerCase();
+
   const existing = await db
     .select({ id: users.id })
     .from(users)
     .where(
-      or(eq(users.email, input.email.toLowerCase()), eq(users.username, input.username)),
+      or(
+        eq(sql`lower(${users.email})`, normalizedEmail),
+        eq(sql`lower(${users.username})`, normalizedUsername),
+      ),
     )
     .limit(1);
 
@@ -37,8 +43,8 @@ export async function register(input: RegisterInput) {
   const id = generateId('usr');
   await db.insert(users).values({
     id,
-    email: input.email.toLowerCase(),
-    username: input.username,
+    email: normalizedEmail,
+    username: normalizedUsername,
     fullName: input.fullName,
     passwordHash: hashPassword(input.password),
     role: input.role,
@@ -54,7 +60,12 @@ export async function login(input: LoginInput) {
   const rows = await db
     .select()
     .from(users)
-    .where(or(eq(users.email, identifier), eq(users.username, input.email.trim())))
+    .where(
+      or(
+        eq(sql`lower(${users.email})`, identifier),
+        eq(sql`lower(${users.username})`, identifier),
+      ),
+    )
     .limit(1);
 
   const user = rows[0];

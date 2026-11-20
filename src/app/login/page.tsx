@@ -55,10 +55,13 @@ export default function LoginPage() {
               id="email"
               type="text"
               required
-              className="input-field"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className="input-field lowercase"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="username atau email"
+              onChange={(e) => setEmail(e.target.value.toLowerCase())}
+              placeholder="username atau email (huruf kecil)"
             />
           </div>
           <div>

@@ -172,9 +172,12 @@ export default function UserSettingsForm() {
             <input
               id="settings-username"
               type="text"
-              className="input-field mt-1"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className="input-field mt-1 lowercase"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
               placeholder="contoh: pakbudi_guru"
               minLength={3}
               maxLength={30}

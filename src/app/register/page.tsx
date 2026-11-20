@@ -81,13 +81,32 @@ export default function RegisterPage() {
           </div>
           <div>
             <label htmlFor="username" className="label-field">Username</label>
-            <input id="username" required className="input-field" value={form.username}
-              onChange={(e) => update('username', e.target.value)} placeholder="Nama tampilan" />
+            <input
+              id="username"
+              required
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className="input-field lowercase"
+              value={form.username}
+              onChange={(e) => update('username', e.target.value.toLowerCase())}
+              placeholder="nama tampilan (otomatis huruf kecil)"
+            />
           </div>
           <div>
             <label htmlFor="email" className="label-field">Email</label>
-            <input id="email" type="email" required className="input-field" value={form.email}
-              onChange={(e) => update('email', e.target.value)} placeholder="nama@sekolah.sch.id" />
+            <input
+              id="email"
+              type="email"
+              required
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className="input-field lowercase"
+              value={form.email}
+              onChange={(e) => update('email', e.target.value.toLowerCase())}
+              placeholder="nama@sekolah.sch.id"
+            />
           </div>
           <div>
             <label htmlFor="password" className="label-field">Password</label>

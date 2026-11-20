@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { eq, and, ne } from 'drizzle-orm';
+import { eq, and, ne, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { roomPlayers, users } from '@/db/schema';
 import { requireUser } from '@/server/auth/session';
@@ -59,16 +59,17 @@ export async function PATCH(req: NextRequest) {
         username: z
           .string()
           .trim()
+          .toLowerCase()
           .min(3, 'Username minimal 3 karakter')
           .max(30)
-          .regex(/^[a-zA-Z0-9_.-]+$/, 'Username hanya boleh huruf, angka, titik, strip, atau underscore'),
+          .regex(/^[a-z0-9_.-]+$/, 'Username hanya boleh huruf kecil, angka, titik, strip, atau underscore'),
         avatar: avatarEnum.optional(),
       });
       const input = schema.parse(body);
       const dup = await db
         .select({ id: users.id })
         .from(users)
-        .where(and(eq(users.username, input.username), ne(users.id, user.id)))
+        .where(and(eq(sql`lower(${users.username})`, input.username), ne(users.id, user.id)))
         .limit(1);
       if (dup[0]) {
         return fail('Username sudah digunakan pengguna lain', 409);

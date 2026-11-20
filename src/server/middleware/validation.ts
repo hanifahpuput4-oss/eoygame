@@ -1,20 +1,26 @@
 import { z } from 'zod';
 
 export const registerSchema = z.object({
-  email: z.string().email('Email tidak valid'),
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .email('Email tidak valid'),
   username: z
     .string()
+    .trim()
+    .toLowerCase()
     .min(3, 'Username minimal 3 karakter')
     .max(24, 'Username maksimal 24 karakter')
-    .regex(/^[a-zA-Z0-9_]+$/, 'Username hanya boleh huruf, angka, dan underscore'),
-  fullName: z.string().min(2, 'Nama lengkap minimal 2 karakter').max(80),
+    .regex(/^[a-z0-9_]+$/, 'Username hanya boleh huruf kecil, angka, dan underscore'),
+  fullName: z.string().trim().min(2, 'Nama lengkap minimal 2 karakter').max(80),
   password: z.string().min(8, 'Password minimal 8 karakter').max(72),
   role: z.enum(['teacher', 'student']),
   inviteCode: z.string().optional(),
 });
 
 export const loginSchema = z.object({
-  email: z.string().trim().min(1, 'Email atau username wajib diisi'),
+  email: z.string().trim().toLowerCase().min(1, 'Email atau username wajib diisi'),
   password: z.string().min(1, 'Password wajib diisi'),
 });
 
