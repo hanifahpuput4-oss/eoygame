@@ -59,7 +59,7 @@ type RoomData = {
   code: string;
   status: string;
   players: RoomPlayer[];
-  level: { id: string; name: string } | null;
+  level: { id: string; name: string; subject?: string; grade?: string; topic?: string } | null;
 };
 
 type ChatMsg = { seq?: number; id: string; userId?: string; senderName: string; text: string; createdAt: string };
@@ -1849,11 +1849,11 @@ export default function GamePage() {
               </div>
 
               <div className="mp-center-stage-pill">
-                <div className="mp-stage-title">{room?.level?.name ?? room?.name ?? 'Arena llysSmart'}</div>
-                <div className="mp-step-dots" aria-label="Progres tantangan">
-                  {Array.from({ length: totalSteps }).map((_, i) => (
-                    <span key={i} className={`step-dot${i < doneSteps ? ' done' : ''}`} />
-                  ))}
+                <div className="mp-stage-title">
+                  {room?.level?.subject?.trim() ||
+                    room?.level?.name?.split(/\s*\(|\s*-/)[0]?.trim() ||
+                    room?.name ||
+                    'Arena llysSmart'}
                 </div>
               </div>
 
@@ -1871,15 +1871,27 @@ export default function GamePage() {
                     <div className="mp-teacher-actions">
                       <button
                         type="button"
-                        className="btn-blue-action mp-menu-btn"
+                        className={`pause-btn mp-staff-btn ${room?.status === 'paused' ? 'mp-staff-green' : 'mp-staff-blue'}`}
+                        aria-label={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
+                        title={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
                         onClick={togglePauseGame}
                       >
-                        <span aria-hidden="true">{room?.status === 'paused' ? '▶' : '⏸'}</span>{' '}
-                        {room?.status === 'paused' ? 'Lanjut' : 'Jeda'}
+                        {room?.status === 'paused' ? (
+                          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M8 5.5v13l11-6.5-11-6.5z" fill="#fff" />
+                          </svg>
+                        ) : (
+                          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
+                            <rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
+                          </svg>
+                        )}
                       </button>
                       <button
                         type="button"
-                        className="btn-blue-action mp-menu-btn"
+                        className="pause-btn mp-staff-btn mp-staff-blue mp-chat-top-btn"
+                        aria-label="Kelola Pemain"
+                        title="Kelola Pemain"
                         onClick={() => {
                           setKickModalOpen(true);
                           fetch('/api/game/room-sync', {
@@ -1896,15 +1908,51 @@ export default function GamePage() {
                             .catch(() => {});
                         }}
                       >
-                        <span aria-hidden="true">👥</span> Pemain
-                        {rejoinRequests.length > 0 ? ` (${rejoinRequests.length})` : ''}
+                        <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+                          <circle cx="9" cy="8.5" r="3.2" fill="#fff" />
+                          <path
+                            d="M3.5 19c0-2.8 2.5-5 5.5-5s5.5 2.2 5.5 5"
+                            fill="none"
+                            stroke="#fff"
+                            strokeWidth="2.2"
+                            strokeLinecap="round"
+                          />
+                          <circle cx="16.8" cy="9.2" r="2.3" fill="#fff" opacity="0.92" />
+                          <path
+                            d="M15.8 14.3c2.4.3 4.4 2 4.4 4.4"
+                            fill="none"
+                            stroke="#fff"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                        {rejoinRequests.length > 0 && (
+                          <span className="mp-chat-badge">{rejoinRequests.length}</span>
+                        )}
                       </button>
                       <button
                         type="button"
-                        className="btn-orange-action mp-menu-btn"
+                        className="pause-btn mp-staff-btn mp-staff-danger"
+                        aria-label="Akhiri Sesi Game"
+                        title="Akhiri Sesi Game"
                         onClick={endGame}
                       >
-                        <span aria-hidden="true">🏁</span> Akhiri
+                        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M12 3v9"
+                            fill="none"
+                            stroke="#fff"
+                            strokeWidth="2.6"
+                            strokeLinecap="round"
+                          />
+                          <path
+                            d="M7.05 6.05a8 8 0 1 0 9.9 0"
+                            fill="none"
+                            stroke="#fff"
+                            strokeWidth="2.4"
+                            strokeLinecap="round"
+                          />
+                        </svg>
                       </button>
                     </div>
                   )}
