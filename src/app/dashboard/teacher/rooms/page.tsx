@@ -12,6 +12,7 @@ type Room = {
   status: string;
   maxPlayers: number;
   players: { userId: string; username: string; ready: boolean }[];
+  rejoinRequests?: { userId: string; username: string; requestedAt: number }[];
   level: { id: string; name: string; mapConfig?: string } | null;
   classroom: { id: string; name: string; subject: string; grade: string } | null;
 };
@@ -132,6 +133,8 @@ export default function RoomsPage() {
     if (cachedClassrooms) setClassrooms(cachedClassrooms);
     if (cachedLevels) setLevels(cachedLevels);
     load();
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
   }, [load]);
 
   const subjectGroups = useMemo(() => {
@@ -268,6 +271,63 @@ export default function RoomsPage() {
     a.download = `rekap_nilai_${recap.room.code}_${recap.classroom?.name ?? 'kelas'}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function onKickFromDashboard(roomId: string, playerId: string, username: string) {
+    if (!confirm(`Keluarkan ${username} dari ruang game ini?`)) return;
+    setRooms((prev) =>
+      prev.map((r) => (r.id === roomId ? { ...r, players: r.players.filter((p) => p.userId !== playerId) } : r)),
+    );
+    try {
+      const res = await fetch('/api/game/kick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, playerId }),
+      });
+      if (!res.ok) {
+        void load();
+      }
+    } catch {
+      void load();
+    }
+  }
+
+  async function onApproveRejoin(roomId: string, playerId: string) {
+    setRooms((prev) =>
+      prev.map((r) =>
+        r.id === roomId
+          ? { ...r, rejoinRequests: (r.rejoinRequests ?? []).filter((req) => req.userId !== playerId) }
+          : r,
+      ),
+    );
+    try {
+      await fetch('/api/game/approve-rejoin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, playerId }),
+      });
+    } finally {
+      void load();
+    }
+  }
+
+  async function onRejectRejoin(roomId: string, playerId: string) {
+    setRooms((prev) =>
+      prev.map((r) =>
+        r.id === roomId
+          ? { ...r, rejoinRequests: (r.rejoinRequests ?? []).filter((req) => req.userId !== playerId) }
+          : r,
+      ),
+    );
+    try {
+      await fetch('/api/game/reject-rejoin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, playerId }),
+      });
+    } finally {
+      void load();
+    }
   }
 
   async function onDelete(id: string) {
@@ -412,9 +472,57 @@ export default function RoomsPage() {
               </div>
 
               {r.players.length > 0 && (
-                <p className="mt-2 text-sm">
-                  Pemain di ruang: {r.players.map((p) => p.username).join(', ')}
-                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm">
+                  <span className="font-semibold text-[var(--wood-text)]/80">Pemain di ruang:</span>
+                  {r.players.map((p) => (
+                    <span
+                      key={p.userId}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e8d5b0] bg-[var(--cream-soft)] px-2.5 py-0.5 text-xs font-semibold"
+                    >
+                      <span>{p.username}</span>
+                      <button
+                        type="button"
+                        title={`Kick ${p.username}`}
+                        onClick={() => onKickFromDashboard(r.id, p.userId, p.username)}
+                        className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-700 hover:bg-red-200"
+                      >
+                        Kick
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {r.rejoinRequests && r.rejoinRequests.length > 0 && (
+                <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50/90 p-3">
+                  <div className="text-xs font-bold text-amber-900">
+                    Permintaan Masuk Kembali (Approve akan me-reset soal &amp; poin sesi siswa ke 0):
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {r.rejoinRequests.map((req) => (
+                      <div
+                        key={req.userId}
+                        className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold shadow-sm"
+                      >
+                        <span className="font-bold text-[var(--wood-dark)]">{req.username}</span>
+                        <button
+                          type="button"
+                          onClick={() => onApproveRejoin(r.id, req.userId)}
+                          className="rounded-md bg-green-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-green-700"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRejectRejoin(r.id, req.userId)}
+                          className="rounded-md bg-red-100 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
+                        >
+                          Tolak
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
 
               <div className="mt-4 flex flex-wrap gap-2">

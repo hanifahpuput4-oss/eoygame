@@ -4,6 +4,8 @@ import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import {
   getLiveRoomPositions,
+  getLiveRoomStatus,
+  getRejoinRequests,
   isPlayerKicked,
   isRoomDeleted,
   removePresence,
@@ -206,33 +208,42 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
 
   const t = msg.t;
 
-  // Sub-millisecond Ping / Pong
+  // Sub-millisecond Ping / Pong + Piggybacked Room Status & Kick Flag
   if (t === 'p') {
-    const reply = encodeWsTextFrame(JSON.stringify({ t: 'po', c: msg.c }));
+    if (typeof msg.r === 'string' && msg.r && client.roomId !== msg.r) {
+      if (client.roomId) removeClientFromRoom(client);
+      client.roomId = msg.r;
+      addClientToRoom(client);
+    }
+    if (typeof msg.u === 'string' && msg.u) {
+      client.userId = msg.u;
+    }
+    if (typeof msg.rl === 'string' && msg.rl) {
+      client.role = msg.rl;
+    }
+
+    const rId = client.roomId;
+    const uId = client.userId;
+    const deleted = rId ? isRoomDeleted(rId) : false;
+    const kicked = rId && uId && client.role !== 'teacher' ? isPlayerKicked(rId, uId) : false;
+    const rs = rId ? getLiveRoomStatus(rId) : undefined;
+    const rq = rId && client.role === 'teacher' ? getRejoinRequests(rId) : undefined;
+
+    const reply = encodeWsTextFrame(
+      JSON.stringify({
+        t: 'po',
+        c: msg.c,
+        rs: deleted ? 'deleted' : rs,
+        del: deleted ? 1 : 0,
+        k: kicked ? 1 : 0,
+        rq,
+      }),
+    );
     if (!client.socket.destroyed && client.socket.writable) {
       client.socket.write(reply);
     }
-    if (client.roomId && client.userId) {
-      if (isRoomDeleted(client.roomId)) {
-        if (!client.socket.destroyed && client.socket.writable) {
-          client.socket.write(
-            encodeWsTextFrame(JSON.stringify({ t: 'evt', name: 'room-status', data: { status: 'deleted' } })),
-          );
-        }
-        return;
-      }
-      if (client.role !== 'teacher' && isPlayerKicked(client.roomId, client.userId)) {
-        if (!client.socket.destroyed && client.socket.writable) {
-          client.socket.write(
-            encodeWsTextFrame(
-              JSON.stringify({ t: 'evt', name: 'kicked', data: { playerId: client.userId, left: false } }),
-            ),
-          );
-        }
-        removeClientFromRoom(client);
-        return;
-      }
-      touchPresence(client.roomId, client.userId);
+    if (rId && uId && !deleted && !kicked) {
+      touchPresence(rId, uId);
     }
     return;
   }
@@ -241,19 +252,20 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
   if (t === 'join') {
     const roomId = typeof msg.roomId === 'string' ? msg.roomId : '';
     const userId = typeof msg.userId === 'string' ? msg.userId : '';
-    if (!roomId || !userId) return;
+    if (!roomId) return;
 
-    if (client.roomId) {
+    if (client.roomId && client.roomId !== roomId) {
       removeClientFromRoom(client);
     }
     client.roomId = roomId;
-    client.userId = userId;
-    client.username = typeof msg.username === 'string' ? msg.username : 'Player';
-    client.avatar = typeof msg.avatar === 'string' ? msg.avatar : 'cat-orange';
-    client.role = typeof msg.role === 'string' ? msg.role : 'student';
+    if (userId) client.userId = userId;
+    client.username = typeof msg.username === 'string' ? msg.username : client.username || 'Player';
+    client.avatar = typeof msg.avatar === 'string' ? msg.avatar : client.avatar || 'cat-orange';
+    client.role = typeof msg.role === 'string' ? msg.role : client.role || 'student';
 
     addClientToRoom(client);
-    touchPresence(roomId, userId, true);
+    if (!client.userId) return;
+    touchPresence(roomId, client.userId, true);
 
     if (typeof msg.x === 'number' && typeof msg.y === 'number') {
       updateLivePlayerPosition(roomId, {
@@ -504,12 +516,13 @@ export function handleWsUpgrade(req: http.IncomingMessage, socket: Duplex) {
  * can establish a Native WebSocket at `ws://<IP_STATIC>:3000/ws-game` WITHOUT needing port 3001 opened!
  */
 function hookMainHttpServer(hub: WsHubState) {
-  if (hub.samePortHooked) return;
   try {
     const proc = process as unknown as {
       _getActiveHandles?: () => Array<
         http.Server & {
           __llysSamePortWsHooked?: boolean;
+          __llysSamePortWsHookedV2?: boolean;
+          __llysWsUpgradeHandler?: (req: http.IncomingMessage, socket: Duplex) => void;
         }
       >;
     };
@@ -521,9 +534,12 @@ function hookMainHttpServer(hub: WsHubState) {
       if (!addr || typeof addr !== 'object' || typeof addr.port !== 'number') continue;
       if (addr.port === hub.port && hub.port !== 0) continue;
 
-      if (!h.__llysSamePortWsHooked) {
+      // Selalu perbarui pointer fungsi upgrade ke kode terbaru (tahan hot-reload Next.js!)
+      h.__llysWsUpgradeHandler = handleWsUpgrade;
+
+      if (!h.__llysSamePortWsHookedV2) {
+        h.__llysSamePortWsHookedV2 = true;
         h.__llysSamePortWsHooked = true;
-        // Enable TCP_NODELAY on every socket hitting main port 3000 too
         h.on('connection', (sock: Socket) => {
           try {
             sock.setNoDelay(true);
@@ -532,17 +548,18 @@ function hookMainHttpServer(hub: WsHubState) {
           }
         });
 
-        const origEmit = h.emit.bind(h);
+        const prevEmit = h.emit.bind(h);
         h.emit = ((event: string, ...args: unknown[]) => {
           if (event === 'upgrade') {
             const req = args[0] as http.IncomingMessage | undefined;
             const socket = args[1] as Duplex | undefined;
             if (req && socket && typeof req.url === 'string' && req.url.startsWith('/ws-game')) {
-              handleWsUpgrade(req, socket);
+              const handler = h.__llysWsUpgradeHandler ?? handleWsUpgrade;
+              handler(req, socket);
               return true;
             }
           }
-          return origEmit(event, ...args);
+          return prevEmit(event, ...args);
         }) as typeof h.emit;
       }
       hub.samePortHooked = true;

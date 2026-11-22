@@ -4,12 +4,19 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '@/db';
 import { roomPlayers } from '@/db/schema';
 import { requireUser } from '@/server/auth/session';
-import { createRoom, listTeacherRooms, joinRoom, getRoom, assertHost } from '@/server/services/room-service';
+import { createRoom, listTeacherRooms, joinRoom, getRoom, getRoomByCode, assertHost } from '@/server/services/room-service';
 import { listClassrooms } from '@/server/services/classroom-service';
 import { listLevels } from '@/server/services/level-service';
 import { roomSchema, joinRoomSchema } from '@/server/middleware/validation';
 import { ok, fail, handleError } from '@/server/middleware/http';
 import { generateId } from '@/server/auth/crypto';
+import {
+  addRejoinRequest,
+  consumeRejoinRejection,
+  getRejoinRequests,
+  isPlayerKicked,
+} from '@/server/services/presence-store';
+import { publishToRoom } from '@/server/services/realtime-service';
 
 export async function GET(req: NextRequest) {
   try {
@@ -44,6 +51,15 @@ export async function POST(req: NextRequest) {
     }
 
     const { code } = joinRoomSchema.parse(body);
+    const targetRoom = await getRoomByCode(code);
+    if (isPlayerKicked(targetRoom.id, user.id)) {
+      addRejoinRequest(targetRoom.id, { userId: user.id, username: user.username });
+      void publishToRoom(targetRoom.id, 'rejoin-request', {
+        requests: getRejoinRequests(targetRoom.id),
+      });
+      return ok({ room: targetRoom, kicked: true }, 201);
+    }
+
     const room = await joinRoom(code, user.id, user.avatar, user.role);
     return ok({ room }, 201);
   } catch (err) {

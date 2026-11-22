@@ -116,7 +116,8 @@ export default function StudentDashboard() {
         setJoiningRoomId(null);
         return;
       }
-      router.push(`/game/${data.room.id}`);
+      const targetId = data?.room?.id ?? data?.roomId ?? room.id;
+      router.push(`/game/${targetId}`);
     } catch {
       setJoinError('Terjadi kesalahan jaringan');
       setJoiningRoomId(null);

@@ -12,7 +12,7 @@ import {
 } from '@/db/schema';
 import { generateCode, generateId } from '@/server/auth/crypto';
 import type { RoomInput } from '@/server/middleware/validation';
-import { clearPlayerKicked, setLiveRoomStatus } from './presence-store';
+import { getRejoinRequests, invalidateRoomSyncCache, setLiveRoomStatus } from './presence-store';
 
 export class RoomError extends Error {
   constructor(
@@ -162,6 +162,7 @@ export async function listTeacherRooms(hostId: string) {
     ...room,
     settings: JSON.parse(room.settings || '{}'),
     players: allPlayers.filter((p) => p.roomId === room.id),
+    rejoinRequests: getRejoinRequests(room.id),
     level: levelMap.get(room.levelId) ?? null,
     classroom: classroomMap.get(room.classroomId) ?? null,
   }));
@@ -178,7 +179,6 @@ export async function joinRoom(code: string, userId: string, avatar: string, rol
       409,
     );
   }
-  clearPlayerKicked(room.id, userId);
   setLiveRoomStatus(room.id, room.status);
   const existing = await db
     .select({ id: roomPlayers.id })
@@ -211,6 +211,7 @@ export async function joinRoom(code: string, userId: string, avatar: string, rol
       userId,
       avatar,
     });
+    invalidateRoomSyncCache(room.id);
   }
   return getRoom(room.id);
 }

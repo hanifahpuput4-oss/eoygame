@@ -30,6 +30,12 @@ export type CachedRoomDbState = {
   scores: { userId: string; score: number; stars: number }[];
 };
 
+export type RejoinRequest = {
+  userId: string;
+  username: string;
+  requestedAt: number;
+};
+
 const globalForPresence = globalThis as unknown as {
   __llysRoomPresence?: Map<string, Map<string, number>>;
   __llysRecentlyLeft?: Map<string, number>;
@@ -39,7 +45,23 @@ const globalForPresence = globalThis as unknown as {
   __llysKickedPlayers?: Map<string, number>;
   __llysDeletedRooms?: Map<string, number>;
   __llysLiveRoomStatus?: Map<string, string>;
+  __llysRejoinRequests?: Map<string, Map<string, RejoinRequest>>;
+  __llysRejectedRejoins?: Map<string, number>;
 };
+
+function getRejoinRequestsStore(): Map<string, Map<string, RejoinRequest>> {
+  if (!globalForPresence.__llysRejoinRequests) {
+    globalForPresence.__llysRejoinRequests = new Map();
+  }
+  return globalForPresence.__llysRejoinRequests;
+}
+
+function getRejectedRejoinsStore(): Map<string, number> {
+  if (!globalForPresence.__llysRejectedRejoins) {
+    globalForPresence.__llysRejectedRejoins = new Map();
+  }
+  return globalForPresence.__llysRejectedRejoins;
+}
 
 function getKickedPlayersStore(): Map<string, number> {
   if (!globalForPresence.__llysKickedPlayers) {
@@ -64,18 +86,69 @@ function getLiveRoomStatusStore(): Map<string, string> {
 
 export function markPlayerKicked(roomId: string, userId: string): void {
   getKickedPlayersStore().set(`${roomId}:${userId}`, Date.now());
+  getRejectedRejoinsStore().delete(`${roomId}:${userId}`);
+  getRejoinRequestsStore().get(roomId)?.delete(userId);
   removePresence(roomId, userId);
 }
 
 export function clearPlayerKicked(roomId: string, userId: string): void {
   getKickedPlayersStore().delete(`${roomId}:${userId}`);
   getRecentlyLeftStore().delete(`${roomId}:${userId}`);
+  getRejectedRejoinsStore().delete(`${roomId}:${userId}`);
+  getRejoinRequestsStore().get(roomId)?.delete(userId);
+  invalidateRoomSyncCache(roomId);
+}
+
+export function addRejoinRequest(roomId: string, user: { userId: string; username: string }): RejoinRequest {
+  const store = getRejoinRequestsStore();
+  let roomReqs = store.get(roomId);
+  if (!roomReqs) {
+    roomReqs = new Map();
+    store.set(roomId, roomReqs);
+  }
+  getRejectedRejoinsStore().delete(`${roomId}:${user.userId}`);
+  const existing = roomReqs.get(user.userId);
+  if (existing) return existing;
+  const entry: RejoinRequest = {
+    userId: user.userId,
+    username: user.username,
+    requestedAt: Date.now(),
+  };
+  roomReqs.set(user.userId, entry);
+  invalidateRoomSyncCache(roomId);
+  return entry;
+}
+
+export function getRejoinRequests(roomId: string): RejoinRequest[] {
+  const roomReqs = getRejoinRequestsStore().get(roomId);
+  if (!roomReqs) return [];
+  return Array.from(roomReqs.values());
+}
+
+export function approvePlayerRejoin(roomId: string, userId: string): void {
+  clearPlayerKicked(roomId, userId);
+}
+
+export function rejectPlayerRejoin(roomId: string, userId: string): void {
+  getRejoinRequestsStore().get(roomId)?.delete(userId);
+  getRejectedRejoinsStore().set(`${roomId}:${userId}`, Date.now());
+  invalidateRoomSyncCache(roomId);
+}
+
+export function consumeRejoinRejection(roomId: string, userId: string): boolean {
+  const key = `${roomId}:${userId}`;
+  const rejected = getRejectedRejoinsStore().has(key);
+  if (rejected) {
+    getRejectedRejoinsStore().delete(key);
+    return true;
+  }
+  return false;
 }
 
 export function isPlayerKicked(roomId: string, userId: string): boolean {
   const kickedAt = getKickedPlayersStore().get(`${roomId}:${userId}`);
   if (!kickedAt) return false;
-  if (Date.now() - kickedAt > 15 * 60 * 1000) {
+  if (Date.now() - kickedAt > 2 * 60 * 60 * 1000) {
     getKickedPlayersStore().delete(`${roomId}:${userId}`);
     return false;
   }
@@ -172,7 +245,7 @@ export function shouldWritePosToDb(roomId: string, userId: string, intervalMs = 
 }
 
 export function touchPresence(roomId: string, userId: string, explicitJoin = false): boolean {
-  if (isRoomDeleted(roomId)) {
+  if (isRoomDeleted(roomId) || isPlayerKicked(roomId, userId)) {
     return false;
   }
   const key = `${roomId}:${userId}`;
@@ -181,9 +254,6 @@ export function touchPresence(roomId: string, userId: string, explicitJoin = fal
     leftStore.delete(key);
     invalidateRoomSyncCache(roomId);
   } else {
-    if (isPlayerKicked(roomId, userId)) {
-      return false;
-    }
     const leftAt = leftStore.get(key);
     if (leftAt && Date.now() - leftAt < 3000) {
       return false;

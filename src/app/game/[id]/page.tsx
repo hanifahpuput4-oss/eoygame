@@ -144,8 +144,10 @@ export default function GamePage() {
   const [chatInput, setChatInput] = useState('');
   const [myRole, setMyRole] = useState('student');
   const myRoleRef = useRef('student');
+  myRoleRef.current = myRole;
   const [exitNotice, setExitNotice] = useState<'kicked' | 'deleted' | null>(null);
   const exitNoticeRef = useRef<'kicked' | 'deleted' | null>(null);
+  const manualLeaveRef = useRef(false);
   const [chatMinimized, setChatMinimized] = useState(true);
   const [leaderboardMinimized, setLeaderboardMinimized] = useState(true);
 
@@ -155,6 +157,7 @@ export default function GamePage() {
   const [panelOffsets, setPanelOffsets] = useState<Record<string, { x: number; y: number }>>({});
   const panelDragRef = useRef<{ key: string; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null);
   const [kickModalOpen, setKickModalOpen] = useState(false);
+  const [rejoinRequests, setRejoinRequests] = useState<{ userId: string; username: string; requestedAt: number }[]>([]);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingControlsLayout, setEditingControlsLayout] = useState(false);
   const [hudControls, setHudControls] = useState<HudControlsConfig>(DEFAULT_HUD_CONTROLS);
@@ -184,6 +187,7 @@ export default function GamePage() {
   const sessionIdRef = useRef<string>('');
   const lastSyncedPosRef = useRef<{ x: number; y: number; facing: number }>({ x: -9999, y: -9999, facing: 1 });
   const hasLeftRef = useRef(false);
+  const justKickedInSessionRef = useRef(false);
   const chatMinimizedRef = useRef(chatMinimized);
   const [unreadCount, setUnreadCount] = useState(0);
   const ablyEnabled = true;
@@ -265,13 +269,17 @@ export default function GamePage() {
   }
 
   function triggerForcedExit(reason: 'kicked' | 'deleted') {
-    if (hasLeftRef.current || exitNoticeRef.current) return;
+    if (manualLeaveRef.current) return;
+    if (exitNoticeRef.current === 'deleted' || exitNoticeRef.current === reason) return;
     if (reason === 'kicked' && myRoleRef.current === 'teacher') return;
     exitNoticeRef.current = reason;
     hasLeftRef.current = true;
     keysRef.current.left = false;
     keysRef.current.right = false;
     keysRef.current.jump = false;
+    questionRef.current = null;
+    setQuestion(null);
+    setFeedback(null);
     const me = playersRef.current.get(myIdRef.current);
     if (me) {
       me.vx = 0;
@@ -280,10 +288,42 @@ export default function GamePage() {
     setExitNotice(reason);
   }
 
+  function handleRejoinApproved() {
+    if (exitNoticeRef.current !== 'kicked') return;
+    exitNoticeRef.current = null;
+    hasLeftRef.current = false;
+    justKickedInSessionRef.current = false;
+    setExitNotice(null);
+    answeredIdsRef.current.clear();
+    answerResultsRef.current.clear();
+    setAnsweredQuestionIds([]);
+    setCorrectCount(0);
+    questionRef.current = null;
+    setQuestion(null);
+    setFeedback(null);
+    if (myIdRef.current) {
+      setScores((prev) => ({ ...prev, [myIdRef.current]: 0 }));
+      const me = playersRef.current.get(myIdRef.current);
+      if (me) {
+        me.x = me.spawnX ?? 120;
+        me.y = me.spawnY ?? 600;
+        me.vx = 0;
+        me.vy = 0;
+      }
+      const shuffleSeed = `${myIdRef.current}:${roomId}:${Date.now()}`;
+      setLevelQuestions((prev) => {
+        const next = prev.map((q) => shuffleQuestionOptions(q, shuffleSeed));
+        levelQuestionsRef.current = next;
+        return next;
+      });
+    }
+  }
+
   function applyLiveRoomStatus(nextStatus: string) {
     if (!nextStatus) return;
     if (nextStatus === 'deleted') {
       if (myRoleRef.current === 'teacher') {
+        manualLeaveRef.current = true;
         hasLeftRef.current = true;
         router.replace('/dashboard/teacher/rooms');
       } else {
@@ -292,11 +332,12 @@ export default function GamePage() {
       return;
     }
     if (nextStatus === 'completed') {
+      manualLeaveRef.current = true;
       hasLeftRef.current = true;
       router.replace(myRoleRef.current === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
       return;
     }
-    if (nextStatus === 'paused' && myRoleRef.current !== 'teacher') {
+    if (nextStatus === 'paused') {
       keysRef.current.left = false;
       keysRef.current.right = false;
       keysRef.current.jump = false;
@@ -317,8 +358,9 @@ export default function GamePage() {
       ingestRemotePlayerSnapshot(rp);
     },
     onDirectLeave: (uid, kicked) => {
-      if (uid === myIdRef.current) {
-        if (kicked && !hasLeftRef.current && myRoleRef.current !== 'teacher') {
+      if (uid === myIdRef.current || uid === 'me') {
+        if (kicked && !manualLeaveRef.current && myRoleRef.current !== 'teacher') {
+          justKickedInSessionRef.current = true;
           triggerForcedExit('kicked');
         }
         return;
@@ -329,7 +371,7 @@ export default function GamePage() {
   });
 
   function notifyLeaveRoom() {
-    if (hasLeftRef.current || !roomId) return;
+    if (hasLeftRef.current || exitNoticeRef.current || !roomId) return;
     hasLeftRef.current = true;
     const payload = JSON.stringify({ roomId });
     try {
@@ -349,25 +391,27 @@ export default function GamePage() {
   }
 
   function handleSessionReplaced() {
+    manualLeaveRef.current = true;
     hasLeftRef.current = true;
     clearCachedData();
     window.location.replace('/login?reason=session_replaced');
   }
 
   function handleLeaveGame() {
+    manualLeaveRef.current = true;
     notifyLeaveRoom();
     router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
   }
 
   useEffect(() => {
     hasLeftRef.current = false;
+    manualLeaveRef.current = false;
     const onUnload = () => notifyLeaveRoom();
     window.addEventListener('pagehide', onUnload);
     window.addEventListener('beforeunload', onUnload);
     return () => {
       window.removeEventListener('pagehide', onUnload);
       window.removeEventListener('beforeunload', onUnload);
-      notifyLeaveRoom();
     };
   }, [roomId]);
 
@@ -501,9 +545,8 @@ export default function GamePage() {
       myRoleRef.current = p.role;
       setMyRole(p.role);
 
-      if (data.kicked && p.role !== 'teacher') {
-        triggerForcedExit('kicked');
-        return;
+      if (Array.isArray(data.rejoinRequests)) {
+        setRejoinRequests(data.rejoinRequests);
       }
 
       if (typeof data.sessionId === 'string' && data.sessionId) {
@@ -512,16 +555,18 @@ export default function GamePage() {
       if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
         chatCursorRef.current = data.chatCursor;
       }
-      if (data.answerResults && typeof data.answerResults === 'object') {
-        for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
-          answerResultsRef.current.set(qid, Boolean(okAns));
+      if (!data.kicked) {
+        if (data.answerResults && typeof data.answerResults === 'object') {
+          for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
+            answerResultsRef.current.set(qid, Boolean(okAns));
+          }
         }
-      }
-      if (Array.isArray(data.answeredQuestionIds)) {
-        for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
-        const list = Array.from(answeredIdsRef.current);
-        setAnsweredQuestionIds(list);
-        setCorrectCount(list.length);
+        if (Array.isArray(data.answeredQuestionIds)) {
+          for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
+          const list = Array.from(answeredIdsRef.current);
+          setAnsweredQuestionIds(list);
+          setCorrectCount(list.length);
+        }
       }
 
       if (r.status === 'completed' || (p.role !== 'teacher' && r.status !== 'in_progress' && r.status !== 'paused')) {
@@ -576,7 +621,7 @@ export default function GamePage() {
       }
 
       const meInit = playersRef.current.get(p.id);
-      if (meInit) {
+      if (meInit && !data.kicked) {
         ably.publishPosition({
           id: meInit.id,
           username: meInit.username,
@@ -600,6 +645,10 @@ export default function GamePage() {
         qs.map((q) => q.id),
         `${p.id}:${roomId}`,
       );
+
+      if (data.kicked && p.role !== 'teacher') {
+        triggerForcedExit('kicked');
+      }
     }
 
     init();
@@ -1158,9 +1207,11 @@ export default function GamePage() {
                 return;
               }
               if (data.kicked && myRoleRef.current !== 'teacher') {
-                active = false;
                 triggerForcedExit('kicked');
                 return;
+              }
+              if (!data.kicked && exitNoticeRef.current === 'kicked') {
+                handleRejoinApproved();
               }
               if (typeof data.rs === 'string' && data.rs) {
                 applyLiveRoomStatus(data.rs);
@@ -1216,6 +1267,7 @@ export default function GamePage() {
         const payload: Record<string, unknown> = {
           roomId,
           chatCursor: chatCursorRef.current,
+          justKicked: justKickedInSessionRef.current,
         };
         // Saat WebSocket sudah terhubung, posisi sudah di-stream real-time & disimpan ke DB oleh ws-hub/pos,
       // sehingga room-sync tidak perlu mengirim duplikat payload koordinat lagi.
@@ -1260,24 +1312,20 @@ export default function GamePage() {
           return;
         }
         if (data.kicked && myRoleRef.current !== 'teacher') {
-          active = false;
           triggerForcedExit('kicked');
           return;
         }
+        if (!data.kicked && exitNoticeRef.current === 'kicked') {
+          handleRejoinApproved();
+        }
+        if (Array.isArray(data.rejoinRequests)) {
+          setRejoinRequests(data.rejoinRequests);
+        }
+
         if (typeof data.sessionId === 'string' && data.sessionId) {
           sessionIdRef.current = data.sessionId;
         }
         const serverPlayers: RoomPlayer[] = data.players ?? [];
-        if (
-          myRoleRef.current !== 'teacher' &&
-          myIdRef.current &&
-          serverPlayers.length > 0 &&
-          !serverPlayers.some((pl) => pl.userId === myIdRef.current)
-        ) {
-          active = false;
-          triggerForcedExit('kicked');
-          return;
-        }
         setScores((prev) => {
           const next = { ...prev };
           for (const p of serverPlayers) next[p.userId] = p.score ?? 0;
@@ -1361,6 +1409,9 @@ export default function GamePage() {
         if (typeof data.correctCount === 'number') {
           setCorrectCount(data.correctCount);
         }
+        if (Array.isArray(data.rejoinRequests)) {
+          setRejoinRequests(data.rejoinRequests);
+        }
       } catch {
         // polling fallback failure is non-fatal
       } finally {
@@ -1383,14 +1434,20 @@ export default function GamePage() {
   }, [ably.roomStatusEvent]);
 
   useEffect(() => {
+    if (!ably.rejoinRequestsEvent) return;
+    setRejoinRequests(ably.rejoinRequestsEvent);
+  }, [ably.rejoinRequestsEvent]);
+
+  useEffect(() => {
     if (!ably.scoreEvent) return;
     setScores((prev) => ({ ...prev, [ably.scoreEvent!.userId]: ably.scoreEvent!.score }));
   }, [ably.scoreEvent]);
 
   useEffect(() => {
     if (!ably.kickedPlayerId) return;
-    if (ably.kickedPlayerId === myIdRef.current) {
-      if (!hasLeftRef.current && myRoleRef.current !== 'teacher') {
+    if (ably.kickedPlayerId === myIdRef.current || ably.kickedPlayerId === 'me') {
+      if (!manualLeaveRef.current && myRoleRef.current !== 'teacher') {
+        justKickedInSessionRef.current = true;
         triggerForcedExit('kicked');
       }
     } else {
@@ -1400,6 +1457,13 @@ export default function GamePage() {
       );
     }
   }, [ably.kickedPlayerId]);
+
+  useEffect(() => {
+    if (!ably.approvedPlayerId) return;
+    if (ably.approvedPlayerId === myIdRef.current || ably.approvedPlayerId === 'me') {
+      handleRejoinApproved();
+    }
+  }, [ably.approvedPlayerId]);
 
   useEffect(() => {
     if (!chatMinimized) {
@@ -1587,6 +1651,37 @@ export default function GamePage() {
       setRoom((prev) => (prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== playerId) } : prev));
     }
   }
+
+  async function approveRejoin(playerId: string) {
+    setRejoinRequests((prev) => prev.filter((r) => r.userId !== playerId));
+    const res = await fetch('/api/game/approve-rejoin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId, playerId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setScores((prev) => ({ ...prev, [playerId]: 0 }));
+      if (Array.isArray(data.rejoinRequests)) {
+        setRejoinRequests(data.rejoinRequests);
+      }
+    }
+  }
+
+  async function rejectRejoin(playerId: string) {
+    setRejoinRequests((prev) => prev.filter((r) => r.userId !== playerId));
+    const res = await fetch('/api/game/reject-rejoin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId, playerId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.rejoinRequests)) {
+        setRejoinRequests(data.rejoinRequests);
+      }
+    }
+  }
   async function submitAnswer(e: React.FormEvent) {
     e.preventDefault();
     if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')) return;
@@ -1607,6 +1702,10 @@ export default function GamePage() {
         }),
       });
       const data = await res.json();
+      if (Array.isArray(data.rejoinRequests)) {
+        setRejoinRequests(data.rejoinRequests);
+      }
+
       if (typeof data.sessionId === 'string' && data.sessionId) {
         sessionIdRef.current = data.sessionId;
       }
@@ -1753,9 +1852,24 @@ export default function GamePage() {
                       <button
                         type="button"
                         className="btn-blue-action mp-menu-btn"
-                        onClick={() => setKickModalOpen(true)}
+                        onClick={() => {
+                          setKickModalOpen(true);
+                          fetch('/api/game/room-sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ roomId, chatCursor: chatCursorRef.current }),
+                          })
+                            .then((r) => (r.ok ? r.json() : null))
+                            .then((d) => {
+                              if (d && Array.isArray(d.rejoinRequests)) {
+                                setRejoinRequests(d.rejoinRequests);
+                              }
+                            })
+                            .catch(() => {});
+                        }}
                       >
                         <span aria-hidden="true">👥</span> Pemain
+                        {rejoinRequests.length > 0 ? ` (${rejoinRequests.length})` : ''}
                       </button>
                       <button
                         type="button"
@@ -2423,7 +2537,47 @@ export default function GamePage() {
               </p>
 
               <div className="teacher-list-box">
-                {sortedPlayers.filter((pl) => pl.userId !== myIdRef.current).length === 0 ? (
+                {rejoinRequests.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div
+                      className="teacher-q-text"
+                      style={{ fontSize: 13, color: '#8c5308', marginBottom: 6 }}
+                    >
+                      Permintaan Masuk Kembali (Approve = Reset Soal &amp; Poin Sesi ke 0):
+                    </div>
+                    {rejoinRequests.map((req) => (
+                      <div key={req.userId} className="teacher-q-card" style={{ marginBottom: 6 }}>
+                        <div className="teacher-q-info">
+                          <div className="teacher-q-text">{req.username}</div>
+                          <div className="teacher-q-meta">
+                            <span>Ingin bergabung ulang setelah di-kick</span>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            className="btn-green-action"
+                            style={{ fontSize: 12, padding: '6px 12px', minHeight: 36 }}
+                            onClick={() => approveRejoin(req.userId)}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-orange-action"
+                            style={{ fontSize: 12, padding: '6px 10px', minHeight: 36 }}
+                            onClick={() => rejectRejoin(req.userId)}
+                          >
+                            Tolak
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {sortedPlayers.filter((pl) => pl.userId !== myIdRef.current).length === 0 &&
+                rejoinRequests.length === 0 ? (
                   <p className="feedback-subtext text-center">Belum ada siswa di dalam ruang.</p>
                 ) : (
                   sortedPlayers
@@ -2501,19 +2655,23 @@ export default function GamePage() {
           </div>
         )}
 
-        {room?.status === 'paused' && myRole !== 'teacher' && !exitNotice && (
+        {room?.status === 'paused' && !exitNotice && (
           <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Room Dijeda">
             <div className="parchment-card feedback-modal-card">
-              <div className="green-arch-ribbon">⏸ Room Dijeda</div>
-              <div className="big-star-wrap" aria-hidden="true" style={{ fontSize: 56, lineHeight: 1 }}>
-                ⏸️
-              </div>
-              <p className="feedback-star-bonus" style={{ fontSize: 22 }}>
-                Permainan Sedang Dijeda
+              <p className="feedback-subtext" style={{ marginTop: 4 }}>
+                {myRole === 'teacher'
+                  ? 'Room sedang dijeda. Semua pergerakan siswa dikunci.'
+                  : 'Room sedang dijeda, menunggu aksi dari guru...'}
               </p>
-              <p className="feedback-subtext">
-                Room sedang dijeda, menunggu aksi dari guru untuk melanjutkan permainan...
-              </p>
+              {myRole === 'teacher' && (
+                <button
+                  type="button"
+                  className="btn-green-action"
+                  onClick={togglePauseGame}
+                >
+                  Lanjutkan Game
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -2521,19 +2679,10 @@ export default function GamePage() {
         {exitNotice && (
           <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Notifikasi Ruang">
             <div className="parchment-card feedback-modal-card">
-              <div className="green-arch-ribbon">
-                {exitNotice === 'kicked' ? 'Dikeluarkan dari Ruang' : 'Room Dihapus'}
-              </div>
-              <div className="big-star-wrap" aria-hidden="true" style={{ fontSize: 56, lineHeight: 1 }}>
-                {exitNotice === 'kicked' ? '🚫' : '🗑️'}
-              </div>
-              <p className="feedback-star-bonus" style={{ fontSize: 22 }}>
-                {exitNotice === 'kicked' ? 'Kamu Di-kick Sama Guru' : 'Room Game Telah Dihapus'}
-              </p>
-              <p className="feedback-subtext">
+              <p className="feedback-subtext" style={{ marginTop: 4 }}>
                 {exitNotice === 'kicked'
                   ? 'Kamu telah dikeluarkan dari ruang permainan ini oleh guru.'
-                  : 'Room game ini telah dihapus oleh guru. Silakan kembali ke dashboard.'}
+                  : 'Room game ini telah dihapus oleh guru.'}
               </p>
               <button
                 type="button"

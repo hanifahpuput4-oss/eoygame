@@ -88,6 +88,10 @@ export function useAblyRoom(
   const [scoreEvent, setScoreEvent] = useState<ScoreData | null>(null);
   const [kickedPlayerId, setKickedPlayerId] = useState<string | null>(null);
   const [roomStatusEvent, setRoomStatusEvent] = useState<string | null>(null);
+  const [rejoinRequestsEvent, setRejoinRequestsEvent] = useState<
+    { userId: string; username: string; requestedAt: number }[] | null
+  >(null);
+  const [approvedPlayerId, setApprovedPlayerId] = useState<string | null>(null);
 
   const handleIncomingMove = useCallback((p: PresencePlayer) => {
     if (!p.id || p.id === myInfoRef.current?.id) return;
@@ -113,6 +117,27 @@ export function useAblyRoom(
       if (t === 'po' && typeof msg.c === 'number') {
         const rtt = Math.max(1, Math.round((performance.now() - msg.c) * 10) / 10);
         setPingMs(rtt);
+        if (msg.del === 1 || msg.rs === 'deleted') {
+          setRoomStatusEvent('deleted');
+        } else if (typeof msg.rs === 'string' && msg.rs) {
+          setRoomStatusEvent(msg.rs);
+        }
+        if (Array.isArray(msg.rq)) {
+          setRejoinRequestsEvent(msg.rq as { userId: string; username: string; requestedAt: number }[]);
+        }
+        if (msg.k === 1) {
+          const myId = myInfoRef.current?.id || 'me';
+          setKickedPlayerId(myId);
+          setApprovedPlayerId(null);
+          callbacksRef.current?.onDirectLeave?.(myId, true);
+        } else if (msg.k === 0) {
+          setKickedPlayerId((prev) => {
+            if (prev) {
+              setApprovedPlayerId(myInfoRef.current?.id || 'me');
+            }
+            return null;
+          });
+        }
         return;
       }
 
@@ -218,6 +243,19 @@ export function useAblyRoom(
           if (typeof data.status === 'string') {
             setRoomStatusEvent(data.status);
           }
+        } else if (name === 'rejoin-request' && data) {
+          if (Array.isArray(data.requests)) {
+            setRejoinRequestsEvent(data.requests as { userId: string; username: string; requestedAt: number }[]);
+          }
+        } else if (name === 'rejoin-approved' && data) {
+          const pid = typeof data.playerId === 'string' ? data.playerId : '';
+          if (pid) {
+            setKickedPlayerId((prev) => (prev === pid || prev === 'me' ? null : prev));
+            setApprovedPlayerId(pid);
+          }
+          if (Array.isArray(data.requests)) {
+            setRejoinRequestsEvent(data.requests as { userId: string; username: string; requestedAt: number }[]);
+          }
         } else if (name === 'game-event' && data) {
           setGameEvents((prev) => [...prev.slice(-49), data as { type: string; payload: unknown }]);
         }
@@ -309,8 +347,19 @@ export function useAblyRoom(
                 g: me.onGround ?? true,
               }),
             );
+          } else {
+            // Subscribe socket ke roomId segera walau init() profil belum selesai
+            ws.send(JSON.stringify({ t: 'join', roomId }));
           }
-          ws.send(JSON.stringify({ t: 'p', c: performance.now() }));
+          ws.send(
+            JSON.stringify({
+              t: 'p',
+              c: performance.now(),
+              r: roomId,
+              u: myInfoRef.current?.id,
+              rl: myInfoRef.current?.role,
+            }),
+          );
         };
 
         ws.onmessage = (ev) => {
@@ -365,9 +414,37 @@ export function useAblyRoom(
       if (cancelled) return;
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ t: 'p', c: performance.now() }));
+        const me = myInfoRef.current;
+        if (me?.id && wsJoinedUserIdRef.current !== me.id) {
+          wsJoinedUserIdRef.current = me.id;
+          ws.send(
+            JSON.stringify({
+              t: 'join',
+              roomId,
+              userId: me.id,
+              username: me.username,
+              avatar: me.avatar,
+              role: me.role ?? 'student',
+              x: Math.round(me.x * 10) / 10,
+              y: Math.round(me.y * 10) / 10,
+              vx: Math.round((me.vx ?? 0) * 100) / 100,
+              vy: Math.round((me.vy ?? 0) * 100) / 100,
+              f: me.facing,
+              g: me.onGround ?? true,
+            }),
+          );
+        }
+        ws.send(
+          JSON.stringify({
+            t: 'p',
+            c: performance.now(),
+            r: roomId,
+            u: me?.id,
+            rl: me?.role,
+          }),
+        );
       }
-    }, 1500);
+    }, 1000);
 
     return () => {
       cancelled = true;
@@ -472,7 +549,9 @@ export function useAblyRoom(
     activeQuestion,
     scoreEvent,
     kickedPlayerId,
+    approvedPlayerId,
     roomStatusEvent,
+    rejoinRequestsEvent,
     publishPosition,
     publishChat,
     publishGameEvent,

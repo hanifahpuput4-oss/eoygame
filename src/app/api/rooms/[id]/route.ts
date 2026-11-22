@@ -9,6 +9,8 @@ import { stripCorrectAnswer } from '@/server/services/question-service';
 import { publishToRoom } from '@/server/services/realtime-service';
 import { getEphemeralChatSince } from '@/server/services/chat-store';
 import {
+  addRejoinRequest,
+  getRejoinRequests,
   invalidateRoomSyncCache,
   isPlayerKicked,
   isRoomDeleted,
@@ -65,6 +67,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     let room = await getRoom(id);
     setLiveRoomStatus(id, room.status);
     const kicked = user.role !== 'teacher' && isPlayerKicked(id, user.id);
+    if (kicked) {
+      addRejoinRequest(id, { userId: user.id, username: user.username });
+      void publishToRoom(id, 'rejoin-request', {
+        requests: getRejoinRequests(id),
+      });
+    }
     const isAllowedInArena =
       !kicked &&
       room.status !== 'completed' &&
@@ -137,6 +145,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       answerResults,
       correctCount: answeredQuestionIds.length,
       kicked,
+      rejoinRequests: user.role === 'teacher' ? getRejoinRequests(id) : [],
     });
   } catch (err) {
     return handleError(err);

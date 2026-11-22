@@ -10,15 +10,19 @@ import { ok, fail, handleError } from '@/server/middleware/http';
 import { publishToRoom } from '@/server/services/realtime-service';
 import { addEphemeralChat, getEphemeralChatSince } from '@/server/services/chat-store';
 import {
+  addRejoinRequest,
+  approvePlayerRejoin,
   getCachedRoomDbState,
   getLiveRoomPositions,
   getLiveRoomStatus,
+  getRejoinRequests,
   getStaleUserIds,
   invalidateRoomSyncCache,
   isPlayerKicked,
   isRoomDeleted,
   markPlayerKicked,
   markRoomDeleted,
+  rejectPlayerRejoin,
   removePresence,
   setCachedRoomDbState,
   setLiveRoomStatus,
@@ -314,6 +318,107 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       return ok({ success: true });
     }
 
+    if (action === 'approve-rejoin') {
+      if (user.role !== 'teacher') return fail('Hanya guru yang dapat menyetujui pemain', 403);
+      const schema = z.object({ roomId: z.string().min(1), playerId: z.string().min(1) });
+      const { roomId, playerId } = schema.parse(body);
+      await assertHost(roomId, user.id);
+
+      // 1. Cari semua sesi game siswa di room ini untuk menghitung poin yang sudah didapat & mereset jawaban
+      const playerSessions = await db
+        .select({ id: gameSessions.id, score: gameSessions.score })
+        .from(gameSessions)
+        .where(and(eq(gameSessions.roomId, roomId), eq(gameSessions.userId, playerId)));
+
+      const sessionIds = playerSessions.map((s) => s.id);
+      let pointsToDeduct = playerSessions.reduce((acc, s) => acc + (s.score || 0), 0);
+
+      if (sessionIds.length > 0) {
+        const answers = await db
+          .select({ pointsEarned: playerAnswers.pointsEarned })
+          .from(playerAnswers)
+          .where(inArray(playerAnswers.sessionId, sessionIds));
+        const answerPointsSum = answers.reduce((acc, a) => acc + (a.pointsEarned || 0), 0);
+        pointsToDeduct = Math.max(pointsToDeduct, answerPointsSum);
+
+        // Hapus semua jawaban soal siswa di room ini & reset skor sesi ke 0
+        await Promise.all([
+          db.delete(playerAnswers).where(inArray(playerAnswers.sessionId, sessionIds)),
+          db
+            .update(gameSessions)
+            .set({ score: 0, stars: 0, completedAt: null, updatedAt: new Date() })
+            .where(inArray(gameSessions.id, sessionIds)),
+        ]);
+      }
+
+      // 2. Ambil data user untuk kurangi totalPoints & pastikan masuk kembali ke roomPlayers
+      const targetUsers = await db
+        .select({ totalPoints: users.totalPoints, avatar: users.avatar })
+        .from(users)
+        .where(eq(users.id, playerId))
+        .limit(1);
+
+      if (pointsToDeduct > 0 && targetUsers[0]) {
+        const nextPoints = Math.max(0, (targetUsers[0].totalPoints || 0) - pointsToDeduct);
+        await db
+          .update(users)
+          .set({ totalPoints: nextPoints, updatedAt: new Date() })
+          .where(eq(users.id, playerId));
+        invalidateUserSessionCache(playerId);
+      }
+
+      const existingRoomPlayer = await db
+        .select({ id: roomPlayers.id })
+        .from(roomPlayers)
+        .where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, playerId)))
+        .limit(1);
+      if (existingRoomPlayer.length === 0) {
+        await db.insert(roomPlayers).values({
+          id: generateId('rpl'),
+          roomId,
+          userId: playerId,
+          avatar: targetUsers[0]?.avatar ?? 'cat-orange',
+        });
+      }
+
+      // 3. Bersihkan cache jawaban, buka blokir kick, dan broadcast skor = 0 + event rejoin-approved
+      getUserAnswerCache().delete(`${roomId}:${playerId}`);
+      approvePlayerRejoin(roomId, playerId);
+      invalidateRoomSyncCache(roomId);
+
+      await Promise.all([
+        publishToRoom(roomId, 'score', {
+          userId: playerId,
+          username: '',
+          score: 0,
+          stars: 0,
+          isCorrect: false,
+        }),
+        publishToRoom(roomId, 'rejoin-approved', {
+          playerId,
+          requests: getRejoinRequests(roomId),
+        }),
+      ]);
+
+      return ok({
+        success: true,
+        pointsDeducted: pointsToDeduct,
+        rejoinRequests: getRejoinRequests(roomId),
+      });
+    }
+
+    if (action === 'reject-rejoin') {
+      if (user.role !== 'teacher') return fail('Hanya guru yang dapat menolak pemain', 403);
+      const schema = z.object({ roomId: z.string().min(1), playerId: z.string().min(1) });
+      const { roomId, playerId } = schema.parse(body);
+      await assertHost(roomId, user.id);
+      rejectPlayerRejoin(roomId, playerId);
+      return ok({
+        success: true,
+        rejoinRequests: getRejoinRequests(roomId),
+      });
+    }
+
     if (action === 'room-sync') {
       const schema = z.object({
         roomId: z.string().min(1),
@@ -327,14 +432,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         burnUntil: z.number().optional(),
         facing: z.number().int().min(-1).max(1).optional(),
         chatCursor: z.number().int().optional(),
+        justKicked: z.boolean().optional(),
       });
-      const { roomId, x, y, vx, vy, onGround, isDying, deathStartedAt, burnUntil, facing, chatCursor } =
+      const { roomId, x, y, vx, vy, onGround, isDying, deathStartedAt, burnUntil, facing, chatCursor, justKicked } =
         schema.parse(body);
 
       if (isRoomDeleted(roomId)) {
         return ok({ roomDeleted: true, room: null, players: [], messages: [] });
       }
       if (user.role !== 'teacher' && isPlayerKicked(roomId, user.id)) {
+        if (!justKicked) {
+          const existingReqs = getRejoinRequests(roomId);
+          if (!existingReqs.some((r) => r.userId === user.id)) {
+            addRejoinRequest(roomId, { userId: user.id, username: user.username });
+            void publishToRoom(roomId, 'rejoin-request', {
+              requests: getRejoinRequests(roomId),
+            });
+          }
+        }
         return ok({ kicked: true });
       }
 
@@ -549,6 +664,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         answeredQuestionIds: userAns.answeredQuestionIds,
         answerResults: userAns.answerResults,
         correctCount: userAns.correctCount,
+        rejoinRequests: user.role === 'teacher' ? getRejoinRequests(roomId) : undefined,
       });
     }
 
