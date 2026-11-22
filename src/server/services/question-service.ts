@@ -62,8 +62,13 @@ function mergeUpdate(current: Awaited<ReturnType<typeof getQuestion>>, input: Qu
   };
 }
 
-export async function updateQuestion(id: string, teacherId: string, input: QuestionUpdateInput) {
-  const current = await getQuestion(id, teacherId);
+export async function updateQuestion(
+  id: string,
+  teacherId: string,
+  input: QuestionUpdateInput,
+  isAdmin = false,
+) {
+  const current = await getQuestion(id, teacherId, isAdmin);
   const merged = mergeUpdate(current, input);
   if (merged.type === 'multiple_choice') {
     if (merged.options.length < 2) {
@@ -101,19 +106,19 @@ export async function updateQuestion(id: string, teacherId: string, input: Quest
       })),
     );
   }
-  return getQuestion(id, teacherId);
+  return getQuestion(id, teacherId, isAdmin);
 }
 
-export async function deleteQuestion(id: string, teacherId: string) {
-  await getQuestion(id, teacherId);
+export async function deleteQuestion(id: string, teacherId: string, isAdmin = false) {
+  await getQuestion(id, teacherId, isAdmin);
   await db.delete(questions).where(eq(questions.id, id));
 }
 
-export async function getQuestion(id: string, teacherId: string) {
+export async function getQuestion(id: string, teacherId: string, isAdmin = false) {
   const rows = await db
     .select()
     .from(questions)
-    .where(and(eq(questions.id, id), eq(questions.creatorId, teacherId)))
+    .where(isAdmin ? eq(questions.id, id) : and(eq(questions.id, id), eq(questions.creatorId, teacherId)))
     .limit(1);
   if (!rows[0]) throw new QuestionError('Soal tidak ditemukan', 404);
 
@@ -128,8 +133,9 @@ export async function getQuestion(id: string, teacherId: string) {
 export async function listQuestions(
   teacherId: string,
   filters: { search?: string; category?: string; difficulty?: string },
+  isAdmin = false,
 ) {
-  const conditions = [eq(questions.creatorId, teacherId)];
+  const conditions = isAdmin ? [] : [eq(questions.creatorId, teacherId)];
   if (filters.search) {
     conditions.push(like(questions.content, `%${filters.search}%`));
   }
@@ -142,11 +148,14 @@ export async function listQuestions(
     );
   }
 
-  const rows = await db
-    .select()
-    .from(questions)
-    .where(and(...conditions))
-    .orderBy(desc(questions.createdAt));
+  const rows =
+    conditions.length > 0
+      ? await db
+          .select()
+          .from(questions)
+          .where(and(...conditions))
+          .orderBy(desc(questions.createdAt))
+      : await db.select().from(questions).orderBy(desc(questions.createdAt));
 
   if (rows.length === 0) return [];
   const options = await db
@@ -184,11 +193,13 @@ export async function listCollections(teacherId: string) {
     .orderBy(desc(questionCollections.createdAt));
 }
 
-export async function listCategories(teacherId: string) {
-  const rows = await db
-    .selectDistinct({ category: questions.category })
-    .from(questions)
-    .where(eq(questions.creatorId, teacherId));
+export async function listCategories(teacherId: string, isAdmin = false) {
+  const rows = isAdmin
+    ? await db.selectDistinct({ category: questions.category }).from(questions)
+    : await db
+        .selectDistinct({ category: questions.category })
+        .from(questions)
+        .where(eq(questions.creatorId, teacherId));
   return rows.map((r) => r.category);
 }
 

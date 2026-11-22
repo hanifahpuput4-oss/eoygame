@@ -7,6 +7,7 @@ import { ok, handleError } from '@/server/middleware/http';
 export async function GET(req: NextRequest) {
   try {
     const teacher = await requireRole('teacher');
+    const isAdmin = teacher.role === 'admin';
     const { searchParams } = new URL(req.url);
     const filters = {
       search: searchParams.get('search') ?? undefined,
@@ -14,8 +15,8 @@ export async function GET(req: NextRequest) {
       difficulty: searchParams.get('difficulty') ?? undefined,
     };
     const [questions, categories] = await Promise.all([
-      listQuestions(teacher.id, filters),
-      listCategories(teacher.id),
+      listQuestions(teacher.id, filters, isAdmin),
+      listCategories(teacher.id, isAdmin),
     ]);
     return ok({ questions, categories });
   } catch (err) {

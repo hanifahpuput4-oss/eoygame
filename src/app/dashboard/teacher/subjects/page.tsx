@@ -82,8 +82,14 @@ export default function SubjectsManagementPage() {
   const [selectedSubjectKey, setSelectedSubjectKey] = useState<string>('');
   const [selectedLevelId, setSelectedLevelId] = useState<string>('');
 
+  const [editingSubjectGroup, setEditingSubjectGroup] = useState<SubjectGroup | null>(null);
+  const [editSubjectForm, setEditSubjectForm] = useState({ subjectName: '', grade: '' });
+  const [savingSubjectEdit, setSavingSubjectEdit] = useState(false);
+
   const [newObjectiveName, setNewObjectiveName] = useState('');
   const [newObjectiveDesc, setNewObjectiveDesc] = useState('');
+  const [editingObjectiveId, setEditingObjectiveId] = useState<string | null>(null);
+  const [editObjectiveForm, setEditObjectiveForm] = useState({ objectiveName: '', description: '' });
 
   const [qForm, setQForm] = useState({
     content: '',
@@ -245,6 +251,130 @@ export default function SubjectsManagementPage() {
     await load();
     if (data.level?.id) setSelectedLevelId(data.level.id);
     setStatusMsg({ type: 'ok', text: `Tujuan pembelajaran "${objectiveName}" berhasil ditambahkan.` });
+  }
+
+  function startEditSubjectGroup(g: SubjectGroup) {
+    setEditingSubjectGroup(g);
+    setEditSubjectForm({ subjectName: g.subjectName, grade: g.grade });
+  }
+
+  async function onSaveEditSubjectGroup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingSubjectGroup) return;
+    const nextSubjectName = editSubjectForm.subjectName.trim();
+    const nextGrade = editSubjectForm.grade.trim();
+    if (!nextSubjectName || !nextGrade) return;
+
+    setSavingSubjectEdit(true);
+    setStatusMsg(null);
+    try {
+      await Promise.all(
+        editingSubjectGroup.objectives.map((obj) =>
+          fetch(`/api/levels/${obj.level.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: `${nextSubjectName} (${nextGrade}) - ${obj.objectiveName}`,
+              description: obj.level.description,
+              difficulty: obj.level.difficulty,
+              completionRequirement: Math.max(1, obj.level.questionIds.length),
+              rewardConfig: { stars: 3 },
+              mapConfig: {
+                subjectName: nextSubjectName,
+                grade: nextGrade,
+                objectiveName: obj.objectiveName,
+              },
+              questionIds: obj.level.questionIds,
+            }),
+          }),
+        ),
+      );
+      setEditingSubjectGroup(null);
+      await load();
+      setSelectedSubjectKey(`${nextSubjectName}__${nextGrade}`);
+      setStatusMsg({
+        type: 'ok',
+        text: `Mata Pelajaran & Kelas berhasil diperbarui menjadi "${nextSubjectName} (${nextGrade})".`,
+      });
+    } catch {
+      setStatusMsg({ type: 'err', text: 'Gagal memperbarui Mata Pelajaran & Kelas' });
+    } finally {
+      setSavingSubjectEdit(false);
+    }
+  }
+
+  async function onDeleteSubjectGroup(g: SubjectGroup) {
+    if (
+      !confirm(
+        `Hapus Mata Pelajaran "${g.subjectName} (${g.grade})"? Seluruh ${g.objectives.length} Tujuan Pembelajaran di dalamnya akan ikut terhapus.`,
+      )
+    ) {
+      return;
+    }
+    setStatusMsg(null);
+    const idsToDelete = new Set(g.objectives.map((o) => o.level.id));
+    const prevLevels = levels;
+    setLevels((prev) => prev.filter((l) => !idsToDelete.has(l.id)));
+    try {
+      const results = await Promise.all(
+        g.objectives.map((o) => fetch(`/api/levels/${o.level.id}`, { method: 'DELETE' })),
+      );
+      if (results.some((r) => !r.ok)) {
+        setLevels(prevLevels);
+        await load();
+        setStatusMsg({ type: 'err', text: 'Sebagian tujuan pembelajaran gagal dihapus' });
+        return;
+      }
+      await load();
+      setStatusMsg({ type: 'ok', text: `Mata Pelajaran "${g.subjectName} (${g.grade})" berhasil dihapus.` });
+    } catch {
+      setLevels(prevLevels);
+      setStatusMsg({ type: 'err', text: 'Gagal menghapus Mata Pelajaran & Kelas' });
+    }
+  }
+
+  function startEditObjective(obj: { level: LevelRow; objectiveName: string }) {
+    setEditingObjectiveId(obj.level.id);
+    setEditObjectiveForm({
+      objectiveName: obj.objectiveName,
+      description: obj.level.description || '',
+    });
+  }
+
+  async function onSaveEditObjective(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingObjectiveId || !activeSubject) return;
+    const targetObj = activeSubject.objectives.find((o) => o.level.id === editingObjectiveId);
+    if (!targetObj) return;
+    const nextObjectiveName = editObjectiveForm.objectiveName.trim();
+    if (!nextObjectiveName) return;
+
+    setStatusMsg(null);
+    const res = await fetch(`/api/levels/${targetObj.level.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `${activeSubject.subjectName} (${activeSubject.grade}) - ${nextObjectiveName}`,
+        description: editObjectiveForm.description.trim(),
+        difficulty: targetObj.level.difficulty,
+        completionRequirement: Math.max(1, targetObj.level.questionIds.length),
+        rewardConfig: { stars: 3 },
+        mapConfig: {
+          subjectName: activeSubject.subjectName,
+          grade: activeSubject.grade,
+          objectiveName: nextObjectiveName,
+        },
+        questionIds: targetObj.level.questionIds,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setStatusMsg({ type: 'err', text: data.error ?? 'Gagal memperbarui tujuan pembelajaran' });
+      return;
+    }
+    setEditingObjectiveId(null);
+    await load();
+    setStatusMsg({ type: 'ok', text: `Tujuan pembelajaran "${nextObjectiveName}" berhasil diperbarui.` });
   }
 
   async function onDeleteObjective(levelId: string, label: string) {
@@ -524,31 +654,114 @@ export default function SubjectsManagementPage() {
             Belum ada mata pelajaran. Tambahkan mapel baru pada form di atas.
           </p>
         ) : (
-          <div className="flex flex-wrap gap-2 pt-2">
+          <div className="flex flex-wrap gap-2.5 pt-2">
             {subjectGroups.map((g) => {
               const active = g.key === selectedSubjectKey;
               return (
-                <button
+                <div
                   key={g.key}
-                  type="button"
                   onClick={() => {
                     setSelectedSubjectKey(g.key);
                     setSelectedLevelId(g.objectives[0]?.level.id ?? '');
                   }}
-                  className={`rounded-2xl border-2 px-4 py-2.5 text-left transition ${
+                  className={`group flex cursor-pointer items-center gap-3 rounded-2xl border-2 px-4 py-2.5 text-left transition ${
                     active
                       ? 'border-[var(--navy-panel)] bg-[var(--navy-panel)] text-white shadow'
                       : 'border-black/10 bg-white/80 text-[var(--wood-text)] hover:border-black/30'
                   }`}
                 >
-                  <div className="font-display text-base font-bold">{g.subjectName}</div>
-                  <div className={`text-xs ${active ? 'text-white/80' : 'text-[var(--wood-text)]/70'}`}>
-                    {g.grade} · {g.objectives.length} Tujuan Pembelajaran
+                  <div>
+                    <div className="font-display text-base font-bold">{g.subjectName}</div>
+                    <div className={`text-xs ${active ? 'text-white/80' : 'text-[var(--wood-text)]/70'}`}>
+                      {g.grade} · {g.objectives.length} Tujuan Pembelajaran
+                    </div>
                   </div>
-                </button>
+                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      title={`Edit ${g.subjectName} (${g.grade})`}
+                      onClick={() => startEditSubjectGroup(g)}
+                      className={`rounded-lg px-2 py-1 text-xs font-bold transition ${
+                        active
+                          ? 'bg-white/15 text-white hover:bg-white/25'
+                          : 'bg-[var(--cream-soft)] text-[var(--wood-text)] hover:bg-black/10'
+                      }`}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      title={`Hapus ${g.subjectName} (${g.grade})`}
+                      onClick={() => onDeleteSubjectGroup(g)}
+                      className={`rounded-lg px-2 py-1 text-xs font-bold transition ${
+                        active
+                          ? 'bg-red-500/85 text-white hover:bg-red-500'
+                          : 'bg-red-100 text-red-700 hover:bg-red-200'
+                      }`}
+                    >
+                      Hapus
+                    </button>
+                  </div>
+                </div>
               );
             })}
           </div>
+        )}
+
+        {editingSubjectGroup && (
+          <form
+            onSubmit={onSaveEditSubjectGroup}
+            className="mt-3 rounded-2xl border-2 border-[var(--navy-panel)]/30 bg-[#fff9ec] p-4 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-base font-bold">
+                Edit Mata Pelajaran &amp; Kelas: {editingSubjectGroup.subjectName} ({editingSubjectGroup.grade})
+              </h3>
+              <button
+                type="button"
+                className="rounded-lg bg-black/10 px-2.5 py-1 text-xs font-bold"
+                onClick={() => setEditingSubjectGroup(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div>
+                <label className="label-field">Nama Mata Pelajaran</label>
+                <input
+                  className="input-field"
+                  required
+                  value={editSubjectForm.subjectName}
+                  onChange={(e) => setEditSubjectForm({ ...editSubjectForm, subjectName: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="label-field">Kelas / Tingkat</label>
+                <input
+                  className="input-field"
+                  required
+                  value={editSubjectForm.grade}
+                  onChange={(e) => setEditSubjectForm({ ...editSubjectForm, grade: e.target.value })}
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <button
+                  type="submit"
+                  disabled={savingSubjectEdit}
+                  className="btn-primary flex-1 !py-2.5 text-sm"
+                >
+                  {savingSubjectEdit ? 'Menyimpan...' : 'Simpan Mapel'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary !px-3.5 !py-2.5 text-sm"
+                  onClick={() => setEditingSubjectGroup(null)}
+                >
+                  Batal
+                </button>
+              </div>
+            </div>
+          </form>
         )}
       </section>
 
@@ -593,6 +806,47 @@ export default function SubjectsManagementPage() {
             </div>
           </form>
 
+          {editingObjectiveId && (
+            <form
+              onSubmit={onSaveEditObjective}
+              className="rounded-2xl border-2 border-[var(--orange-cta)]/40 bg-[#fff9ec] p-4 grid gap-3 md:grid-cols-3"
+            >
+              <div>
+                <label className="label-field">Edit Nama Tujuan Pembelajaran</label>
+                <input
+                  className="input-field"
+                  required
+                  value={editObjectiveForm.objectiveName}
+                  onChange={(e) =>
+                    setEditObjectiveForm({ ...editObjectiveForm, objectiveName: e.target.value })
+                  }
+                />
+              </div>
+              <div>
+                <label className="label-field">Edit Keterangan</label>
+                <input
+                  className="input-field"
+                  value={editObjectiveForm.description}
+                  onChange={(e) =>
+                    setEditObjectiveForm({ ...editObjectiveForm, description: e.target.value })
+                  }
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <button type="submit" className="btn-primary flex-1 !py-2.5 text-sm">
+                  Simpan Perubahan
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary !px-3.5 !py-2.5 text-sm"
+                  onClick={() => setEditingObjectiveId(null)}
+                >
+                  Batal
+                </button>
+              </div>
+            </form>
+          )}
+
           <div className="grid gap-3 md:grid-cols-3">
             {activeSubject.objectives.map((obj) => {
               const isSelected = obj.level.id === selectedLevelId;
@@ -616,16 +870,22 @@ export default function SubjectsManagementPage() {
                         <p className="mt-0.5 text-xs text-[var(--wood-text)]/70">{obj.level.description}</p>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      className="rounded-lg bg-red-100 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteObjective(obj.level.id, obj.objectiveName);
-                      }}
-                    >
-                      Hapus
-                    </button>
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="rounded-lg bg-[var(--cream-soft)] px-2 py-1 text-xs font-bold hover:bg-black/10"
+                        onClick={() => startEditObjective(obj)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg bg-red-100 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
+                        onClick={() => onDeleteObjective(obj.level.id, obj.objectiveName)}
+                      >
+                        Hapus
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

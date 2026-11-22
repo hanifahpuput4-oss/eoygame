@@ -25,7 +25,7 @@ export const users = sqliteTable(
     username: text('username').notNull(),
     fullName: text('full_name').notNull(),
     passwordHash: text('password_hash').notNull(),
-    role: text('role', { enum: ['teacher', 'student'] }).notNull(),
+    role: text('role', { enum: ['admin', 'teacher', 'student'] }).notNull(),
     avatar: text('avatar').notNull().default('cat-blue'),
     totalPoints: integer('total_points').notNull().default(0),
     totalStars: integer('total_stars').notNull().default(0),

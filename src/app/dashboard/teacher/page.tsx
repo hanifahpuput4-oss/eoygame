@@ -42,6 +42,22 @@ export default async function TeacherOverview() {
         </svg>
       ),
     },
+    ...(user?.role === 'admin'
+      ? [
+          {
+            href: '/dashboard/teacher/users',
+            title: 'Manajemen User (Admin)',
+            desc: 'Kelola seluruh akun Admin, Guru, dan Siswa, ubah role, reset password, dan poin.',
+            icon: (
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <circle cx="12" cy="10" r="2.5" />
+                <path d="M8.5 16.5c.8-1.4 2.1-2 3.5-2s2.7.6 3.5 2" />
+              </svg>
+            ),
+          },
+        ]
+      : []),
     {
       href: '/dashboard/teacher/settings',
       title: 'Pengaturan Akun',

@@ -37,7 +37,11 @@ export default function LoginPage() {
         return;
       }
       clearCachedData();
-      router.push(data.user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+      router.push(
+        data.user.role === 'teacher' || data.user.role === 'admin'
+          ? '/dashboard/teacher'
+          : '/dashboard/student',
+      );
     } catch {
       setError('Tidak dapat terhubung ke server');
     } finally {

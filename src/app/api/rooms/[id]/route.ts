@@ -68,7 +68,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     let room = await getRoom(id);
     setLiveRoomStatus(id, room.status);
-    const kicked = user.role !== 'teacher' && isPlayerKicked(id, user.id);
+    const isStaff = user.role === 'teacher' || user.role === 'admin';
+    const kicked = !isStaff && isPlayerKicked(id, user.id);
     if (kicked) {
       addRejoinRequest(id, { userId: user.id, username: user.username });
       void publishToRoom(id, 'rejoin-request', {
@@ -78,12 +79,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const isAllowedInArena =
       !kicked &&
       room.status !== 'completed' &&
-      (user.role === 'teacher' || room.status === 'in_progress' || room.status === 'paused');
+      (isStaff || room.status === 'in_progress' || room.status === 'paused');
 
     if (isAllowedInArena) {
       touchPresence(id, user.id, true);
       const inRoom = (room.players ?? []).some((pl) => pl.userId === user.id);
-      if (!inRoom && (user.role !== 'teacher' || room.hostId === user.id)) {
+      if (!inRoom && (user.role === 'admin' || user.role !== 'teacher' || room.hostId === user.id)) {
         await db
           .insert(roomPlayers)
           .values({
@@ -147,7 +148,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       answerResults,
       correctCount: answeredQuestionIds.length,
       kicked,
-      rejoinRequests: user.role === 'teacher' ? getRejoinRequests(id) : [],
+      rejoinRequests: isStaff ? getRejoinRequests(id) : [],
     });
   } catch (err) {
     return handleError(err);
@@ -170,8 +171,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       return fail('Aksi tidak diizinkan', 403);
     }
 
-    if (user.role !== 'teacher') {
-      return fail('Hanya guru yang dapat melakukan aksi ini', 403);
+    if (user.role !== 'teacher' && user.role !== 'admin') {
+      return fail('Hanya guru atau administrator yang dapat melakukan aksi ini', 403);
     }
 
     if (body.action === 'remove-player') {
@@ -198,8 +199,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireUser();
-    if (user.role !== 'teacher') {
-      return fail('Hanya guru yang dapat menghapus ruang', 403);
+    if (user.role !== 'teacher' && user.role !== 'admin') {
+      return fail('Hanya guru atau administrator yang dapat menghapus ruang', 403);
     }
     const { id } = await ctx.params;
     await assertHost(id, user.id);

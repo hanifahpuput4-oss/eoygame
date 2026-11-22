@@ -145,6 +145,8 @@ export default function GamePage() {
   const [myRole, setMyRole] = useState('student');
   const myRoleRef = useRef('student');
   myRoleRef.current = myRole;
+  const isStaff = myRole === 'teacher' || myRole === 'admin';
+  const isStaffRole = (r?: string | null) => r === 'teacher' || r === 'admin';
   const [exitNotice, setExitNotice] = useState<'kicked' | 'deleted' | null>(null);
   const exitNoticeRef = useRef<'kicked' | 'deleted' | null>(null);
   const manualLeaveRef = useRef(false);
@@ -271,7 +273,7 @@ export default function GamePage() {
   function triggerForcedExit(reason: 'kicked' | 'deleted') {
     if (manualLeaveRef.current) return;
     if (exitNoticeRef.current === 'deleted' || exitNoticeRef.current === reason) return;
-    if (reason === 'kicked' && myRoleRef.current === 'teacher') return;
+    if (reason === 'kicked' && isStaffRole(myRoleRef.current)) return;
     exitNoticeRef.current = reason;
     hasLeftRef.current = true;
     keysRef.current.left = false;
@@ -322,7 +324,7 @@ export default function GamePage() {
   function applyLiveRoomStatus(nextStatus: string) {
     if (!nextStatus) return;
     if (nextStatus === 'deleted') {
-      if (myRoleRef.current === 'teacher') {
+      if (isStaffRole(myRoleRef.current)) {
         manualLeaveRef.current = true;
         hasLeftRef.current = true;
         router.replace('/dashboard/teacher/rooms');
@@ -334,7 +336,7 @@ export default function GamePage() {
     if (nextStatus === 'completed') {
       manualLeaveRef.current = true;
       hasLeftRef.current = true;
-      router.replace(myRoleRef.current === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+      router.replace(isStaffRole(myRoleRef.current) ? '/dashboard/teacher/rooms' : '/dashboard/student');
       return;
     }
     if (nextStatus === 'paused') {
@@ -359,7 +361,7 @@ export default function GamePage() {
     },
     onDirectLeave: (uid, kicked) => {
       if (uid === myIdRef.current || uid === 'me') {
-        if (kicked && !manualLeaveRef.current && myRoleRef.current !== 'teacher') {
+        if (kicked && !manualLeaveRef.current && !isStaffRole(myRoleRef.current)) {
           justKickedInSessionRef.current = true;
           triggerForcedExit('kicked');
         }
@@ -400,7 +402,7 @@ export default function GamePage() {
   function handleLeaveGame() {
     manualLeaveRef.current = true;
     notifyLeaveRoom();
-    router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+    router.push(isStaff ? '/dashboard/teacher/rooms' : '/dashboard/student');
   }
 
   useEffect(() => {
@@ -569,8 +571,8 @@ export default function GamePage() {
         }
       }
 
-      if (r.status === 'completed' || (p.role !== 'teacher' && r.status !== 'in_progress' && r.status !== 'paused')) {
-        router.replace(p.role === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+      if (r.status === 'completed' || (!isStaffRole(p.role) && r.status !== 'in_progress' && r.status !== 'paused')) {
+        router.replace(isStaffRole(p.role) ? '/dashboard/teacher/rooms' : '/dashboard/student');
         return;
       }
 
@@ -646,7 +648,7 @@ export default function GamePage() {
         `${p.id}:${roomId}`,
       );
 
-      if (data.kicked && p.role !== 'teacher') {
+      if (data.kicked && !isStaffRole(p.role)) {
         triggerForcedExit('kicked');
       }
     }
@@ -854,7 +856,7 @@ export default function GamePage() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent, down: boolean) {
-      if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')) {
+      if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))) {
         keysRef.current.left = false;
         keysRef.current.right = false;
         keysRef.current.jump = false;
@@ -1011,12 +1013,12 @@ export default function GamePage() {
         return { ...b, type };
       });
 
-      const isStudentPaused = room?.status === 'paused' && myRole !== 'teacher';
+      const isStudentPaused = room?.status === 'paused' && !isStaff;
       if (
         me &&
         !exitNoticeRef.current &&
         !isStudentPaused &&
-        (myRole === 'teacher' || room?.status === 'in_progress' || room?.status === 'waiting')
+        (isStaff || room?.status === 'in_progress' || room?.status === 'waiting')
       ) {
         updatePlayerPhysics(
           me,
@@ -1024,7 +1026,7 @@ export default function GamePage() {
           playersRef.current.values(),
           dynBlocks,
           (qid) => {
-            if (myRole === 'teacher') return;
+            if (isStaff) return;
             if (answeredIdsRef.current.has(qid)) return;
             if (questionRef.current?.id === qid) {
               setQuestionMinimized(false);
@@ -1213,7 +1215,7 @@ export default function GamePage() {
                 applyLiveRoomStatus('deleted');
                 return;
               }
-              if (data.kicked && myRoleRef.current !== 'teacher') {
+              if (data.kicked && !isStaffRole(myRoleRef.current)) {
                 triggerForcedExit('kicked');
                 return;
               }
@@ -1318,7 +1320,7 @@ export default function GamePage() {
           applyLiveRoomStatus('deleted');
           return;
         }
-        if (data.kicked && myRoleRef.current !== 'teacher') {
+        if (data.kicked && !isStaffRole(myRoleRef.current)) {
           triggerForcedExit('kicked');
           return;
         }
@@ -1453,7 +1455,7 @@ export default function GamePage() {
   useEffect(() => {
     if (!ably.kickedPlayerId) return;
     if (ably.kickedPlayerId === myIdRef.current || ably.kickedPlayerId === 'me') {
-      if (!manualLeaveRef.current && myRoleRef.current !== 'teacher') {
+      if (!manualLeaveRef.current && !isStaffRole(myRoleRef.current)) {
         justKickedInSessionRef.current = true;
         triggerForcedExit('kicked');
       }
@@ -1541,7 +1543,7 @@ export default function GamePage() {
     if (
       editingControlsLayout ||
       exitNoticeRef.current ||
-      (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')
+      (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))
     ) {
       keysRef.current.left = false;
       keysRef.current.right = false;
@@ -1590,7 +1592,7 @@ export default function GamePage() {
 
   async function sendChat(e: React.FormEvent) {
     e.preventDefault();
-    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')) return;
+    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))) return;
     const text = chatInput.trim();
     if (!text) return;
     setChatInput('');
@@ -1619,7 +1621,7 @@ export default function GamePage() {
   // Hitung semua soal yang sudah dijawab oleh player (baik benar maupun salah) ke dalam progres misi
   const doneSteps = Math.min(Math.max(answeredQuestionIds.length, correctCount), totalSteps);
   const sortedPlayers = [...players].sort((a, b) => (scores[b.userId] ?? 0) - (scores[a.userId] ?? 0) || a.username.localeCompare(b.username));
-  const hasVisibleQuestion = Boolean(question && myRole !== 'teacher' && !answeredQuestionIds.includes(question.id));
+  const hasVisibleQuestion = Boolean(question && !isStaff && !answeredQuestionIds.includes(question.id));
   const questionActive = hasVisibleQuestion;
   const allBottomMinimized = panelsHidden || !hasVisibleQuestion;
   const controlsPosClass = allBottomMinimized ? '' : ' mp-elevated';
@@ -1656,6 +1658,25 @@ export default function GamePage() {
     if (res.ok) {
       playersRef.current.delete(playerId);
       setRoom((prev) => (prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== playerId) } : prev));
+    }
+  }
+
+  async function kickAllPlayers() {
+    if (!confirm('Keluarkan semua siswa dari ruang permainan ini?')) return;
+    const res = await fetch('/api/game/kick-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const kickedSet = new Set<string>(Array.isArray(data.kickedIds) ? data.kickedIds : []);
+      for (const pid of kickedSet) {
+        playersRef.current.delete(pid);
+      }
+      setRoom((prev) =>
+        prev ? { ...prev, players: prev.players.filter((pl) => !kickedSet.has(pl.userId)) } : prev,
+      );
     }
   }
 
@@ -1846,7 +1867,7 @@ export default function GamePage() {
                     <span className={`mp-ping-dot ${ably.pingMs <= 20 ? 'fast' : ably.pingMs <= 80 ? 'ok' : 'slow'}`} />
                     <span>{ably.pingMs} ms</span>
                   </div>
-                  {myRole === 'teacher' && (
+                  {isStaff && (
                     <div className="mp-teacher-actions">
                       <button
                         type="button"
@@ -2280,7 +2301,7 @@ export default function GamePage() {
                 </aside>
               )}
 
-              {question && myRole !== 'teacher' && !answeredQuestionIds.includes(question.id) && (
+              {question && !isStaff && !answeredQuestionIds.includes(question.id) && (
                 <section className="parchment-card mp-question-dock" aria-label="Tantangan soal" style={panelStyle('question')}>
                   <div
                     className="mp-dock-ribbon mp-drag-handle"
@@ -2533,7 +2554,7 @@ export default function GamePage() {
           </div>
         )}
 
-        {kickModalOpen && myRole === 'teacher' && (
+        {kickModalOpen && isStaff && (
           <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Kelola Pemain" onClick={() => setKickModalOpen(false)}>
             <div className="parchment-card feedback-modal-card teacher-modal-card" onClick={(e) => e.stopPropagation()}>
               <div className="text-center">
@@ -2542,6 +2563,19 @@ export default function GamePage() {
               <p className="feedback-subtext text-center" style={{ marginBottom: 8 }}>
                 Keluarkan peserta yang tidak dikenal dari ruang permainan.
               </p>
+
+              {sortedPlayers.filter((pl) => pl.userId !== myIdRef.current && pl.role !== 'admin' && pl.role !== 'teacher').length > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    className="btn-orange-action"
+                    style={{ fontSize: 12, padding: '6px 14px', minHeight: 36 }}
+                    onClick={kickAllPlayers}
+                  >
+                    🚫 Kick Semua Pemain
+                  </button>
+                </div>
+              )}
 
               <div className="teacher-list-box">
                 {rejoinRequests.length > 0 && (
@@ -2592,19 +2626,24 @@ export default function GamePage() {
                     .map((pl) => (
                       <div key={pl.userId} className="teacher-q-card">
                         <div className="teacher-q-info">
-                          <div className="teacher-q-text">{pl.username}</div>
+                          <div className="teacher-q-text">
+                            {pl.username}
+                            {pl.role === 'admin' ? ' (ADMIN)' : pl.role === 'teacher' ? ' (GURU)' : ''}
+                          </div>
                           <div className="teacher-q-meta">
                             <span>Skor: {scores[pl.userId] ?? 0} poin</span>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          className="btn-orange-action"
-                          style={{ fontSize: 13, padding: '6px 14px', minHeight: 38, flexShrink: 0 }}
-                          onClick={() => kickPlayer(pl.userId)}
-                        >
-                          Kick
-                        </button>
+                        {pl.role !== 'admin' && pl.role !== 'teacher' && (
+                          <button
+                            type="button"
+                            className="btn-orange-action"
+                            style={{ fontSize: 13, padding: '6px 14px', minHeight: 38, flexShrink: 0 }}
+                            onClick={() => kickPlayer(pl.userId)}
+                          >
+                            Kick
+                          </button>
+                        )}
                       </div>
                     ))
                 )}
@@ -2666,11 +2705,11 @@ export default function GamePage() {
           <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Room Dijeda">
             <div className="parchment-card feedback-modal-card">
               <p className="feedback-subtext" style={{ marginTop: 4 }}>
-                {myRole === 'teacher'
+                {isStaff
                   ? 'Room sedang dijeda. Semua pergerakan siswa dikunci.'
                   : 'Room sedang dijeda, menunggu aksi dari guru...'}
               </p>
-              {myRole === 'teacher' && (
+              {isStaff && (
                 <button
                   type="button"
                   className="btn-green-action"
@@ -2695,7 +2734,7 @@ export default function GamePage() {
                 type="button"
                 className="btn-orange-action"
                 onClick={() => {
-                  router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+                  router.replace(isStaff ? '/dashboard/teacher/rooms' : '/dashboard/student');
                 }}
               >
                 Kembali ke Dashboard

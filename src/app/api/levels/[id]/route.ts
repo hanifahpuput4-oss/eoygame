@@ -9,7 +9,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const teacher = await requireRole('teacher');
     const { id } = await ctx.params;
     const input = levelSchema.parse(await req.json());
-    const level = await updateLevel(id, teacher.id, input);
+    const level = await updateLevel(id, teacher.id, input, teacher.role === 'admin');
     return ok({ level });
   } catch (err) {
     return handleError(err);
@@ -20,7 +20,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   try {
     const teacher = await requireRole('teacher');
     const { id } = await ctx.params;
-    await deleteLevel(id, teacher.id);
+    await deleteLevel(id, teacher.id, teacher.role === 'admin');
     return ok({ success: true });
   } catch (err) {
     return handleError(err);

@@ -11,7 +11,8 @@ type Room = {
   code: string;
   status: string;
   maxPlayers: number;
-  players: { userId: string; username: string; ready: boolean }[];
+  host?: { id: string; username: string; fullName: string } | null;
+  players: { userId: string; username: string; role?: string; ready: boolean }[];
   rejoinRequests?: { userId: string; username: string; requestedAt: number }[];
   level: { id: string; name: string; mapConfig?: string } | null;
   classroom: { id: string; name: string; subject: string; grade: string } | null;
@@ -292,6 +293,28 @@ export default function RoomsPage() {
     }
   }
 
+  async function onKickAllFromDashboard(roomId: string) {
+    if (!confirm('Keluarkan semua siswa dari ruang game ini?')) return;
+    try {
+      const res = await fetch('/api/game/kick-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const kickedSet = new Set<string>(Array.isArray(data.kickedIds) ? data.kickedIds : []);
+        setRooms((prev) =>
+          prev.map((r) =>
+            r.id === roomId ? { ...r, players: r.players.filter((p) => !kickedSet.has(p.userId)) } : r,
+          ),
+        );
+      }
+    } finally {
+      void load();
+    }
+  }
+
   async function onApproveRejoin(roomId: string, playerId: string) {
     setRooms((prev) =>
       prev.map((r) =>
@@ -449,6 +472,11 @@ export default function RoomsPage() {
                 <div>
                   <h2 className="font-display text-xl font-semibold">{r.name}</h2>
                   <p className="text-sm text-[var(--wood-text)]/70">
+                    {r.host ? (
+                      <>
+                        Guru Host: <strong>{r.host.fullName} (@{r.host.username})</strong> |{' '}
+                      </>
+                    ) : null}
                     Kelas: <strong>{r.classroom?.name ?? '-'}</strong> | Tujuan Pembelajaran:{' '}
                     <strong>{r.level?.name ?? '-'}</strong> | Pemain: {r.players.length}/{r.maxPlayers}
                   </p>
@@ -479,17 +507,31 @@ export default function RoomsPage() {
                       key={p.userId}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-[#e8d5b0] bg-[var(--cream-soft)] px-2.5 py-0.5 text-xs font-semibold"
                     >
-                      <span>{p.username}</span>
-                      <button
-                        type="button"
-                        title={`Kick ${p.username}`}
-                        onClick={() => onKickFromDashboard(r.id, p.userId, p.username)}
-                        className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-700 hover:bg-red-200"
-                      >
-                        Kick
-                      </button>
+                      <span>
+                        {p.username}
+                        {p.role === 'admin' ? ' (ADMIN)' : p.role === 'teacher' ? ' (GURU)' : ''}
+                      </span>
+                      {p.role !== 'admin' && p.role !== 'teacher' && (
+                        <button
+                          type="button"
+                          title={`Kick ${p.username}`}
+                          onClick={() => onKickFromDashboard(r.id, p.userId, p.username)}
+                          className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-700 hover:bg-red-200"
+                        >
+                          Kick
+                        </button>
+                      )}
                     </span>
                   ))}
+                  {r.players.some((p) => p.role !== 'admin' && p.role !== 'teacher') && (
+                    <button
+                      type="button"
+                      onClick={() => onKickAllFromDashboard(r.id)}
+                      className="rounded-lg bg-red-600 px-2.5 py-0.5 text-xs font-bold text-white hover:bg-red-700"
+                    >
+                      🚫 Kick Semua
+                    </button>
+                  )}
                 </div>
               )}
 

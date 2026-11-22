@@ -26,8 +26,9 @@ const bulkSchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const teacher = await requireRole('teacher');
+    const isAdmin = teacher.role === 'admin';
     const body = bulkSchema.parse(await req.json());
-    const level = await getLevel(body.levelId, teacher.id);
+    const level = await getLevel(body.levelId, teacher.id, isAdmin);
 
     const createdIds: string[] = [];
     for (const item of body.items) {
@@ -60,15 +61,20 @@ export async function POST(req: NextRequest) {
       parsedMapConfig = {};
     }
 
-    const updatedLevel = await updateLevel(level.id, teacher.id, {
-      name: level.name,
-      description: level.description,
-      difficulty: level.difficulty as 'easy' | 'medium' | 'hard',
-      completionRequirement: Math.max(1, nextQuestionIds.length),
-      rewardConfig: { stars: 3 },
-      mapConfig: parsedMapConfig,
-      questionIds: nextQuestionIds,
-    });
+    const updatedLevel = await updateLevel(
+      level.id,
+      teacher.id,
+      {
+        name: level.name,
+        description: level.description,
+        difficulty: level.difficulty as 'easy' | 'medium' | 'hard',
+        completionRequirement: Math.max(1, nextQuestionIds.length),
+        rewardConfig: { stars: 3 },
+        mapConfig: parsedMapConfig,
+        questionIds: nextQuestionIds,
+      },
+      isAdmin,
+    );
 
     return ok({ importedCount: createdIds.length, level: updatedLevel }, 201);
   } catch (err) {

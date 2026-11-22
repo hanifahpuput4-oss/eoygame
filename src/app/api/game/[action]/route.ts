@@ -129,6 +129,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     }
 
     const user = await requireUser();
+    const isStaff = user.role === 'teacher' || user.role === 'admin';
 
     if (action === 'answer') {
       const input = answerSchema.parse(body);
@@ -279,7 +280,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     }
 
     if (action === 'push-question') {
-      if (user.role !== 'teacher') return fail('Hanya guru yang dapat mengirim soal', 403);
+      if (!isStaff) return fail('Hanya guru yang dapat mengirim soal', 403);
       const schema = z.object({
         roomId: z.string().min(1),
         questionId: z.string().nullable(),
@@ -307,10 +308,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     }
 
     if (action === 'kick') {
-      if (user.role !== 'teacher') return fail('Hanya guru yang dapat mengeluarkan pemain', 403);
+      if (!isStaff) return fail('Hanya guru yang dapat mengeluarkan pemain', 403);
       const schema = z.object({ roomId: z.string().min(1), playerId: z.string().min(1) });
       const { roomId, playerId } = schema.parse(body);
       await assertHost(roomId, user.id);
+      const targetUserRows = await db
+        .select({ role: users.role })
+        .from(users)
+        .where(eq(users.id, playerId))
+        .limit(1);
+      if (targetUserRows[0]?.role === 'admin') {
+        return fail('Administrator tidak dapat di-kick', 403);
+      }
       markPlayerKicked(roomId, playerId);
       await db.delete(roomPlayers).where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, playerId)));
       invalidateRoomSyncCache(roomId);
@@ -318,8 +327,47 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       return ok({ success: true });
     }
 
+    if (action === 'kick-all') {
+      if (!isStaff) return fail('Hanya guru atau administrator yang dapat mengeluarkan semua pemain', 403);
+      const schema = z.object({ roomId: z.string().min(1) });
+      const { roomId } = schema.parse(body);
+      await assertHost(roomId, user.id);
+
+      const currentPlayers = await db
+        .select({ userId: roomPlayers.userId, role: users.role })
+        .from(roomPlayers)
+        .innerJoin(users, eq(roomPlayers.userId, users.id))
+        .where(eq(roomPlayers.roomId, roomId));
+
+      const liveMap = getLiveRoomPositions(roomId);
+      const targetIds = new Set<string>();
+      for (const p of currentPlayers) {
+        if (p.userId === user.id || p.role === 'admin' || p.role === 'teacher') continue;
+        targetIds.add(p.userId);
+      }
+      for (const p of liveMap.values()) {
+        if (p.userId === user.id || p.role === 'admin' || p.role === 'teacher') continue;
+        targetIds.add(p.userId);
+      }
+
+      const kickedIds = Array.from(targetIds);
+      for (const pid of kickedIds) {
+        markPlayerKicked(roomId, pid);
+      }
+      if (kickedIds.length > 0) {
+        await db
+          .delete(roomPlayers)
+          .where(and(eq(roomPlayers.roomId, roomId), inArray(roomPlayers.userId, kickedIds)));
+      }
+      invalidateRoomSyncCache(roomId);
+      await Promise.all(
+        kickedIds.map((pid) => publishToRoom(roomId, 'kicked', { playerId: pid, left: false })),
+      );
+      return ok({ success: true, kickedCount: kickedIds.length, kickedIds });
+    }
+
     if (action === 'approve-rejoin') {
-      if (user.role !== 'teacher') return fail('Hanya guru yang dapat menyetujui pemain', 403);
+      if (!isStaff) return fail('Hanya guru yang dapat menyetujui pemain', 403);
       const schema = z.object({ roomId: z.string().min(1), playerId: z.string().min(1) });
       const { roomId, playerId } = schema.parse(body);
       await assertHost(roomId, user.id);
@@ -408,7 +456,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     }
 
     if (action === 'reject-rejoin') {
-      if (user.role !== 'teacher') return fail('Hanya guru yang dapat menolak pemain', 403);
+      if (!isStaff) return fail('Hanya guru yang dapat menolak pemain', 403);
       const schema = z.object({ roomId: z.string().min(1), playerId: z.string().min(1) });
       const { roomId, playerId } = schema.parse(body);
       await assertHost(roomId, user.id);
@@ -440,7 +488,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       if (isRoomDeleted(roomId)) {
         return ok({ roomDeleted: true, room: null, players: [], messages: [] });
       }
-      if (user.role !== 'teacher' && isPlayerKicked(roomId, user.id)) {
+      if (!isStaff && isPlayerKicked(roomId, user.id)) {
         if (!justKicked) {
           const existingReqs = getRejoinRequests(roomId);
           if (!existingReqs.some((r) => r.userId === user.id)) {
@@ -579,7 +627,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         return ok({ roomDeleted: true, room: null, players: [], messages: [] });
       }
       setLiveRoomStatus(roomId, dbState.room.status);
-      if (user.role !== 'teacher' && isPlayerKicked(roomId, user.id)) {
+      if (!isStaff && isPlayerKicked(roomId, user.id)) {
         return ok({ kicked: true });
       }
 
@@ -664,7 +712,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         answeredQuestionIds: userAns.answeredQuestionIds,
         answerResults: userAns.answerResults,
         correctCount: userAns.correctCount,
-        rejoinRequests: user.role === 'teacher' ? getRejoinRequests(roomId) : undefined,
+        rejoinRequests: isStaff ? getRejoinRequests(roomId) : undefined,
       });
     }
 

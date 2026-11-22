@@ -9,7 +9,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const teacher = await requireRole('teacher');
     const { id } = await ctx.params;
     const input = questionUpdateSchema.parse(await req.json());
-    const question = await updateQuestion(id, teacher.id, input);
+    const question = await updateQuestion(id, teacher.id, input, teacher.role === 'admin');
     return ok({ question });
   } catch (err) {
     return handleError(err);
@@ -20,7 +20,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   try {
     const teacher = await requireRole('teacher');
     const { id } = await ctx.params;
-    await deleteQuestion(id, teacher.id);
+    await deleteQuestion(id, teacher.id, teacher.role === 'admin');
     return ok({ success: true });
   } catch (err) {
     return handleError(err);

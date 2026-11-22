@@ -27,8 +27,8 @@ export async function GET(req: NextRequest) {
         }
       : undefined;
 
-    if (user.role === 'teacher') {
-      const classrooms = await listClassrooms(user.id);
+    if (user.role === 'teacher' || user.role === 'admin') {
+      const classrooms = await listClassrooms(user.id, user.role === 'admin');
       return ok(withProfile ? { classrooms, profile: profilePayload } : { classrooms });
     }
 
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
       return ok({ classroom }, 201);
     }
 
-    if (user.role !== 'teacher') {
+    if (user.role !== 'teacher' && user.role !== 'admin') {
       return fail('Hanya guru yang dapat membuat kelas', 403);
     }
     const input = classroomSchema.parse(body);

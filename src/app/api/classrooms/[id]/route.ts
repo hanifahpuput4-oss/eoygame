@@ -13,7 +13,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const teacher = await requireRole('teacher');
     const { id } = await ctx.params;
-    return ok({ students: await listStudents(id, teacher.id) });
+    return ok({ students: await listStudents(id, teacher.id, teacher.role === 'admin') });
   } catch (err) {
     return handleError(err);
   }
@@ -22,16 +22,17 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const teacher = await requireRole('teacher');
+    const isAdmin = teacher.role === 'admin';
     const { id } = await ctx.params;
     const body = await req.json();
 
     if (body.action === 'regenerate-code') {
-      const code = await regenerateJoinCode(id, teacher.id);
+      const code = await regenerateJoinCode(id, teacher.id, isAdmin);
       return ok({ joinCode: code });
     }
 
     const input = classroomSchema.partial().parse(body);
-    const classroom = await updateClassroom(id, teacher.id, input);
+    const classroom = await updateClassroom(id, teacher.id, input, isAdmin);
     return ok({ classroom });
   } catch (err) {
     return handleError(err);
@@ -42,7 +43,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   try {
     const teacher = await requireRole('teacher');
     const { id } = await ctx.params;
-    await deleteClassroom(id, teacher.id);
+    await deleteClassroom(id, teacher.id, teacher.role === 'admin');
     return ok({ success: true });
   } catch (err) {
     return handleError(err);

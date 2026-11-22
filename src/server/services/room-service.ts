@@ -120,20 +120,23 @@ export async function removePlayer(roomId: string, hostId: string, playerId: str
     .where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, playerId)));
 }
 
-export async function listTeacherRooms(hostId: string) {
-  const rows = await db
-    .select()
-    .from(rooms)
-    .where(eq(rooms.hostId, hostId))
-    .orderBy(desc(rooms.createdAt));
+export async function listTeacherRooms(hostId: string, isAdmin = false) {
+  const rows = isAdmin
+    ? await db.select().from(rooms).orderBy(desc(rooms.createdAt))
+    : await db
+        .select()
+        .from(rooms)
+        .where(eq(rooms.hostId, hostId))
+        .orderBy(desc(rooms.createdAt));
 
   if (rows.length === 0) return [];
 
   const roomIds = rows.map((r) => r.id);
   const levelIds = Array.from(new Set(rows.map((r) => r.levelId)));
   const classroomIds = Array.from(new Set(rows.map((r) => r.classroomId)));
+  const hostIds = Array.from(new Set(rows.map((r) => r.hostId)));
 
-  const [allPlayers, allLevels, allClassrooms] = await Promise.all([
+  const [allPlayers, allLevels, allClassrooms, allHosts] = await Promise.all([
     db
       .select({
         id: roomPlayers.id,
@@ -153,13 +156,19 @@ export async function listTeacherRooms(hostId: string) {
       .where(inArray(roomPlayers.roomId, roomIds)),
     db.select().from(levels).where(inArray(levels.id, levelIds)),
     db.select().from(classrooms).where(inArray(classrooms.id, classroomIds)),
+    db
+      .select({ id: users.id, username: users.username, fullName: users.fullName })
+      .from(users)
+      .where(inArray(users.id, hostIds)),
   ]);
 
   const levelMap = new Map(allLevels.map((l) => [l.id, l]));
   const classroomMap = new Map(allClassrooms.map((c) => [c.id, c]));
+  const hostMap = new Map(allHosts.map((h) => [h.id, h]));
 
   return rows.map((room) => ({
     ...room,
+    host: hostMap.get(room.hostId) ?? null,
     settings: JSON.parse(room.settings || '{}'),
     players: allPlayers.filter((p) => p.roomId === room.id),
     rejoinRequests: getRejoinRequests(room.id),
@@ -170,8 +179,9 @@ export async function listTeacherRooms(hostId: string) {
 
 export async function joinRoom(code: string, userId: string, avatar: string, role: string) {
   const room = await getRoomByCode(code);
+  const isStaff = role === 'teacher' || role === 'admin';
 
-  if (role !== 'teacher' && room.status !== 'in_progress' && room.status !== 'paused') {
+  if (!isStaff && room.status !== 'in_progress' && room.status !== 'paused') {
     throw new RoomError(
       room.status === 'waiting'
         ? 'Game belum dimulai oleh guru. Tunggu guru menekan "Mulai Game".'
@@ -186,7 +196,7 @@ export async function joinRoom(code: string, userId: string, avatar: string, rol
     .where(and(eq(roomPlayers.roomId, room.id), eq(roomPlayers.userId, userId)))
     .limit(1);
 
-  if (existing.length === 0 && room.players.length >= room.maxPlayers) {
+  if (existing.length === 0 && room.players.length >= room.maxPlayers && !isStaff) {
     throw new RoomError('Ruang sudah penuh', 409);
   }
 
@@ -200,7 +210,7 @@ export async function joinRoom(code: string, userId: string, avatar: string, rol
       ),
     )
     .limit(1);
-  if (membership.length === 0 && role !== 'teacher') {
+  if (membership.length === 0 && !isStaff) {
     throw new RoomError('Anda belum tergabung di kelas ruang ini', 403);
   }
 
@@ -223,13 +233,15 @@ export async function leaveRoom(roomId: string, userId: string) {
 }
 
 export async function assertHost(roomId: string, hostId: string) {
-  const rows = await db
-    .select({ hostId: rooms.hostId })
-    .from(rooms)
-    .where(eq(rooms.id, roomId))
-    .limit(1);
-  if (!rows[0]) throw new RoomError('Ruang tidak ditemukan', 404);
-  if (rows[0].hostId !== hostId) throw new RoomError('Hanya host yang dapat melakukan ini', 403);
+  const [roomRows, userRows] = await Promise.all([
+    db.select({ hostId: rooms.hostId }).from(rooms).where(eq(rooms.id, roomId)).limit(1),
+    db.select({ role: users.role }).from(users).where(eq(users.id, hostId)).limit(1),
+  ]);
+  if (!roomRows[0]) throw new RoomError('Ruang tidak ditemukan', 404);
+  const isAdmin = userRows[0]?.role === 'admin';
+  if (roomRows[0].hostId !== hostId && !isAdmin) {
+    throw new RoomError('Hanya host atau administrator yang dapat melakukan ini', 403);
+  }
 }
 
 export async function logEvent(roomId: string, userId: string | null, eventType: string, payload: unknown) {

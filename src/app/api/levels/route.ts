@@ -8,15 +8,16 @@ import { ok, handleError } from '@/server/middleware/http';
 export async function GET(req: NextRequest) {
   try {
     const teacher = await requireRole('teacher');
+    const isAdmin = teacher.role === 'admin';
     const withQuestions = req.nextUrl.searchParams.get('withQuestions') === '1';
     if (withQuestions) {
       const [levels, questions] = await Promise.all([
-        listLevels(teacher.id),
-        listQuestions(teacher.id, {}),
+        listLevels(teacher.id, isAdmin),
+        listQuestions(teacher.id, {}, isAdmin),
       ]);
       return ok({ levels, questions });
     }
-    return ok({ levels: await listLevels(teacher.id) });
+    return ok({ levels: await listLevels(teacher.id, isAdmin) });
   } catch (err) {
     return handleError(err);
   }
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
   try {
     const teacher = await requireRole('teacher');
     const input = levelSchema.parse(await req.json());
-    const level = await createLevel(teacher.id, input);
+    const level = await createLevel(teacher.id, input, teacher.role === 'admin');
     return ok({ level }, 201);
   } catch (err) {
     return handleError(err);

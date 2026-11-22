@@ -13,7 +13,11 @@ export class LevelError extends Error {
   }
 }
 
-export async function createLevel(teacherId: string, input: LevelInput & { mapConfig?: Record<string, unknown> }) {
+export async function createLevel(
+  teacherId: string,
+  input: LevelInput & { mapConfig?: Record<string, unknown> },
+  isAdmin = false,
+) {
   const id = generateId('lvl');
   await db.insert(levels).values({
     id,
@@ -27,11 +31,16 @@ export async function createLevel(teacherId: string, input: LevelInput & { mapCo
     position: 0,
   });
   await setLevelQuestions(id, input.questionIds);
-  return getLevel(id, teacherId);
+  return getLevel(id, teacherId, isAdmin);
 }
 
-export async function updateLevel(id: string, teacherId: string, input: LevelInput & { mapConfig?: Record<string, unknown> }) {
-  const current = await getLevel(id, teacherId);
+export async function updateLevel(
+  id: string,
+  teacherId: string,
+  input: LevelInput & { mapConfig?: Record<string, unknown> },
+  isAdmin = false,
+) {
+  const current = await getLevel(id, teacherId, isAdmin);
   await db
     .update(levels)
     .set({
@@ -45,11 +54,11 @@ export async function updateLevel(id: string, teacherId: string, input: LevelInp
     })
     .where(eq(levels.id, id));
   await setLevelQuestions(id, input.questionIds);
-  return getLevel(id, teacherId);
+  return getLevel(id, teacherId, isAdmin);
 }
 
-export async function deleteLevel(id: string, teacherId: string) {
-  await getLevel(id, teacherId);
+export async function deleteLevel(id: string, teacherId: string, isAdmin = false) {
+  await getLevel(id, teacherId, isAdmin);
   await db.delete(levels).where(eq(levels.id, id));
 }
 
@@ -66,11 +75,11 @@ async function setLevelQuestions(levelId: string, questionIds: string[]) {
   );
 }
 
-export async function getLevel(id: string, teacherId: string) {
+export async function getLevel(id: string, teacherId: string, isAdmin = false) {
   const rows = await db
     .select()
     .from(levels)
-    .where(and(eq(levels.id, id), eq(levels.teacherId, teacherId)))
+    .where(isAdmin ? eq(levels.id, id) : and(eq(levels.id, id), eq(levels.teacherId, teacherId)))
     .limit(1);
   if (!rows[0]) throw new Error('Level tidak ditemukan');
   const links = await db
@@ -81,12 +90,14 @@ export async function getLevel(id: string, teacherId: string) {
   return { ...rows[0], questionIds: links.map((l) => l.questionId) };
 }
 
-export async function listLevels(teacherId: string) {
-  const rows = await db
-    .select()
-    .from(levels)
-    .where(eq(levels.teacherId, teacherId))
-    .orderBy(asc(levels.position), asc(levels.createdAt));
+export async function listLevels(teacherId: string, isAdmin = false) {
+  const rows = isAdmin
+    ? await db.select().from(levels).orderBy(asc(levels.position), asc(levels.createdAt))
+    : await db
+        .select()
+        .from(levels)
+        .where(eq(levels.teacherId, teacherId))
+        .orderBy(asc(levels.position), asc(levels.createdAt));
   if (rows.length === 0) return [];
   const links = await db
     .select()

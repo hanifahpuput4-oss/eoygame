@@ -21,17 +21,18 @@ import { publishToRoom } from '@/server/services/realtime-service';
 export async function GET(req: NextRequest) {
   try {
     const user = await requireUser();
-    if (user.role === 'teacher') {
+    const isAdmin = user.role === 'admin';
+    if (user.role === 'teacher' || isAdmin) {
       const bootstrap = req.nextUrl.searchParams.get('bootstrap') === '1';
       if (bootstrap) {
         const [rooms, classrooms, levels] = await Promise.all([
-          listTeacherRooms(user.id),
-          listClassrooms(user.id),
-          listLevels(user.id),
+          listTeacherRooms(user.id, isAdmin),
+          listClassrooms(user.id, isAdmin),
+          listLevels(user.id, isAdmin),
         ]);
         return ok({ rooms, classrooms, levels });
       }
-      return ok({ rooms: await listTeacherRooms(user.id) });
+      return ok({ rooms: await listTeacherRooms(user.id, isAdmin) });
     }
     return ok({ rooms: [] });
   } catch (err) {
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
     const user = await requireUser();
     const body = await req.json();
 
-    if (user.role === 'teacher') {
+    if ((user.role === 'teacher' || user.role === 'admin') && !body?.code) {
       const input = roomSchema.parse(body);
       const room = await createRoom(user.id, input);
       return ok({ room }, 201);
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
 
     const { code } = joinRoomSchema.parse(body);
     const targetRoom = await getRoomByCode(code);
-    if (isPlayerKicked(targetRoom.id, user.id)) {
+    if (user.role === 'student' && isPlayerKicked(targetRoom.id, user.id)) {
       addRejoinRequest(targetRoom.id, { userId: user.id, username: user.username });
       void publishToRoom(targetRoom.id, 'rejoin-request', {
         requests: getRejoinRequests(targetRoom.id),
@@ -73,7 +74,7 @@ export async function PUT(req: NextRequest) {
     const body = await req.json();
     const { roomId } = z.object({ roomId: z.string().min(1) }).parse(body);
 
-    if (user.role === 'teacher') {
+    if (user.role === 'teacher' || user.role === 'admin') {
       await assertHost(roomId, user.id);
       const existing = await db
         .select({ id: roomPlayers.id })

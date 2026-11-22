@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import LogoutButton from '@/components/auth/logout-button';
 
-export type NavIconKey = 'overview' | 'classrooms' | 'subjects' | 'rooms' | 'settings';
+export type NavIconKey = 'overview' | 'classrooms' | 'subjects' | 'rooms' | 'users' | 'settings';
 
 export type NavItem = {
   href: string;
@@ -49,6 +49,14 @@ function NavIcon({ name, className = 'h-[18px] w-[18px]' }: { name: NavIconKey; 
           <circle cx="17.5" cy="13" r="1" fill="currentColor" />
         </svg>
       );
+    case 'users':
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          <circle cx="12" cy="10" r="2.5" />
+          <path d="M8.5 16.5c.8-1.4 2.1-2 3.5-2s2.7.6 3.5 2" />
+        </svg>
+      );
     case 'settings':
       return (
         <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -60,7 +68,7 @@ function NavIcon({ name, className = 'h-[18px] w-[18px]' }: { name: NavIconKey; 
 }
 
 type DashboardShellProps = {
-  role: 'teacher' | 'student';
+  role: 'admin' | 'teacher' | 'student';
   title: string;
   userFullName: string;
   totalPoints?: number;
@@ -154,7 +162,7 @@ export default function DashboardShell({
         {/* Brand */}
         <div className="flex h-16 items-center justify-between border-b border-white/10 px-4">
           <Link
-            href={role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student'}
+            href={role === 'teacher' || role === 'admin' ? '/dashboard/teacher' : '/dashboard/student'}
             onClick={() => setSidebarOpen(false)}
             className="flex items-center gap-2.5"
           >
@@ -210,7 +218,11 @@ export default function DashboardShell({
             <div className="min-w-0">
               <div className="truncate text-xs font-semibold text-white">{userFullName}</div>
               <div className="text-[11px] text-white/50">
-                {role === 'teacher' ? 'Guru' : `Siswa · ${totalPoints ?? 0} poin`}
+                {role === 'admin'
+                  ? 'Administrator (Guru)'
+                  : role === 'teacher'
+                    ? 'Guru'
+                    : `Siswa · ${totalPoints ?? 0} poin`}
               </div>
             </div>
             <LogoutButton />

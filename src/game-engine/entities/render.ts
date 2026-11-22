@@ -48,9 +48,11 @@ function drawCat(
     ? flickerFire
       ? { body: '#ea580c', belly: '#fed7aa', ear: '#9a3412' }
       : { body: '#451a03', belly: '#fdba74', ear: '#dc2626' }
-    : role === 'teacher'
-      ? { body: 'hsl(45, 90%, 55%)', belly: 'hsl(45, 95%, 80%)', ear: 'hsl(40, 85%, 40%)' }
-      : { body: `hsl(${hue}, 70%, 55%)`, belly: `hsl(${hue}, 75%, 82%)`, ear: `hsl(${hue}, 70%, 38%)` };
+    : role === 'admin'
+      ? { body: '#e11d48', belly: '#fecdd3', ear: '#9f1239' }
+      : role === 'teacher'
+        ? { body: 'hsl(45, 90%, 55%)', belly: 'hsl(45, 95%, 80%)', ear: 'hsl(40, 85%, 40%)' }
+        : { body: `hsl(${hue}, 70%, 55%)`, belly: `hsl(${hue}, 75%, 82%)`, ear: `hsl(${hue}, 70%, 38%)` };
   void base;
 
   const shakeX = isDying && deathElapsed < 180 ? Math.sin(now * 0.12) * 3.5 : isBurning ? Math.sin(now * 0.09) * 1.4 : 0;
@@ -169,11 +171,12 @@ function drawCat(
     ctx.restore();
   }
 
-  if (role === 'teacher') {
+  const hasStaffTitle = role === 'teacher' || role === 'admin';
+  if (hasStaffTitle) {
     ctx.save();
-    ctx.shadowColor = '#ffd338';
+    ctx.shadowColor = role === 'admin' ? '#fb7185' : '#ffd338';
     ctx.shadowBlur = 18;
-    ctx.strokeStyle = 'rgba(255, 211, 56, 0.9)';
+    ctx.strokeStyle = role === 'admin' ? 'rgba(244, 63, 94, 0.92)' : 'rgba(255, 211, 56, 0.9)';
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.arc(drawX + w / 2, y + h / 2, Math.max(w, h) * 0.72, 0, Math.PI * 2);
@@ -181,11 +184,15 @@ function drawCat(
     ctx.restore();
   }
 
-  ctx.fillStyle = role === 'teacher' ? '#8c5308' : '#111827';
+  ctx.fillStyle = role === 'admin' ? '#9f1239' : role === 'teacher' ? '#8c5308' : '#111827';
   ctx.font = 'bold 11px Nunito, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText(name, drawX + w / 2, y - 14);
-  if (role === 'teacher') {
+  if (role === 'admin') {
+    ctx.fillStyle = '#ff2a5f';
+    ctx.font = 'bold 9.5px Nunito, sans-serif';
+    ctx.fillText('ADMINISTRATOR', drawX + w / 2, y - 26);
+  } else if (role === 'teacher') {
     ctx.fillStyle = '#ffd338';
     ctx.font = 'bold 9px Nunito, sans-serif';
     ctx.fillText('TEACHER', drawX + w / 2, y - 26);
@@ -197,7 +204,7 @@ function drawCat(
     ctx.font = 'bold 10px Nunito, sans-serif';
     const tw = ctx.measureText(burnLabel).width + 12;
     const bx = drawX + w / 2 - tw / 2;
-    const by = y - (role === 'teacher' ? 46 : 34);
+    const by = y - (hasStaffTitle ? 46 : 34);
     ctx.fillStyle = '#dc2626';
     ctx.strokeStyle = '#fef08a';
     ctx.lineWidth = 1.5;
@@ -213,7 +220,7 @@ function drawCat(
     const tw = ctx.measureText(text).width + 14;
     const bw = Math.max(tw, 34);
     const bx = x + w / 2 - bw / 2;
-    const by = y - (role === 'teacher' ? 50 : 36);
+    const by = y - (hasStaffTitle ? 50 : 36);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
     ctx.strokeStyle = '#233866';
     ctx.lineWidth = 1.5;
