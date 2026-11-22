@@ -35,6 +35,9 @@ type WsHubState = {
   port: number;
   starting: boolean;
   samePortHooked: boolean;
+  samePortHookedV3?: boolean;
+  upgradeHandler?: (req: http.IncomingMessage, socket: Duplex) => void;
+  rawHttpHandler?: (req: http.IncomingMessage, res: http.ServerResponse) => void;
   rooms: Map<string, Map<string, WsClient>>;
   sseRooms?: Map<string, Map<string, SseClient>>;
 };
@@ -510,18 +513,213 @@ export function handleWsUpgrade(req: http.IncomingMessage, socket: Duplex) {
   attachWsConnection(socket as Socket);
 }
 
+function handleRawPosHttpRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+  const wsPort = getHub().port || 3001;
+  const rawUrl = req.url || '/api/pos';
+
+  if (req.method === 'GET') {
+    if (rawUrl.includes('stream=1')) {
+      const qIdx = rawUrl.indexOf('?');
+      const params = new URLSearchParams(qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '');
+      const roomId = params.get('r') ?? '';
+      const userId = params.get('u') ?? '';
+      if (!roomId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end('{"error":"missing room"}');
+        return;
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.socket?.setNoDelay(true);
+
+      const sendRaw = (jsonText: string): boolean => {
+        if (res.writableEnded || res.destroyed) return false;
+        try {
+          res.write(`data: ${jsonText}\n\n`);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      const snapshot = Array.from(getLiveRoomPositions(roomId).values());
+      sendRaw(JSON.stringify({ t: 'snapshot', players: snapshot }));
+
+      const cleanupSse = registerSseClient(roomId, userId, sendRaw);
+      const keepAliveTimer = setInterval(() => {
+        if (res.writableEnded || res.destroyed) {
+          clearInterval(keepAliveTimer);
+          cleanupSse();
+          return;
+        }
+        try {
+          res.write(': keepalive\n\n');
+        } catch {
+          clearInterval(keepAliveTimer);
+          cleanupSse();
+        }
+      }, 15000);
+
+      req.on('close', () => {
+        clearInterval(keepAliveTimer);
+        cleanupSse();
+      });
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify({ wsPort }));
+    return;
+  }
+
+  if (req.method === 'POST') {
+    let rawBody = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk: string) => {
+      if (rawBody.length < 16384) rawBody += chunk;
+    });
+    req.on('end', () => {
+      try {
+        const body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+        const roomId = typeof body.r === 'string' ? body.r : '';
+        const userId = typeof body.u === 'string' ? body.u : '';
+        if (!roomId || !userId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"error":"invalid"}');
+          return;
+        }
+
+        if (isRoomDeleted(roomId)) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ wsPort, roomDeleted: true, rs: 'deleted', p: [] }));
+          return;
+        }
+        if (isPlayerKicked(roomId, userId)) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ wsPort, kicked: true, p: [] }));
+          return;
+        }
+
+        if (typeof body.x === 'number' && typeof body.y === 'number') {
+          const username = typeof body.un === 'string' ? body.un : 'Player';
+          const avatar = typeof body.av === 'string' ? body.av : 'cat-orange';
+          const role = typeof body.rl === 'string' ? body.rl : 'student';
+          const vx = typeof body.vx === 'number' ? body.vx : 0;
+          const vy = typeof body.vy === 'number' ? body.vy : 0;
+          const facing: 1 | -1 = body.f === -1 ? -1 : 1;
+          const onGround = Boolean(body.g ?? true);
+          const isDying = Boolean(body.d);
+          const deathStartedAt = typeof body.ds === 'number' ? body.ds : undefined;
+          const burnUntil = typeof body.b === 'number' ? body.b : undefined;
+
+          const updated = updateLivePlayerPosition(roomId, {
+            userId,
+            username,
+            avatar,
+            role,
+            x: body.x,
+            y: body.y,
+            vx,
+            vy,
+            facing,
+            onGround,
+            isDying,
+            deathStartedAt,
+            burnUntil,
+          });
+
+          if (updated) {
+            broadcastRoomEvent(
+              roomId,
+              {
+                t: 'm',
+                u: userId,
+                un: username,
+                av: avatar,
+                r: role,
+                x: body.x,
+                y: body.y,
+                vx,
+                vy,
+                f: facing,
+                g: onGround ? 1 : 0,
+                d: isDying ? 1 : 0,
+                ds: deathStartedAt,
+                b: burnUntil,
+                ts: Date.now(),
+              },
+              userId,
+            );
+          }
+        } else {
+          touchPresence(roomId, userId);
+        }
+
+        const liveMap = getLiveRoomPositions(roomId);
+        const peers: Record<string, unknown>[] = [];
+        const now = Date.now();
+        for (const p of liveMap.values()) {
+          if (p.userId === userId) continue;
+          if (now - p.updatedAt > 6000) continue;
+          peers.push({
+            u: p.userId,
+            un: p.username,
+            av: p.avatar,
+            rl: p.role,
+            x: p.x,
+            y: p.y,
+            vx: p.vx,
+            vy: p.vy,
+            f: p.facing,
+            g: p.onGround ? 1 : 0,
+            d: p.isDying ? 1 : 0,
+            ds: p.deathStartedAt,
+            b: p.burnUntil,
+          });
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify({ wsPort, rs: getLiveRoomStatus(roomId), p: peers }));
+      } catch {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"p":[]}');
+      }
+    });
+    return;
+  }
+
+  res.writeHead(405);
+  res.end();
+}
+
 /**
- * Hooks directly into Next.js's main HTTP server (port 3000) so players outside LAN
- * accessing via the school's Static IP / Port-Forward / Reverse Proxy on port 3000
- * can establish a Native WebSocket at `ws://<IP_STATIC>:3000/ws-game` WITHOUT needing port 3001 opened!
+ * Hooks directly into Next.js's main HTTP server (port 3000) so:
+ * 1) Players can establish a Native WebSocket at `/ws-game` or `/api/pos` on port 3000.
+ * 2) HTTP/SSE fallback requests to `/api/pos` are answered directly at the raw Node `http.Server` layer
+ *    in ~0.1ms (completely bypassing Next.js App Router overhead!).
  */
 function hookMainHttpServer(hub: WsHubState) {
+  hub.upgradeHandler = handleWsUpgrade;
+  hub.rawHttpHandler = handleRawPosHttpRequest;
+  if (hub.samePortHookedV3) return;
   try {
     const proc = process as unknown as {
       _getActiveHandles?: () => Array<
         http.Server & {
           __llysSamePortWsHooked?: boolean;
           __llysSamePortWsHookedV2?: boolean;
+          __llysSamePortWsHookedV3?: boolean;
           __llysWsUpgradeHandler?: (req: http.IncomingMessage, socket: Duplex) => void;
         }
       >;
@@ -534,10 +732,10 @@ function hookMainHttpServer(hub: WsHubState) {
       if (!addr || typeof addr !== 'object' || typeof addr.port !== 'number') continue;
       if (addr.port === hub.port && hub.port !== 0) continue;
 
-      // Selalu perbarui pointer fungsi upgrade ke kode terbaru (tahan hot-reload Next.js!)
       h.__llysWsUpgradeHandler = handleWsUpgrade;
 
-      if (!h.__llysSamePortWsHookedV2) {
+      if (!h.__llysSamePortWsHookedV3) {
+        h.__llysSamePortWsHookedV3 = true;
         h.__llysSamePortWsHookedV2 = true;
         h.__llysSamePortWsHooked = true;
         h.on('connection', (sock: Socket) => {
@@ -553,9 +751,28 @@ function hookMainHttpServer(hub: WsHubState) {
           if (event === 'upgrade') {
             const req = args[0] as http.IncomingMessage | undefined;
             const socket = args[1] as Duplex | undefined;
-            if (req && socket && typeof req.url === 'string' && req.url.startsWith('/ws-game')) {
-              const handler = h.__llysWsUpgradeHandler ?? handleWsUpgrade;
+            if (
+              req &&
+              socket &&
+              typeof req.url === 'string' &&
+              (req.url.startsWith('/ws-game') || req.url.startsWith('/api/pos'))
+            ) {
+              const handler = getHub().upgradeHandler ?? h.__llysWsUpgradeHandler ?? handleWsUpgrade;
               handler(req, socket);
+              return true;
+            }
+          }
+          if (event === 'request') {
+            const req = args[0] as http.IncomingMessage | undefined;
+            const res = args[1] as http.ServerResponse | undefined;
+            if (
+              req &&
+              res &&
+              typeof req.url === 'string' &&
+              (req.url === '/api/pos' || req.url.startsWith('/api/pos?'))
+            ) {
+              const rawHandler = getHub().rawHttpHandler ?? handleRawPosHttpRequest;
+              rawHandler(req, res);
               return true;
             }
           }
@@ -563,6 +780,7 @@ function hookMainHttpServer(hub: WsHubState) {
         }) as typeof h.emit;
       }
       hub.samePortHooked = true;
+      hub.samePortHookedV3 = true;
     }
   } catch {
     // non-fatal if _getActiveHandles is unavailable

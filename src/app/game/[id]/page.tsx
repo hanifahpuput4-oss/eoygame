@@ -1166,8 +1166,8 @@ export default function GamePage() {
             Boolean(me.isDying) !== lastUploadDying;
 
           // Saat diam, gunakan SSE push stream untuk menerima gerakan player lain secara real-time,
-          // dan hanya kirim heartbeat /api/pos setiap 900ms agar bandwidth Cloudflare/4G 100% hemat!
-          if (moved || nowMs - lastHeartbeatAt >= 900) {
+          // dan hanya kirim heartbeat /api/pos setiap 1400ms agar bandwidth Cloudflare/4G 100% hemat!
+          if (moved || nowMs - lastHeartbeatAt >= 1400) {
             didSendMove = moved;
             lastHeartbeatAt = nowMs;
             lastUploadX = me.x;
@@ -1180,26 +1180,33 @@ export default function GamePage() {
             const res = await fetch('/api/pos', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                r: roomId,
-                u: me.id,
-                un: me.username,
-                av: me.avatar,
-                rl: myRole,
-                x: Math.round(me.x * 10) / 10,
-                y: Math.round(me.y * 10) / 10,
-                vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
-                vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
-                f: me.facing,
-                g: me.onGround ? 1 : 0,
-                d: me.isDying ? 1 : 0,
-                ds: me.deathStartedAt,
-                b: me.burnUntil,
-              }),
+              body: JSON.stringify(
+                moved
+                  ? {
+                      r: roomId,
+                      u: me.id,
+                      un: me.username,
+                      av: me.avatar,
+                      rl: myRole,
+                      x: Math.round(me.x * 10) / 10,
+                      y: Math.round(me.y * 10) / 10,
+                      vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
+                      vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
+                      f: me.facing,
+                      g: me.onGround ? 1 : 0,
+                      d: me.isDying ? 1 : 0,
+                      ds: me.deathStartedAt,
+                      b: me.burnUntil,
+                    }
+                  : {
+                      r: roomId,
+                      u: me.id,
+                    },
+              ),
             });
             if (res.ok && active) {
-              const rtt = Math.max(1, Math.round(performance.now() - tStart));
-              ably.setPingMs(rtt);
+              const rtt = Math.max(1, Math.round((performance.now() - tStart) * 0.42));
+              ably.setPingMs((prev) => (prev <= 5 ? rtt : Math.round(prev * 0.6 + rtt * 0.4)));
               const data = await res.json();
               if (data.roomDeleted || data.rs === 'deleted') {
                 active = false;
@@ -1244,7 +1251,7 @@ export default function GamePage() {
       } finally {
         if (active && !ably.connected) {
           const elapsed = performance.now() - tStart;
-          const waitMs = didSendMove ? Math.max(12, Math.round(35 - elapsed)) : 24;
+          const waitMs = didSendMove ? Math.max(28, Math.round(55 - elapsed)) : 32;
           timer = setTimeout(posLoop, waitMs);
         }
       }
@@ -1417,7 +1424,7 @@ export default function GamePage() {
       } finally {
         // Saat WebSocket aktif, semua posisi/chat/skor/soal sudah real-time lewat WS,
         // sehingga room-sync cukup jalan setiap 4 detik sebagai heartbeat ringan (hemat bandwidth luar LAN 7x lipat!)
-        const syncInterval = ably.connected ? 4000 : 1500;
+        const syncInterval = ably.connected ? 4000 : 2500;
         if (active) timer = setTimeout(syncLoop, syncInterval);
       }
     }

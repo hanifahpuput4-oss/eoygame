@@ -297,20 +297,26 @@ export function useAblyRoom(
       }
     }
 
-    function connectWebSocket(port: number) {
+      function connectWebSocket(port: number) {
       if (cancelled) return;
       try {
-        const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const isHttps = window.location.protocol === 'https:';
+        const proto = isHttps ? 'wss' : 'ws';
         const hostWithPort = window.location.host; // e.g. 103.x.x.x:3000 or domain
         const hostname = window.location.hostname;
 
-        // Prioritaskan Single-Port WebSocket (/ws-game di port 3000 yang sama dengan web!)
-        // supaya akses dari luar jaringan via IP Static / Reverse Proxy langsung tembus WebSocket tanpa perlu port 3001.
-        // Jika gagal (misal saat hot-reload tertentu), otomatis bergantian coba port dedicated 3001.
-        const useSamePort = attemptIndex % 2 === 0;
+        // Jika diakses via HTTPS domain/tunnel (seperti bot.kenjay.my.id) dan percobaan pertama gagal upgrade WS,
+        // jangan spam retry WebSocket atau mencoba port 3001 non-TLS karena akan membebani antrean koneksi & menaikkan ping!
+        if (isHttps && attemptIndex >= 1) {
+          ensureSseFallback();
+          return;
+        }
+
+        // Gunakan /api/pos untuk upgrade Single-Port WebSocket (tidak pernah memicu 404 Next.js jika proxy menolak Upgrade!)
+        const useSamePort = isHttps || attemptIndex % 2 === 0;
         attemptIndex += 1;
         const wsUrl = useSamePort
-          ? `${proto}://${hostWithPort}/ws-game`
+          ? `${proto}://${hostWithPort}/api/pos`
           : `${proto}://${hostname}:${port}`;
 
         const ws = new WebSocket(wsUrl);
@@ -322,6 +328,7 @@ export function useAblyRoom(
             ws.close();
             return;
           }
+          attemptIndex = 0;
           if (sseSource) {
             sseSource.close();
             sseSource = null;
@@ -379,8 +386,9 @@ export function useAblyRoom(
           setConnected(false);
           setTransportMode('http');
           ensureSseFallback();
-          if (!cancelled) {
-            wsReconnectTimer = setTimeout(() => connectWebSocket(currentWsPort), 2000);
+          if (!cancelled && !(window.location.protocol === 'https:' && attemptIndex >= 1)) {
+            const retryDelay = Math.min(10000, 2000 * attemptIndex);
+            wsReconnectTimer = setTimeout(() => connectWebSocket(currentWsPort), retryDelay);
           }
         };
 

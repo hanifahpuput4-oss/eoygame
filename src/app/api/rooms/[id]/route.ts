@@ -7,6 +7,7 @@ import { requireUser } from '@/server/auth/session';
 import { getRoom, updateRoomStatus, removePlayer, assertHost, leaveRoom, ensureSession } from '@/server/services/room-service';
 import { stripCorrectAnswer } from '@/server/services/question-service';
 import { publishToRoom } from '@/server/services/realtime-service';
+import { ensureWsServer } from '@/server/services/ws-hub';
 import { getEphemeralChatSince } from '@/server/services/chat-store';
 import {
   addRejoinRequest,
@@ -52,6 +53,7 @@ async function loadSafeLevelQuestions(levelId: string) {
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
+    ensureWsServer();
     const user = await requireUser();
     const { id } = await ctx.params;
     const bootstrap = req.nextUrl.searchParams.get('bootstrap') === '1';
