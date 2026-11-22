@@ -10,6 +10,7 @@ import {
   isPlayerKicked,
   isRoomDeleted,
   recordRoomCrumble,
+  recordRoomPowerUp,
   recordRoomStomp,
   removePresence,
   touchPresence,
@@ -355,6 +356,36 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
           stg,
           id: msg.id,
           until,
+        },
+        client.userId,
+        client.id,
+      );
+    } else if (op === 'powerup' && typeof msg.id === 'string') {
+      const until = typeof msg.until === 'number' ? msg.until : Date.now() + 40000;
+      recordRoomPowerUp(client.roomId, stg, msg.id, until);
+      broadcastRoomEvent(
+        client.roomId,
+        {
+          t: 'obstacle',
+          op: 'powerup',
+          stg,
+          id: msg.id,
+          until,
+        },
+        client.userId,
+        client.id,
+      );
+    } else if (op === 'shoot' && typeof msg.pid === 'string') {
+      broadcastRoomEvent(
+        client.roomId,
+        {
+          t: 'obstacle',
+          op: 'shoot',
+          stg,
+          pid: msg.pid,
+          x: typeof msg.x === 'number' ? msg.x : 0,
+          y: typeof msg.y === 'number' ? msg.y : 0,
+          vx: typeof msg.vx === 'number' ? msg.vx : 14,
         },
         client.userId,
         client.id,

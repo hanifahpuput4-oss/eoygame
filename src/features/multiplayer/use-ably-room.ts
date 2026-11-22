@@ -64,7 +64,9 @@ export type ActiveQuestion = {
 
 export type ObstacleEvent =
   | { op: 'crumble'; stg: number; idx: number; at: number }
-  | { op: 'stomp'; stg: number; id: string; until: number };
+  | { op: 'stomp'; stg: number; id: string; until: number }
+  | { op: 'powerup'; stg: number; id: string; until: number }
+  | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number };
 
 type RealtimeCallbacks = {
   onDirectMove?: (player: PresencePlayer) => void;
@@ -160,6 +162,7 @@ export function useAblyRoom(
           const obs = msg.obstacles as {
             crumbles?: { stage: number; idx: number; startedAt: number }[];
             stomps?: { stage: number; id: string; until: number }[];
+            powerups?: { stage: number; id: string; until: number }[];
           };
           if (Array.isArray(obs.crumbles)) {
             for (const c of obs.crumbles) {
@@ -169,6 +172,11 @@ export function useAblyRoom(
           if (Array.isArray(obs.stomps)) {
             for (const s of obs.stomps) {
               callbacksRef.current?.onObstacleEvent?.({ op: 'stomp', stg: s.stage, id: s.id, until: s.until });
+            }
+          }
+          if (Array.isArray(obs.powerups)) {
+            for (const p of obs.powerups) {
+              callbacksRef.current?.onObstacleEvent?.({ op: 'powerup', stg: p.stage, id: p.id, until: p.until });
             }
           }
         }
@@ -302,6 +310,10 @@ export function useAblyRoom(
           callbacksRef.current?.onObstacleEvent?.({ op: 'crumble', stg, idx: msg.idx, at: msg.at });
         } else if (op === 'stomp' && typeof msg.id === 'string' && typeof msg.until === 'number') {
           callbacksRef.current?.onObstacleEvent?.({ op: 'stomp', stg, id: msg.id, until: msg.until });
+        } else if (op === 'powerup' && typeof msg.id === 'string' && typeof msg.until === 'number') {
+          callbacksRef.current?.onObstacleEvent?.({ op: 'powerup', stg, id: msg.id, until: msg.until });
+        } else if (op === 'shoot' && typeof msg.pid === 'string' && typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.vx === 'number') {
+          callbacksRef.current?.onObstacleEvent?.({ op: 'shoot', stg, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx });
         }
         return;
       }

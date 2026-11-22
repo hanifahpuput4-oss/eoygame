@@ -1,4 +1,4 @@
-import { DECOR, PHYSICS, PLATFORMS, WORLD, rectsOverlap, type Platform, type StageEnemy } from '../maps/world';
+import { DECOR, PHYSICS, PLATFORMS, WORLD, rectsOverlap, type Platform, type StageEnemy, type StagePowerUp } from '../maps/world';
 
 export type Player = {
   id: string;
@@ -22,9 +22,21 @@ export type Player = {
   isDying?: boolean;
   deathStartedAt?: number;
   burnUntil?: number;
+  blasterAmmo?: number;
+  blasterUntil?: number;
   lastPacketAt?: number;
   avgInterval?: number;
   snapshots?: { x: number; y: number; vx: number; vy: number; time: number }[];
+};
+
+export type Projectile = {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  shooterId: string;
+  stage: number;
+  createdAt: number;
 };
 
 const PLAYER_W = 36;
@@ -42,6 +54,8 @@ function respawnToStart(p: Player) {
   p.isDying = false;
   p.deathStartedAt = undefined;
   p.burnUntil = undefined;
+  p.blasterAmmo = 0;
+  p.blasterUntil = undefined;
   p.x = p.spawnX ?? 120;
   p.y = p.spawnY ?? WORLD.groundY - PLAYER_H - 20;
   p.vx = 0;
@@ -57,6 +71,9 @@ export function updateStageEntities(
   enemies: StageEnemy[],
   dtScale = 1,
   now = Date.now(),
+  powerUps: StagePowerUp[] = [],
+  projectiles: Projectile[] = [],
+  onProjectileHitEnemy?: (projId: string, enemyId: string) => void,
 ) {
   for (const plat of basePlatforms) {
     if (plat.type === 'moving') {
@@ -109,6 +126,34 @@ export function updateStageEntities(
       enemy.dir = -1;
     }
   }
+
+  // Update powerup item respawn timers
+  for (const pu of powerUps) {
+    if (pu.collectedUntil && now >= pu.collectedUntil) {
+      pu.collectedUntil = undefined;
+    }
+  }
+
+  // Update projectiles (lasers)
+  for (let i = projectiles.length - 1; i >= 0; i -= 1) {
+    const pr = projectiles[i];
+    pr.x += pr.vx * dtScale;
+    const pBox = { x: pr.x - 12, y: pr.y - 7, w: 24, h: 14 };
+    let hit = false;
+    for (const e of enemies) {
+      if (e.stompedUntil && e.stompedUntil > now) continue;
+      const eHitbox = { x: e.x + 2, y: e.y + 2, w: e.w - 4, h: e.h - 4 };
+      if (rectsOverlap(pBox, eHitbox)) {
+        e.stompedUntil = now + 9000;
+        onProjectileHitEnemy?.(pr.id, e.id);
+        hit = true;
+        break;
+      }
+    }
+    if (hit || pr.x < 0 || pr.x > WORLD.width || now - pr.createdAt > 3200) {
+      projectiles.splice(i, 1);
+    }
+  }
 }
 
 export type PhysicsSoundEvent = 'jump' | 'bounce' | 'burn' | 'death';
@@ -124,14 +169,18 @@ export function updatePlayerPhysics(
   stageOptions?: {
     basePlatforms?: Platform[];
     enemies?: StageEnemy[];
+    powerUps?: StagePowerUp[];
     isGateUnlocked?: boolean;
     onEnterGate?: () => void;
     isStaff?: boolean;
     onObstacleEvent?: (
       evt:
         | { op: 'crumble'; stg: number; idx: number; at: number }
-        | { op: 'stomp'; stg: number; id: string; until: number },
+        | { op: 'stomp'; stg: number; id: string; until: number }
+        | { op: 'powerup'; stg: number; id: string; until: number }
+        | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number },
     ) => void;
+    onCollectPowerUp?: (pu: StagePowerUp) => void;
   },
 ) {
   const now = Date.now();
@@ -318,12 +367,46 @@ export function updatePlayerPhysics(
     }
   }
 
+  // Collectible Power-Up Items (Blaster & Stars)
+  const powerUps = stageOptions?.powerUps ?? [];
+  for (const pu of powerUps) {
+    if (pu.collectedUntil && pu.collectedUntil > now) continue;
+    const puBox = { x: pu.x, y: pu.y, w: pu.w, h: pu.h };
+    if (rectsOverlap(box, puBox)) {
+      pu.collectedUntil = now + 40000;
+      p.blasterAmmo = 10;
+      p.blasterUntil = now + 30000;
+      stageOptions?.onCollectPowerUp?.(pu);
+      stageOptions?.onObstacleEvent?.({
+        op: 'powerup',
+        stg: p.stage ?? 1,
+        id: pu.id,
+        until: now + 40000,
+      });
+    }
+  }
+
   // Stage Enemy collisions (Monster Virus & Walking Fireballs)
   const enemies = stageOptions?.enemies ?? [];
   for (const enemy of enemies) {
     if (enemy.stompedUntil && enemy.stompedUntil > now) continue;
     const eHitbox = { x: enemy.x + 3, y: enemy.y + 3, w: enemy.w - 6, h: enemy.h - 4 };
     if (!rectsOverlap(box, eHitbox)) continue;
+
+    // Super Cat invulnerability shield defeats enemy on touch!
+    if (p.blasterUntil && p.blasterUntil > now) {
+      enemy.stompedUntil = now + 9000;
+      p.vy = -10.5;
+      p.onGround = false;
+      onSoundEvent?.('bounce');
+      stageOptions?.onObstacleEvent?.({
+        op: 'stomp',
+        stg: p.stage ?? 1,
+        id: enemy.id,
+        until: now + 9000,
+      });
+      continue;
+    }
 
     // Mario-style Stomp on top of Virus head!
     if (enemy.kind === 'virus' && p.vy > 0 && prevY + PLAYER_H <= enemy.y + enemy.h * 0.55) {

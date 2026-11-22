@@ -1193,6 +1193,47 @@
   transform: scale(0.94);
 }
 
+.ctrl-shoot-btn {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(56, 189, 248, 0.7);
+  position: relative;
+  font-size: calc(var(--ctrl-size, 84px) * 0.46);
+  line-height: 1;
+  color: #38bdf8;
+}
+
+.ctrl-shoot-btn.has-ammo {
+  background: rgba(14, 116, 144, 0.88);
+  border-color: #38bdf8;
+  color: #fde047;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.75), inset 0 0 8px rgba(255, 255, 255, 0.4);
+  animation: pulse-shoot-hud 1.4s ease-in-out infinite alternate;
+}
+
+.ctrl-shoot-btn:active {
+  background: rgba(2, 132, 199, 0.95);
+  transform: scale(0.92);
+}
+
+.ctrl-ammo-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #f59e0b;
+  color: #000;
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: 10px;
+  padding: 1px 6px;
+  border: 1.5px solid #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes pulse-shoot-hud {
+  0% { transform: scale(1); box-shadow: 0 0 10px rgba(56, 189, 248, 0.6); }
+  100% { transform: scale(1.06); box-shadow: 0 0 22px rgba(56, 189, 248, 0.95); }
+}
+
 .hud-edit-banner {
   position: absolute;
   top: 72px;

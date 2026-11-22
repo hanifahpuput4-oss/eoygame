@@ -6,6 +6,7 @@ import {
   isPlayerKicked,
   isRoomDeleted,
   recordRoomCrumble,
+  recordRoomPowerUp,
   recordRoomStomp,
   touchPresence,
   updateLivePlayerPosition,
@@ -161,6 +162,24 @@ export async function POST(req: NextRequest) {
         const until = typeof obs.until === 'number' ? obs.until : Date.now() + 6000;
         recordRoomStomp(roomId, stg, obs.id, until);
         broadcastRoomEvent(roomId, { t: 'obstacle', op: 'stomp', stg, id: obs.id, until }, userId);
+      } else if (op === 'powerup' && typeof obs.id === 'string') {
+        const until = typeof obs.until === 'number' ? obs.until : Date.now() + 40000;
+        recordRoomPowerUp(roomId, stg, obs.id, until);
+        broadcastRoomEvent(roomId, { t: 'obstacle', op: 'powerup', stg, id: obs.id, until }, userId);
+      } else if (op === 'shoot' && typeof obs.pid === 'string') {
+        broadcastRoomEvent(
+          roomId,
+          {
+            t: 'obstacle',
+            op: 'shoot',
+            stg,
+            pid: obs.pid,
+            x: typeof obs.x === 'number' ? obs.x : 0,
+            y: typeof obs.y === 'number' ? obs.y : 0,
+            vx: typeof obs.vx === 'number' ? obs.vx : 14,
+          },
+          userId,
+        );
       }
     }
 

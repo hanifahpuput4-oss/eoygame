@@ -341,25 +341,279 @@ export const STAGE2_QBLOCK_SPOTS: { x: number; y: number }[] = [
   { x: 4960, y: 295 },
 ];
 
+export const STAGE3_PLATFORMS: Platform[] = [
+  // Main ground
+  { x: 0, y: 820, w: 5600, h: 280, type: 'ground' },
+
+  // Starting zone (left) - Dark Basalt Fortress Ledges
+  { x: 40, y: 710, w: 220, h: 28, type: 'stone' },
+  { x: 300, y: 640, w: 160, h: 24, type: 'crumble' },
+  { x: 520, y: 580, w: 180, h: 26, type: 'stone' },
+
+  // Zone 1: First Magma Chasm & Moving Ferry (700 - 1450)
+  { x: 720, y: 794, w: 180, h: 26, type: 'fire' },
+  { x: 760, y: 660, w: 160, h: 24, type: 'moving', baseX: 760, baseY: 660, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0022, movePhase: 0 },
+  { x: 980, y: 530, w: 320, h: 22, type: 'stone' },
+  { x: 960, y: 390, w: 360, h: 22, type: 'roof' },
+  { x: 1060, y: 260, w: 170, h: 22, type: 'roof' },
+  { x: 900, y: 798, w: 64, h: 22, type: 'bounce' },
+  { x: 1360, y: 460, w: 150, h: 24, type: 'moving', baseX: 1360, baseY: 460, moveAxis: 'y', moveRange: 130, moveSpeed: 0.0025, movePhase: 1.57 },
+
+  // Zone 2: Crumbling Obsidian Steps & Spike Pits (1550 - 2200)
+  { x: 1560, y: 794, w: 220, h: 26, type: 'spike' },
+  { x: 1580, y: 640, w: 140, h: 24, type: 'crumble' },
+  { x: 1780, y: 570, w: 150, h: 24, type: 'stone' },
+  { x: 1980, y: 500, w: 140, h: 24, type: 'crumble' },
+  { x: 1740, y: 330, w: 190, h: 24, type: 'roof' },
+  { x: 1880, y: 794, w: 180, h: 26, type: 'fire' },
+  { x: 2120, y: 798, w: 64, h: 22, type: 'bounce' },
+
+  // Zone 3: Twin Magma Counter-Lifts & Mid Fortress (2240 - 3150)
+  { x: 2250, y: 680, w: 280, h: 28, type: 'stone' },
+  { x: 2360, y: 520, w: 150, h: 24, type: 'moving', baseX: 2360, baseY: 520, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0024, movePhase: 0 },
+  { x: 2640, y: 420, w: 150, h: 24, type: 'moving', baseX: 2640, baseY: 420, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0024, movePhase: Math.PI },
+  { x: 2840, y: 340, w: 220, h: 24, type: 'stone' },
+  { x: 2820, y: 590, w: 160, h: 24, type: 'crumble' },
+  { x: 2600, y: 794, w: 150, h: 26, type: 'spike' },
+  { x: 2980, y: 794, w: 140, h: 26, type: 'fire' },
+  { x: 3080, y: 798, w: 64, h: 22, type: 'bounce' },
+
+  // Zone 4: Inferno Spire & Sky Elevator (3180 - 4150)
+  { x: 3180, y: 680, w: 260, h: 28, type: 'stone' },
+  { x: 3480, y: 590, w: 150, h: 24, type: 'crumble' },
+  { x: 3420, y: 420, w: 150, h: 24, type: 'moving', baseX: 3420, baseY: 420, moveAxis: 'y', moveRange: 130, moveSpeed: 0.0026, movePhase: 0.8 },
+  { x: 3660, y: 540, w: 320, h: 26, type: 'stone' },
+  { x: 3720, y: 380, w: 250, h: 24, type: 'roof' },
+  { x: 3800, y: 230, w: 180, h: 22, type: 'roof' },
+  { x: 4020, y: 650, w: 220, h: 26, type: 'stone' },
+  { x: 3500, y: 794, w: 140, h: 26, type: 'spike' },
+  { x: 3880, y: 794, w: 110, h: 26, type: 'fire' },
+
+  // Zone 5: Final Magma Crossing to the Citadel Gate (4200 - 5500)
+  { x: 4220, y: 560, w: 150, h: 24, type: 'crumble' },
+  { x: 4420, y: 480, w: 240, h: 26, type: 'stone' },
+  { x: 4320, y: 310, w: 190, h: 24, type: 'moving', baseX: 4320, baseY: 310, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0024, movePhase: 1.6 },
+  { x: 4620, y: 220, w: 210, h: 24, type: 'roof' },
+  { x: 4720, y: 600, w: 160, h: 24, type: 'crumble' },
+  { x: 4860, y: 440, w: 220, h: 26, type: 'stone' },
+  { x: 4640, y: 640, w: 160, h: 24, type: 'moving', baseX: 4640, baseY: 640, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0023, movePhase: 0 },
+  { x: 4360, y: 794, w: 130, h: 26, type: 'spike' },
+  { x: 4540, y: 794, w: 140, h: 26, type: 'fire' },
+  { x: 4780, y: 798, w: 64, h: 22, type: 'bounce' },
+
+  // Finish Citadel Terrace & Portal
+  { x: 5120, y: 700, w: 400, h: 32, type: 'stone' },
+  { x: 5180, y: 540, w: 280, h: 26, type: 'roof' },
+];
+
+export const STAGE3_QBLOCK_SPOTS: { x: number; y: number }[] = [
+  { x: 350, y: 515 },
+  { x: 580, y: 455 },
+  { x: 790, y: 530 },
+  { x: 1020, y: 410 },
+  { x: 1120, y: 140 },
+  { x: 1250, y: 410 },
+  { x: 1420, y: 310 },
+  { x: 1640, y: 510 },
+  { x: 1820, y: 440 },
+  { x: 1800, y: 200 },
+  { x: 2040, y: 380 },
+  { x: 2420, y: 390 },
+  { x: 2700, y: 290 },
+  { x: 2900, y: 210 },
+  { x: 2880, y: 460 },
+  { x: 3240, y: 550 },
+  { x: 3480, y: 290 },
+  { x: 3720, y: 410 },
+  { x: 3840, y: 110 },
+  { x: 4080, y: 520 },
+  { x: 4280, y: 430 },
+  { x: 4480, y: 350 },
+  { x: 4680, y: 100 },
+  { x: 4780, y: 470 },
+  { x: 4940, y: 310 },
+];
+
+export type StagePowerUp = {
+  id: string;
+  stage: number;
+  kind: 'blaster' | 'star';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  collectedUntil?: number;
+};
+
+export const STAGE4_PLATFORMS: Platform[] = [
+  // Main ground - Neon Cyber Grid
+  { x: 0, y: 820, w: 5600, h: 280, type: 'ground' },
+
+  // Starting zone (left) - Cyber Launchpad
+  { x: 40, y: 710, w: 220, h: 28, type: 'stone' },
+  { x: 300, y: 640, w: 160, h: 24, type: 'crumble' },
+  { x: 520, y: 580, w: 180, h: 26, type: 'stone' },
+
+  // Zone 1: Anti-Gravity Cyan Lift & Space Void Spike Pit (700 - 1450)
+  { x: 720, y: 794, w: 180, h: 26, type: 'spike' },
+  { x: 760, y: 660, w: 160, h: 24, type: 'moving', baseX: 760, baseY: 660, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0022, movePhase: 0 },
+  { x: 980, y: 530, w: 320, h: 22, type: 'stone' },
+  { x: 960, y: 390, w: 360, h: 22, type: 'roof' },
+  { x: 1060, y: 260, w: 170, h: 22, type: 'roof' },
+  { x: 900, y: 798, w: 64, h: 22, type: 'bounce' },
+  { x: 1360, y: 460, w: 150, h: 24, type: 'moving', baseX: 1360, baseY: 460, moveAxis: 'y', moveRange: 130, moveSpeed: 0.0025, movePhase: 1.57 },
+
+  // Zone 2: Crumbling Quantum Bridge & Laser Hazard (1550 - 2200)
+  { x: 1560, y: 794, w: 220, h: 26, type: 'spike' },
+  { x: 1580, y: 640, w: 140, h: 24, type: 'crumble' },
+  { x: 1780, y: 570, w: 150, h: 24, type: 'stone' },
+  { x: 1980, y: 500, w: 140, h: 24, type: 'crumble' },
+  { x: 1740, y: 330, w: 190, h: 24, type: 'roof' },
+  { x: 1880, y: 794, w: 180, h: 26, type: 'fire' },
+  { x: 2120, y: 798, w: 64, h: 22, type: 'bounce' },
+
+  // Zone 3: Orbital Space Lifts & Mid Cyber Citadel (2240 - 3150)
+  { x: 2250, y: 680, w: 280, h: 28, type: 'stone' },
+  { x: 2360, y: 520, w: 150, h: 24, type: 'moving', baseX: 2360, baseY: 520, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0024, movePhase: 0 },
+  { x: 2640, y: 420, w: 150, h: 24, type: 'moving', baseX: 2640, baseY: 420, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0024, movePhase: Math.PI },
+  { x: 2840, y: 340, w: 220, h: 24, type: 'stone' },
+  { x: 2820, y: 590, w: 160, h: 24, type: 'crumble' },
+  { x: 2600, y: 794, w: 150, h: 26, type: 'spike' },
+  { x: 2980, y: 794, w: 140, h: 26, type: 'fire' },
+  { x: 3080, y: 798, w: 64, h: 22, type: 'bounce' },
+
+  // Zone 4: Cyber Spire & High Altitude Beam (3180 - 4150)
+  { x: 3180, y: 680, w: 260, h: 28, type: 'stone' },
+  { x: 3480, y: 590, w: 150, h: 24, type: 'crumble' },
+  { x: 3420, y: 420, w: 150, h: 24, type: 'moving', baseX: 3420, baseY: 420, moveAxis: 'y', moveRange: 130, moveSpeed: 0.0026, movePhase: 0.8 },
+  { x: 3660, y: 540, w: 320, h: 26, type: 'stone' },
+  { x: 3720, y: 380, w: 250, h: 24, type: 'roof' },
+  { x: 3800, y: 230, w: 180, h: 22, type: 'roof' },
+  { x: 4020, y: 650, w: 220, h: 26, type: 'stone' },
+  { x: 3500, y: 794, w: 140, h: 26, type: 'spike' },
+  { x: 3880, y: 794, w: 110, h: 26, type: 'fire' },
+
+  // Zone 5: Final Cosmic Bridge & Citadel Gate Approach (4200 - 5500)
+  { x: 4220, y: 560, w: 150, h: 24, type: 'crumble' },
+  { x: 4420, y: 480, w: 240, h: 26, type: 'stone' },
+  { x: 4320, y: 310, w: 190, h: 24, type: 'moving', baseX: 4320, baseY: 310, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0024, movePhase: 1.6 },
+  { x: 4620, y: 220, w: 210, h: 24, type: 'roof' },
+  { x: 4720, y: 600, w: 160, h: 24, type: 'crumble' },
+  { x: 4860, y: 440, w: 220, h: 26, type: 'stone' },
+  { x: 4640, y: 640, w: 160, h: 24, type: 'moving', baseX: 4640, baseY: 640, moveAxis: 'x', moveRange: 100, moveSpeed: 0.0023, movePhase: 0 },
+  { x: 4360, y: 794, w: 130, h: 26, type: 'spike' },
+  { x: 4540, y: 794, w: 140, h: 26, type: 'fire' },
+  { x: 4780, y: 798, w: 64, h: 22, type: 'bounce' },
+
+  // Finish Citadel Terrace & Portal
+  { x: 5120, y: 700, w: 400, h: 32, type: 'stone' },
+  { x: 5180, y: 540, w: 280, h: 26, type: 'roof' },
+];
+
+export const STAGE4_QBLOCK_SPOTS: { x: number; y: number }[] = [
+  { x: 360, y: 520 },
+  { x: 590, y: 460 },
+  { x: 800, y: 530 },
+  { x: 1030, y: 410 },
+  { x: 1130, y: 150 },
+  { x: 1260, y: 410 },
+  { x: 1430, y: 320 },
+  { x: 1650, y: 510 },
+  { x: 1830, y: 440 },
+  { x: 1810, y: 210 },
+  { x: 2050, y: 390 },
+  { x: 2430, y: 390 },
+  { x: 2710, y: 300 },
+  { x: 2910, y: 220 },
+  { x: 2890, y: 470 },
+  { x: 3250, y: 550 },
+  { x: 3490, y: 300 },
+  { x: 3730, y: 410 },
+  { x: 3850, y: 120 },
+  { x: 4090, y: 530 },
+  { x: 4290, y: 440 },
+  { x: 4490, y: 360 },
+  { x: 4690, y: 110 },
+  { x: 4790, y: 480 },
+  { x: 4950, y: 320 },
+];
+
+export function createStagePowerUps(stage: number): StagePowerUp[] {
+  if (stage <= 1) return [];
+  if (stage === 4) {
+    return [
+      { id: 'pu_s4_1', stage: 4, kind: 'blaster', x: 360, y: 580, w: 34, h: 34 },
+      { id: 'pu_s4_2', stage: 4, kind: 'star', x: 1810, y: 270, w: 34, h: 34 },
+      { id: 'pu_s4_3', stage: 4, kind: 'blaster', x: 2840, y: 280, w: 34, h: 34 },
+      { id: 'pu_s4_4', stage: 4, kind: 'star', x: 3720, y: 320, w: 34, h: 34 },
+      { id: 'pu_s4_5', stage: 4, kind: 'blaster', x: 4620, y: 160, w: 34, h: 34 },
+    ];
+  }
+  if (stage === 3) {
+    return [
+      { id: 'pu_s3_1', stage: 3, kind: 'blaster', x: 1060, y: 200, w: 34, h: 34 },
+      { id: 'pu_s3_2', stage: 3, kind: 'blaster', x: 3800, y: 170, w: 34, h: 34 },
+    ];
+  }
+  if (stage === 2) {
+    return [
+      { id: 'pu_s2_1', stage: 2, kind: 'blaster', x: 1620, y: 190, w: 34, h: 34 },
+      { id: 'pu_s2_2', stage: 2, kind: 'blaster', x: 3780, y: 220, w: 34, h: 34 },
+    ];
+  }
+  return [];
+}
+
 export function createStageEnemies(stage: number): StageEnemy[] {
   if (stage <= 1) return [];
+  if (stage === 2) {
+    return [
+      // Ground & platform patrolling Viruses (can be dodged or stomped from above!)
+      { id: 'v1', kind: 'virus', x: 420, y: 780, w: 38, h: 40, minX: 290, maxX: 670, speed: 1.9, dir: 1 },
+      { id: 'v2', kind: 'virus', x: 1120, y: 480, w: 38, h: 40, minX: 975, maxX: 1270, speed: 1.7, dir: -1 },
+      { id: 'v3', kind: 'virus', x: 2340, y: 640, w: 38, h: 40, minX: 2255, maxX: 2510, speed: 1.8, dir: 1 },
+      { id: 'v4', kind: 'virus', x: 3280, y: 650, w: 38, h: 40, minX: 3195, maxX: 3410, speed: 2.0, dir: -1 },
+      { id: 'v5', kind: 'virus', x: 4560, y: 460, w: 38, h: 40, minX: 4495, maxX: 4690, speed: 1.9, dir: 1 },
+      // Fast rolling Fireballs on ground/ledges (must jump over!)
+      { id: 'f1', kind: 'fireball', x: 1820, y: 786, w: 34, h: 34, minX: 1660, maxX: 2090, speed: 2.6, dir: 1 },
+      { id: 'f2', kind: 'fireball', x: 2880, y: 786, w: 34, h: 34, minX: 2750, maxX: 3030, speed: 2.7, dir: -1 },
+      { id: 'f3', kind: 'fireball', x: 3720, y: 786, w: 34, h: 34, minX: 3670, maxX: 3860, speed: 2.5, dir: 1 },
+      { id: 'f4', kind: 'fireball', x: 4920, y: 786, w: 34, h: 34, minX: 4810, maxX: 5090, speed: 2.8, dir: -1 },
+    ];
+  }
+
+  if (stage === 3) {
+    return [
+      { id: 'm_v1', kind: 'virus', x: 460, y: 780, w: 38, h: 40, minX: 320, maxX: 680, speed: 2.1, dir: 1 },
+      { id: 'm_v2', kind: 'virus', x: 1140, y: 490, w: 38, h: 40, minX: 1030, maxX: 1330, speed: 2.0, dir: -1 },
+      { id: 'm_v3', kind: 'virus', x: 2320, y: 540, w: 38, h: 40, minX: 2260, maxX: 2480, speed: 2.2, dir: 1 },
+      { id: 'm_v4', kind: 'virus', x: 3760, y: 520, w: 38, h: 40, minX: 3710, maxX: 4010, speed: 2.2, dir: -1 },
+      { id: 'm_v5', kind: 'virus', x: 4650, y: 600, w: 38, h: 40, minX: 4550, maxX: 4770, speed: 2.0, dir: 1 },
+      { id: 'm_f1', kind: 'fireball', x: 1200, y: 786, w: 34, h: 34, minX: 1040, maxX: 1450, speed: 2.9, dir: 1 },
+      { id: 'm_f2', kind: 'fireball', x: 2000, y: 786, w: 34, h: 34, minX: 1850, maxX: 2200, speed: 3.0, dir: -1 },
+      { id: 'm_f3', kind: 'fireball', x: 2800, y: 346, w: 34, h: 34, minX: 2730, maxX: 2930, speed: 2.8, dir: 1 },
+      { id: 'm_f4', kind: 'fireball', x: 3950, y: 786, w: 34, h: 34, minX: 3820, maxX: 4150, speed: 3.1, dir: -1 },
+      { id: 'm_f5', kind: 'fireball', x: 4950, y: 786, w: 34, h: 34, minX: 4830, maxX: 5120, speed: 3.0, dir: -1 },
+    ];
+  }
+
+  // Stage 4: Galaksi Cyber & Pertahanan Orbit (Ultimate Speed & Firepower!)
   return [
-    // Ground & platform patrolling Viruses (can be dodged or stomped from above!)
-    { id: 'v1', kind: 'virus', x: 420, y: 780, w: 38, h: 40, minX: 290, maxX: 670, speed: 1.9, dir: 1 },
-    { id: 'v2', kind: 'virus', x: 1120, y: 480, w: 38, h: 40, minX: 975, maxX: 1270, speed: 1.7, dir: -1 },
-    { id: 'v3', kind: 'virus', x: 2340, y: 640, w: 38, h: 40, minX: 2255, maxX: 2510, speed: 1.8, dir: 1 },
-    { id: 'v4', kind: 'virus', x: 3280, y: 650, w: 38, h: 40, minX: 3195, maxX: 3410, speed: 2.0, dir: -1 },
-    { id: 'v5', kind: 'virus', x: 4560, y: 460, w: 38, h: 40, minX: 4495, maxX: 4690, speed: 1.9, dir: 1 },
-    // Fast rolling Fireballs on ground/ledges (must jump over!)
-    { id: 'f1', kind: 'fireball', x: 1820, y: 786, w: 34, h: 34, minX: 1660, maxX: 2090, speed: 2.6, dir: 1 },
-    { id: 'f2', kind: 'fireball', x: 2880, y: 786, w: 34, h: 34, minX: 2750, maxX: 3030, speed: 2.7, dir: -1 },
-    { id: 'f3', kind: 'fireball', x: 3720, y: 786, w: 34, h: 34, minX: 3670, maxX: 3860, speed: 2.5, dir: 1 },
-    { id: 'f4', kind: 'fireball', x: 4920, y: 786, w: 34, h: 34, minX: 4810, maxX: 5090, speed: 2.8, dir: -1 },
+    { id: 'c_v1', kind: 'virus', x: 440, y: 780, w: 38, h: 40, minX: 310, maxX: 690, speed: 2.3, dir: 1 },
+    { id: 'c_v2', kind: 'virus', x: 1120, y: 490, w: 38, h: 40, minX: 1010, maxX: 1340, speed: 2.2, dir: -1 },
+    { id: 'c_v3', kind: 'virus', x: 2360, y: 640, w: 38, h: 40, minX: 2270, maxX: 2520, speed: 2.4, dir: 1 },
+    { id: 'c_v4', kind: 'virus', x: 3740, y: 500, w: 38, h: 40, minX: 3680, maxX: 4020, speed: 2.3, dir: -1 },
+    { id: 'c_v5', kind: 'virus', x: 4620, y: 590, w: 38, h: 40, minX: 4520, maxX: 4780, speed: 2.2, dir: 1 },
+    { id: 'c_f1', kind: 'fireball', x: 1220, y: 786, w: 34, h: 34, minX: 1050, maxX: 1470, speed: 3.2, dir: 1 },
+    { id: 'c_f2', kind: 'fireball', x: 2020, y: 786, w: 34, h: 34, minX: 1860, maxX: 2220, speed: 3.2, dir: -1 },
+    { id: 'c_f3', kind: 'fireball', x: 2840, y: 300, w: 34, h: 34, minX: 2740, maxX: 2980, speed: 3.0, dir: 1 },
+    { id: 'c_f4', kind: 'fireball', x: 3960, y: 786, w: 34, h: 34, minX: 3840, maxX: 4180, speed: 3.3, dir: -1 },
+    { id: 'c_f5', kind: 'fireball', x: 4960, y: 786, w: 34, h: 34, minX: 4840, maxX: 5140, speed: 3.2, dir: -1 },
   ];
 }
 
 export function getStageBasePlatforms(stage: number): Platform[] {
-  const src = stage === 2 ? STAGE2_PLATFORMS : PLATFORMS;
+  const src = stage === 4 ? STAGE4_PLATFORMS : stage === 3 ? STAGE3_PLATFORMS : stage === 2 ? STAGE2_PLATFORMS : PLATFORMS;
   return src.map((p) => ({ ...p }));
 }
 
@@ -376,7 +630,7 @@ export function generateQuestionBlocks(questionIds: string[], seedStr: string, s
     return seed / 4294967296;
   };
 
-  const baseSpots = stage === 2 ? STAGE2_QBLOCK_SPOTS : QBLOCK_CANDIDATE_SPOTS;
+  const baseSpots = stage === 4 ? STAGE4_QBLOCK_SPOTS : stage === 3 ? STAGE3_QBLOCK_SPOTS : stage === 2 ? STAGE2_QBLOCK_SPOTS : QBLOCK_CANDIDATE_SPOTS;
   const pool = [...baseSpots];
   for (let i = pool.length - 1; i > 0; i -= 1) {
     const j = Math.floor(nextRand() * (i + 1));

@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Camera } from '@/game-engine/camera/camera';
-import { updatePlayerPhysics, updateStageEntities, type Player, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
-import { drawWorld, drawPlatforms, drawEnemies, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
+import { updatePlayerPhysics, updateStageEntities, type Player, type Projectile, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
+import { drawWorld, drawPlatforms, drawEnemies, drawPowerUps, drawProjectiles, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
 import {
   PHYSICS,
   PLATFORMS,
@@ -13,8 +13,10 @@ import {
   generateQuestionBlocks,
   getStageBasePlatforms,
   createStageEnemies,
+  createStagePowerUps,
   type Platform,
   type StageEnemy,
+  type StagePowerUp,
 } from '@/game-engine/maps/world';
 import { soundEngine } from '@/game-engine/audio/sound-engine';
 import { useAblyRoom, type ObstacleEvent } from '@/features/multiplayer/use-ably-room';
@@ -77,9 +79,9 @@ type RoomData = {
 function resolveTotalStages(room: RoomData | null): number {
   const configured = Number(room?.settings?.stageCount);
   if (Number.isFinite(configured) && configured >= 1) {
-    return Math.min(2, Math.max(1, Math.round(configured)));
+    return Math.min(4, Math.max(1, Math.round(configured)));
   }
-  return 2;
+  return 4;
 }
 
 function getStageQuestions<T>(allQuestions: T[], stage: number, totalStages: number): T[] {
@@ -224,10 +226,14 @@ export default function GamePage() {
   const questionBlocksRef = useRef<Platform[]>([]);
   const [currentStage, setCurrentStage] = useState(1);
   const currentStageRef = useRef(1);
-  const [totalStages, setTotalStages] = useState(2);
-  const totalStagesRef = useRef(2);
+  const [totalStages, setTotalStages] = useState(4);
+  const totalStagesRef = useRef(4);
   const stagePlatformsRef = useRef<Platform[]>(getStageBasePlatforms(1));
   const stageEnemiesRef = useRef<StageEnemy[]>(createStageEnemies(1));
+  const stagePowerUpsRef = useRef<StagePowerUp[]>(createStagePowerUps(1));
+  const projectilesRef = useRef<Projectile[]>([]);
+  const lastShotAtRef = useRef<number>(0);
+  const [ammoCount, setAmmoCount] = useState<number>(0);
   const [stageBanner, setStageBanner] = useState<string | null>(null);
   const stageBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scores, setScores] = useState<Record<string, number>>({});
@@ -376,6 +382,9 @@ export default function GamePage() {
     setCurrentStage(stg);
     stagePlatformsRef.current = getStageBasePlatforms(stg);
     stageEnemiesRef.current = createStageEnemies(stg);
+    stagePowerUpsRef.current = createStagePowerUps(stg);
+    projectilesRef.current = [];
+    setAmmoCount(0);
 
     const allQs = opts?.allQuestions ?? levelQuestionsRef.current;
     const stageQs = getStageQuestions(allQs, stg, tStg);
@@ -431,7 +440,11 @@ export default function GamePage() {
     if (opts?.showToast) {
       soundEngine.playAnswerCorrect();
       const label =
-        stg === 2
+        stg === 4
+          ? `⚡ STAGE 4/${tStg}: Galaksi Cyber — Ambil Power-Up & Tembak Lawan Monster Virus! (${stageQs.length} Soal)`
+          : stg === 3
+          ? `🔥 STAGE 3/${tStg}: Kastil Magma — Waspada Lahar Panas, Lift Vulkanik & Monster Virus! (${stageQs.length} Soal)`
+          : stg === 2
           ? `🌅 STAGE 2/${tStg}: Menara Sunset — Awas Pijakan Rapuh, Lift & Patroli Virus! (${stageQs.length} Soal)`
           : `🏞️ STAGE 1/${tStg}: Lembah Kampus — Jawab Semua Soal untuk Buka Gerbang! (${stageQs.length} Soal)`;
       setStageBanner(label);
@@ -521,6 +534,23 @@ export default function GamePage() {
       if (enemy) {
         enemy.stompedUntil = Math.max(enemy.stompedUntil ?? 0, evt.until);
       }
+    } else if (evt.op === 'powerup') {
+      const pu = stagePowerUpsRef.current.find((p) => p.id === evt.id);
+      if (pu) {
+        pu.collectedUntil = Math.max(pu.collectedUntil ?? 0, evt.until);
+      }
+    } else if (evt.op === 'shoot') {
+      if (projectilesRef.current.some((pr) => pr.id === evt.pid)) return;
+      projectilesRef.current.push({
+        id: evt.pid,
+        x: evt.x,
+        y: evt.y,
+        vx: evt.vx,
+        shooterId: 'remote',
+        stage: evt.stg,
+        createdAt: Date.now(),
+      });
+      soundEngine.playShoot();
     }
   }, []);
 
@@ -541,6 +571,53 @@ export default function GamePage() {
     },
     onObstacleEvent: applyObstacleEvent,
   });
+
+  const fireLaser = useCallback(() => {
+    const me = playersRef.current.get(myIdRef.current);
+    if (!me || exitNoticeRef.current || roomRef.current?.status === 'paused') return;
+    const now = Date.now();
+    const ammo = me.blasterAmmo ?? 0;
+    const until = me.blasterUntil ?? 0;
+    if (ammo <= 0 || until <= now) {
+      return;
+    }
+    if (now - lastShotAtRef.current < 160) {
+      return;
+    }
+    lastShotAtRef.current = now;
+    me.blasterAmmo = ammo - 1;
+    setAmmoCount(me.blasterAmmo);
+    soundEngine.playShoot();
+
+    const facing = me.facing ?? 1;
+    const projId = `proj_${myIdRef.current}_${now}`;
+    const pX = facing === 1 ? me.x + 36 : me.x;
+    const pY = me.y + 20;
+    const pVx = facing * 14;
+    const curStg = currentStageRef.current;
+
+    const proj: Projectile = {
+      id: projId,
+      x: pX,
+      y: pY,
+      vx: pVx,
+      shooterId: myIdRef.current,
+      stage: curStg,
+      createdAt: now,
+    };
+    projectilesRef.current.push(proj);
+
+    const shootEvt = {
+      op: 'shoot' as const,
+      stg: curStg,
+      pid: projId,
+      x: pX,
+      y: pY,
+      vx: pVx,
+    };
+    ably.publishObstacle(shootEvt);
+    pendingObstacleUploadRef.current = shootEvt;
+  }, [ably]);
 
   function notifyLeaveRoom() {
     if (hasLeftRef.current || exitNoticeRef.current || !roomId) return;
@@ -1080,6 +1157,9 @@ export default function GamePage() {
         keysRef.current.jump = down;
         if (down) e.preventDefault();
       }
+      if (['f', 'F', 'x', 'X', 'e', 'E', 'j', 'J'].includes(e.key) && down) {
+        fireLaser();
+      }
     }
     const kd = (e: KeyboardEvent) => onKey(e, true);
     const ku = (e: KeyboardEvent) => onKey(e, false);
@@ -1089,7 +1169,7 @@ export default function GamePage() {
       window.removeEventListener('keydown', kd);
       window.removeEventListener('keyup', ku);
     };
-  }, []);
+  }, [fireLaser]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1208,7 +1288,27 @@ export default function GamePage() {
       }
 
       const syncedNow = ably.getSyncedServerTime();
-      updateStageEntities(stagePlatformsRef.current, stageEnemiesRef.current, dtScale, syncedNow);
+      updateStageEntities(
+        stagePlatformsRef.current,
+        stageEnemiesRef.current,
+        dtScale,
+        syncedNow,
+        stagePowerUpsRef.current,
+        projectilesRef.current,
+        (projId, enemyId) => {
+          soundEngine.playZap();
+          const curStg = currentStageRef.current;
+          const stompEvt = {
+            op: 'stomp' as const,
+            stg: curStg,
+            id: enemyId,
+            until: Date.now() + 9000,
+          };
+          applyObstacleEvent(stompEvt);
+          ably.publishObstacle(stompEvt);
+          pendingObstacleUploadRef.current = stompEvt;
+        },
+      );
 
       const curStage = currentStageRef.current;
       const tStages = totalStagesRef.current;
@@ -1276,12 +1376,17 @@ export default function GamePage() {
           {
             basePlatforms: stagePlatformsRef.current,
             enemies: stageEnemiesRef.current,
+            powerUps: stagePowerUpsRef.current,
             isGateUnlocked,
             isStaff,
             onObstacleEvent: (evt) => {
               applyObstacleEvent(evt);
               ably.publishObstacle(evt);
               pendingObstacleUploadRef.current = evt;
+            },
+            onCollectPowerUp: () => {
+              soundEngine.playPowerUp();
+              setAmmoCount(10);
             },
             onEnterGate: () => {
               if (currentStageRef.current < totalStagesRef.current) {
@@ -1353,8 +1458,10 @@ export default function GamePage() {
         stageTotal,
         isGateUnlocked,
       });
-      drawPlatforms(ctx, [...stagePlatformsRef.current, ...dynBlocks]);
+      drawPlatforms(ctx, [...stagePlatformsRef.current, ...dynBlocks], curStage);
       drawEnemies(ctx, stageEnemiesRef.current, syncedNow);
+      drawPowerUps(ctx, stagePowerUpsRef.current, syncedNow);
+      drawProjectiles(ctx, projectilesRef.current, syncedNow);
 
       for (const p of playersRef.current.values()) {
         const pStage = p.stage ?? 1;
@@ -1372,7 +1479,13 @@ export default function GamePage() {
           p.username,
           role,
           bubblesRef.current.get(p.id) ?? null,
-          { isDying: p.isDying, deathStartedAt: p.deathStartedAt, burnUntil: p.burnUntil },
+          {
+            isDying: p.isDying,
+            deathStartedAt: p.deathStartedAt,
+            burnUntil: p.burnUntil,
+            blasterAmmo: p.blasterAmmo,
+            blasterUntil: p.blasterUntil,
+          },
         );
       }
 
@@ -1479,6 +1592,7 @@ export default function GamePage() {
                 const obs = data.obstacles as {
                   crumbles?: { stage: number; idx: number; startedAt: number }[];
                   stomps?: { stage: number; id: string; until: number }[];
+                  powerups?: { stage: number; id: string; until: number }[];
                 };
                 if (Array.isArray(obs.crumbles)) {
                   for (const c of obs.crumbles) {
@@ -1488,6 +1602,11 @@ export default function GamePage() {
                 if (Array.isArray(obs.stomps)) {
                   for (const s of obs.stomps) {
                     applyObstacleEvent({ op: 'stomp', stg: s.stage, id: s.id, until: s.until });
+                  }
+                }
+                if (Array.isArray(obs.powerups)) {
+                  for (const pu of obs.powerups) {
+                    applyObstacleEvent({ op: 'powerup', stg: pu.stage, id: pu.id, until: pu.until });
                   }
                 }
               }
@@ -2595,7 +2714,22 @@ export default function GamePage() {
               onPointerUp={endControlGroupDrag}
               onPointerCancel={endControlGroupDrag}
             >
-              {editingControlsLayout && <span className="dpad-edit-tag">Geser Lompat</span>}
+              {editingControlsLayout && <span className="dpad-edit-tag">Aksi &amp; Lompat</span>}
+              <button
+                type="button"
+                className={`ctrl-circle ctrl-shoot-btn${ammoCount > 0 ? ' has-ammo' : ''}`}
+                aria-label="Tembak Laser"
+                title="Tembak Laser (F / X / E)"
+                onPointerDown={(e) => {
+                  if (editingControlsLayout) return;
+                  e.preventDefault();
+                  fireLaser();
+                }}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <span className="ctrl-shoot-icon" aria-hidden="true">⚡</span>
+                {ammoCount > 0 && <span className="ctrl-ammo-badge">{ammoCount}</span>}
+              </button>
               <button
                 type="button"
                 className="ctrl-circle"

@@ -1,4 +1,5 @@
-import { DECOR, WORLD, type Platform, type StageEnemy } from '../maps/world';
+import { DECOR, WORLD, type Platform, type StageEnemy, type StagePowerUp } from '../maps/world';
+import type { Projectile } from '../physics/physics';
 
 export type StageRenderInfo = {
   stage: number;
@@ -28,6 +29,8 @@ export type CatHazardState = {
   isDying?: boolean;
   deathStartedAt?: number;
   burnUntil?: number;
+  blasterAmmo?: number;
+  blasterUntil?: number;
 };
 
 function drawCat(
@@ -180,6 +183,30 @@ function drawCat(
   }
 
   const hasStaffTitle = role === 'teacher' || role === 'admin';
+  const isSuperCat = Boolean(hazard?.blasterUntil && hazard.blasterUntil > now);
+  if (isSuperCat) {
+    ctx.save();
+    const pulse = 0.75 + 0.25 * Math.sin(now * 0.01);
+    ctx.shadowColor = '#38bdf8';
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = `rgba(56, 189, 248, ${pulse})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(drawX + w / 2, y + h / 2, Math.max(w, h) * 0.76, 0, Math.PI * 2);
+    ctx.stroke();
+
+    for (let i = 0; i < 3; i += 1) {
+      const ang = now * 0.005 + (i * Math.PI * 2) / 3;
+      const sx = drawX + w / 2 + Math.cos(ang) * (Math.max(w, h) * 0.76);
+      const sy = y + h / 2 + Math.sin(ang) * (Math.max(w, h) * 0.76);
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   if (hasStaffTitle) {
     ctx.save();
     ctx.shadowColor = role === 'admin' ? '#fb7185' : '#ffd338';
@@ -196,7 +223,21 @@ function drawCat(
   ctx.font = 'bold 11px Nunito, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText(name, drawX + w / 2, y - 14);
-  if (role === 'admin') {
+  if (isSuperCat && !hasStaffTitle) {
+    const ammoText = `⚡ LASER x${hazard?.blasterAmmo ?? 0}`;
+    ctx.font = 'bold 9px Nunito, sans-serif';
+    const tw = ctx.measureText(ammoText).width + 10;
+    const bx = drawX + w / 2 - tw / 2;
+    const by = y - 28;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, bx, by - 12, tw, 15, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#fde047';
+    ctx.fillText(ammoText, drawX + w / 2, by - 1);
+  } else if (role === 'admin') {
     ctx.fillStyle = '#ff2a5f';
     ctx.font = 'bold 9.5px Nunito, sans-serif';
     ctx.fillText('ADMINISTRATOR', drawX + w / 2, y - 26);
@@ -266,7 +307,19 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   const now = Date.now();
 
   const sky = ctx.createLinearGradient(0, 0, 0, WORLD.height);
-  if (stage === 2) {
+  if (stage === 4) {
+    sky.addColorStop(0, '#030712');
+    sky.addColorStop(0.28, '#0b0f19');
+    sky.addColorStop(0.58, '#1e1b4b');
+    sky.addColorStop(0.82, '#0284c7');
+    sky.addColorStop(1, '#38bdf8');
+  } else if (stage === 3) {
+    sky.addColorStop(0, '#0f051d');
+    sky.addColorStop(0.32, '#450a0a');
+    sky.addColorStop(0.65, '#991b1b');
+    sky.addColorStop(0.85, '#c2410c');
+    sky.addColorStop(1, '#f97316');
+  } else if (stage === 2) {
     sky.addColorStop(0, '#2e1065');
     sky.addColorStop(0.38, '#7e22ce');
     sky.addColorStop(0.7, '#db2777');
@@ -280,7 +333,58 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, WORLD.width, WORLD.height);
 
-  if (stage === 2) {
+  if (stage === 4) {
+    // Cyber galaxy nebula and orbiting star grid
+    ctx.save();
+    for (let sx = 70; sx < WORLD.width; sx += 170) {
+      const sy = 40 + ((sx * 29) % 200);
+      const twinkle = 0.5 + 0.5 * Math.sin(now * 0.005 + sx);
+      ctx.fillStyle = `rgba(56, 189, 248, ${twinkle})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const nebX of [1000, 2800, 4600]) {
+      const nebGrad = ctx.createRadialGradient(nebX, 480, 20, nebX, 480, 260);
+      nebGrad.addColorStop(0, 'rgba(192, 132, 252, 0.65)');
+      nebGrad.addColorStop(0.45, 'rgba(56, 189, 248, 0.4)');
+      nebGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+      ctx.fillStyle = nebGrad;
+      ctx.beginPath();
+      ctx.arc(nebX, 480, 260, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  } else if (stage === 3) {
+    // Volcanic embers and sparks drifting upwards
+    ctx.save();
+    for (let ex = 40; ex < WORLD.width; ex += 130) {
+      const ey = (ex * 37 + now * 0.05) % 640;
+      const yPos = 680 - ey;
+      const emberX = ex + Math.sin(now * 0.003 + ex) * 18;
+      const emberAlpha = 0.4 + 0.5 * Math.sin(now * 0.005 + ex);
+      ctx.fillStyle = `rgba(253, 186, 116, ${emberAlpha})`;
+      ctx.beginPath();
+      ctx.arc(emberX, yPos, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(239, 68, 68, ${emberAlpha * 0.7})`;
+      ctx.beginPath();
+      ctx.arc(emberX, yPos, 4.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Deep crimson magma glow orbs along horizon
+    for (const lavaX of [900, 2600, 4400]) {
+      const lavaGrad = ctx.createRadialGradient(lavaX, 580, 20, lavaX, 580, 260);
+      lavaGrad.addColorStop(0, 'rgba(254, 215, 170, 0.85)');
+      lavaGrad.addColorStop(0.4, 'rgba(234, 88, 12, 0.55)');
+      lavaGrad.addColorStop(1, 'rgba(234, 88, 12, 0)');
+      ctx.fillStyle = lavaGrad;
+      ctx.beginPath();
+      ctx.arc(lavaX, 580, 260, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  } else if (stage === 2) {
     // Sunset giant glowing sun & evening stars
     ctx.save();
     for (let sx = 140; sx < WORLD.width; sx += 310) {
@@ -305,7 +409,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   }
 
   // Soft distant rolling hills
-  ctx.fillStyle = stage === 2 ? 'rgba(88, 28, 135, 0.38)' : 'rgba(116, 198, 122, 0.35)';
+  ctx.fillStyle = stage === 4 ? 'rgba(30, 27, 75, 0.5)' : stage === 3 ? 'rgba(69, 10, 10, 0.5)' : stage === 2 ? 'rgba(88, 28, 135, 0.38)' : 'rgba(116, 198, 122, 0.35)';
   for (let hx = 0; hx < WORLD.width; hx += 460) {
     ctx.beginPath();
     ctx.arc(hx + 230, WORLD.groundY + 70, 290, Math.PI, 0);
@@ -313,7 +417,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   }
 
   // Fluffy clouds
-  ctx.fillStyle = stage === 2 ? 'rgba(253, 186, 116, 0.78)' : 'rgba(255,255,255,0.92)';
+  ctx.fillStyle = stage === 4 ? 'rgba(30, 41, 59, 0.85)' : stage === 3 ? 'rgba(68, 24, 24, 0.85)' : stage === 2 ? 'rgba(253, 186, 116, 0.78)' : 'rgba(255,255,255,0.92)';
   for (const c of DECOR.clouds) {
     ctx.beginPath();
     ctx.arc(c.x, c.y, 26 * c.s, 0, Math.PI * 2);
@@ -322,10 +426,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
     ctx.fill();
   }
 
-  // Centerpiece building (School in Stage 1, Cyber Sunset Tower in Stage 2)
+  // Centerpiece building (School in Stage 1, Cyber Sunset Tower in Stage 2, Magma Citadel in Stage 3, Orbital Cyber Station in Stage 4)
   const school = DECOR.school;
-  ctx.fillStyle = stage === 2 ? '#1e1b4b' : '#ead7bd';
-  ctx.strokeStyle = stage === 2 ? '#c084fc' : '#997d5c';
+  ctx.fillStyle = stage === 4 ? '#090d16' : stage === 3 ? '#1c1917' : stage === 2 ? '#1e1b4b' : '#ead7bd';
+  ctx.strokeStyle = stage === 4 ? '#06b6d4' : stage === 3 ? '#ea580c' : stage === 2 ? '#c084fc' : '#997d5c';
   ctx.lineWidth = 3;
   ctx.fillRect(school.x, school.y, school.w, school.h);
   ctx.strokeRect(school.x, school.y, school.w, school.h);
@@ -333,12 +437,12 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   // Central clock / radar tower section
   const towerW = 130;
   const towerX = school.x + school.w / 2 - towerW / 2;
-  ctx.fillStyle = stage === 2 ? '#312e81' : '#f3e5cb';
+  ctx.fillStyle = stage === 4 ? '#0f172a' : stage === 3 ? '#292524' : stage === 2 ? '#312e81' : '#f3e5cb';
   ctx.fillRect(towerX, school.y - 105, towerW, 105);
   ctx.strokeRect(towerX, school.y - 105, towerW, 105);
 
   // Roof & pediment
-  ctx.fillStyle = stage === 2 ? '#4c1d95' : '#5a7094';
+  ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#7f1d1d' : stage === 2 ? '#4c1d95' : '#5a7094';
   ctx.beginPath();
   ctx.moveTo(towerX - 18, school.y - 105);
   ctx.lineTo(school.x + school.w / 2, school.y - 155);
@@ -350,8 +454,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   // Clock / Cyber core face
   const clockCx = school.x + school.w / 2;
   const clockCy = school.y - 55;
-  ctx.fillStyle = stage === 2 ? '#0f172a' : '#ffffff';
-  ctx.strokeStyle = stage === 2 ? '#38bdf8' : '#3b4e6d';
+  ctx.fillStyle = stage === 4 ? '#083344' : stage === 3 ? '#450a0a' : stage === 2 ? '#0f172a' : '#ffffff';
+  ctx.strokeStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#f97316' : stage === 2 ? '#38bdf8' : '#3b4e6d';
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.arc(clockCx, clockCy, 26, 0, Math.PI * 2);
@@ -369,8 +473,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
     for (let col = 0; col < 4; col += 1) {
       const wx = school.x + 28 + col * 84;
       const wy = school.y + 42 + row * 120;
-      ctx.fillStyle = stage === 2 ? '#fbbf24' : '#9fd3f7';
-      ctx.strokeStyle = stage === 2 ? '#f59e0b' : '#5b7290';
+      ctx.fillStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#f97316' : stage === 2 ? '#fbbf24' : '#9fd3f7';
+      ctx.strokeStyle = stage === 4 ? '#06b6d4' : stage === 3 ? '#dc2626' : stage === 2 ? '#f59e0b' : '#5b7290';
       ctx.lineWidth = 3;
       roundRect(ctx, wx, wy, 48, 64, 6);
       ctx.fill();
@@ -385,24 +489,24 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   }
 
   // Double doors
-  ctx.fillStyle = stage === 2 ? '#3730a3' : '#6c4223';
+  ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#450a0a' : stage === 2 ? '#3730a3' : '#6c4223';
   roundRect(ctx, school.x + school.w / 2 - 38, school.y + school.h - 105, 76, 105, 8);
   ctx.fill();
-  ctx.strokeStyle = stage === 2 ? '#818cf8' : '#3f220c';
+  ctx.strokeStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#ea580c' : stage === 2 ? '#818cf8' : '#3f220c';
   ctx.stroke();
 
   // Trees
   for (const t of DECOR.trees) {
     const s = t.s ?? 1;
-    ctx.fillStyle = stage === 2 ? '#4c1d95' : '#6b3e1a';
+    ctx.fillStyle = stage === 4 ? '#0f172a' : stage === 3 ? '#1c1917' : stage === 2 ? '#4c1d95' : '#6b3e1a';
     ctx.fillRect(t.x - 9 * s, t.y - 46 * s, 18 * s, 46 * s);
-    ctx.fillStyle = stage === 2 ? '#9d174d' : '#2d8a34';
+    ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#7f1d1d' : stage === 2 ? '#9d174d' : '#2d8a34';
     ctx.beginPath();
     ctx.arc(t.x, t.y - 68 * s, 38 * s, 0, Math.PI * 2);
     ctx.arc(t.x - 28 * s, t.y - 50 * s, 28 * s, 0, Math.PI * 2);
     ctx.arc(t.x + 28 * s, t.y - 50 * s, 28 * s, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = stage === 2 ? '#ec4899' : '#48b04f';
+    ctx.fillStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#ea580c' : stage === 2 ? '#ec4899' : '#48b04f';
     ctx.beginPath();
     ctx.arc(t.x - 10 * s, t.y - 76 * s, 18 * s, 0, Math.PI * 2);
     ctx.fill();
@@ -413,7 +517,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   ctx.fillStyle = '#5a3214';
   ctx.fillRect(sign.x + 30, sign.y + 58, 12, 32);
   ctx.fillRect(sign.x + 110, sign.y + 58, 12, 32);
-  ctx.fillStyle = stage === 2 ? '#fef08a' : '#d89b56';
+  ctx.fillStyle = stage === 4 ? '#bae6fd' : stage === 3 ? '#fed7aa' : stage === 2 ? '#fef08a' : '#d89b56';
   ctx.strokeStyle = '#6c3e18';
   ctx.lineWidth = 3;
   roundRect(ctx, sign.x - 10, sign.y, 172, 62, 10);
@@ -422,7 +526,13 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   ctx.fillStyle = '#4e2709';
   ctx.font = 'bold 11px Nunito, sans-serif';
   ctx.textAlign = 'center';
-  if (stage === 2) {
+  if (stage === 4) {
+    ctx.fillText('STAGE 4: Galaksi Cyber & Power-Up!', sign.x + 76, sign.y + 24);
+    ctx.fillText('Ambil Bintang ⚡ Tembak Laser! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 3) {
+    ctx.fillText('STAGE 3: Kastil Magma & Pijakan Lahar!', sign.x + 76, sign.y + 24);
+    ctx.fillText('Waspada Api & Monster Virus! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 2) {
     ctx.fillText('STAGE 2: Awas Pijakan Rapuh', sign.x + 76, sign.y + 24);
     ctx.fillText('& Monster Virus Patroli! ➜', sign.x + 76, sign.y + 42);
   } else {
@@ -566,15 +676,38 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   ctx.restore();
 }
 
-export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform[]) {
+export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform[], stage = 1) {
   for (const p of platforms) {
     if (p.type === 'ground') {
-      ctx.fillStyle = '#3ca338';
-      ctx.fillRect(p.x, p.y, p.w, 18);
-      ctx.fillStyle = '#257322';
-      ctx.fillRect(p.x, p.y + 18, p.w, 6);
-      ctx.fillStyle = '#8b5a2b';
-      ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      if (stage === 4) {
+        ctx.fillStyle = '#090d16';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#06b6d4';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#083344';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 3) {
+        ctx.fillStyle = '#292524';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#dc2626';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#1c1917';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 2) {
+        ctx.fillStyle = '#312e81';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#4c1d95';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#1e1b4b';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else {
+        ctx.fillStyle = '#3ca338';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#257322';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#8b5a2b';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      }
     } else if (p.type === 'grass') {
       // Dirt base
       ctx.fillStyle = '#8b5a2b';
@@ -840,6 +973,74 @@ export function drawEnemies(ctx: CanvasRenderingContext2D, enemies: StageEnemy[]
       ctx.arc(cx + 5 + e.dir * 1.5, cy - 1, 2.4, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
+  }
+}
+
+export function drawPowerUps(ctx: CanvasRenderingContext2D, powerUps: StagePowerUp[], now = Date.now()) {
+  for (const pu of powerUps) {
+    if (pu.collectedUntil && pu.collectedUntil > now) continue;
+    const bobY = Math.sin(now * 0.006 + pu.x) * 6;
+    const cx = pu.x + pu.w / 2;
+    const cy = pu.y + pu.h / 2 + bobY;
+
+    ctx.save();
+    // Glowing energy halo
+    const halo = ctx.createRadialGradient(cx, cy, 3, cx, cy, 26);
+    halo.addColorStop(0, 'rgba(254, 240, 138, 0.95)');
+    halo.addColorStop(0.5, 'rgba(56, 189, 248, 0.55)');
+    halo.addColorStop(1, 'rgba(56, 189, 248, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 26, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rotating power orb ring
+    ctx.strokeStyle = 'rgba(254, 240, 138, 0.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 15, now * 0.004, now * 0.004 + Math.PI * 1.5);
+    ctx.stroke();
+
+    // Power-Up Icon (Star or Blaster)
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px Nunito, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(pu.kind === 'blaster' ? '⚡' : '🌟', cx, cy);
+
+    // Floating pill badge
+    ctx.fillStyle = '#1e1b4b';
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, cx - 26, cy - 26, 52, 14, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold 8px Nunito, sans-serif';
+    ctx.fillText('POWER-UP', cx, cy - 18);
+    ctx.restore();
+  }
+}
+
+export function drawProjectiles(ctx: CanvasRenderingContext2D, projectiles: Projectile[], now = Date.now()) {
+  void now;
+  for (const pr of projectiles) {
+    ctx.save();
+    ctx.shadowColor = '#38bdf8';
+    ctx.shadowBlur = 12;
+
+    const dir = pr.vx >= 0 ? 1 : -1;
+    const len = 24;
+    ctx.fillStyle = '#38bdf8';
+    ctx.strokeStyle = '#fef08a';
+    ctx.lineWidth = 2;
+    roundRect(ctx, pr.x - (dir === 1 ? len : 0), pr.y - 4, len, 8, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(pr.x - (dir === 1 ? len - 4 : -4), pr.y - 1.5, len - 8, 3);
     ctx.restore();
   }
 }

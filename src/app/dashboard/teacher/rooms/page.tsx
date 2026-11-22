@@ -96,7 +96,7 @@ export default function RoomsPage() {
   const [levelId, setLevelId] = useState('');
   const [customName, setCustomName] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(40);
-  const [stageCount, setStageCount] = useState(2);
+  const [stageCount, setStageCount] = useState(4);
 
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'waiting' | 'completed'>('all');
   const [filterTeacherId, setFilterTeacherId] = useState<string>('');
@@ -537,6 +537,8 @@ export default function RoomsPage() {
               >
                 <option value={1}>1 Stage (Semua soal di Stage 1)</option>
                 <option value={2}>2 Stage (Stage 1 Sekolah + Stage 2 Sunset &amp; Virus)</option>
+                <option value={3}>3 Stage (Stage 1 Sekolah + Stage 2 Sunset + Stage 3 Kastil Magma)</option>
+                <option value={4}>4 Stage (Stage 1-4: Sekolah, Sunset, Magma, Galaksi Cyber &amp; Power-Up Tembakan)</option>
               </select>
               {levelId && (() => {
                 const selectedLvl = levels.find((l) => l.id === levelId);
