@@ -12,10 +12,16 @@ import { addEphemeralChat, getEphemeralChatSince } from '@/server/services/chat-
 import {
   getCachedRoomDbState,
   getLiveRoomPositions,
+  getLiveRoomStatus,
   getStaleUserIds,
   invalidateRoomSyncCache,
+  isPlayerKicked,
+  isRoomDeleted,
+  markPlayerKicked,
+  markRoomDeleted,
   removePresence,
   setCachedRoomDbState,
+  setLiveRoomStatus,
   shouldWritePosToDb,
   touchPresence,
   updateLivePlayerPosition,
@@ -56,6 +62,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const roomId = typeof body?.r === 'string' ? body.r : '';
       const userId = typeof body?.u === 'string' ? body.u : '';
       if (!roomId || !userId) return fail('Parameter tidak lengkap', 400);
+
+      if (isRoomDeleted(roomId)) {
+        return ok({ roomDeleted: true, rs: 'deleted', p: [] });
+      }
+      if (isPlayerKicked(roomId, userId)) {
+        return ok({ kicked: true, p: [] });
+      }
 
       if (typeof body.x === 'number' && typeof body.y === 'number') {
         updateLivePlayerPosition(roomId, {
@@ -294,9 +307,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const schema = z.object({ roomId: z.string().min(1), playerId: z.string().min(1) });
       const { roomId, playerId } = schema.parse(body);
       await assertHost(roomId, user.id);
-      removePresence(roomId, playerId);
+      markPlayerKicked(roomId, playerId);
       await db.delete(roomPlayers).where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, playerId)));
-      await publishToRoom(roomId, 'kicked', { playerId });
+      invalidateRoomSyncCache(roomId);
+      await publishToRoom(roomId, 'kicked', { playerId, left: false });
       return ok({ success: true });
     }
 
@@ -316,6 +330,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       });
       const { roomId, x, y, vx, vy, onGround, isDying, deathStartedAt, burnUntil, facing, chatCursor } =
         schema.parse(body);
+
+      if (isRoomDeleted(roomId)) {
+        return ok({ roomDeleted: true, room: null, players: [], messages: [] });
+      }
+      if (user.role !== 'teacher' && isPlayerKicked(roomId, user.id)) {
+        return ok({ kicked: true });
+      }
 
       const allowedPresence = touchPresence(roomId, user.id);
       const liveMap = getLiveRoomPositions(roomId);
@@ -436,6 +457,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         };
         setCachedRoomDbState(roomId, nextState);
         dbState = { ...nextState, CachedAt: Date.now() };
+      }
+
+      if (!dbState.room) {
+        markRoomDeleted(roomId);
+        return ok({ roomDeleted: true, room: null, players: [], messages: [] });
+      }
+      setLiveRoomStatus(roomId, dbState.room.status);
+      if (user.role !== 'teacher' && isPlayerKicked(roomId, user.id)) {
+        return ok({ kicked: true });
       }
 
       // 3. Get user's session & answered questions (cached in RAM for 8s, invalidated immediately on answer)

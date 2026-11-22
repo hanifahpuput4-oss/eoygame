@@ -143,6 +143,9 @@ export default function GamePage() {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [myRole, setMyRole] = useState('student');
+  const myRoleRef = useRef('student');
+  const [exitNotice, setExitNotice] = useState<'kicked' | 'deleted' | null>(null);
+  const exitNoticeRef = useRef<'kicked' | 'deleted' | null>(null);
   const [chatMinimized, setChatMinimized] = useState(true);
   const [leaderboardMinimized, setLeaderboardMinimized] = useState(true);
 
@@ -261,15 +264,62 @@ export default function GamePage() {
     }
   }
 
+  function triggerForcedExit(reason: 'kicked' | 'deleted') {
+    if (hasLeftRef.current || exitNoticeRef.current) return;
+    if (reason === 'kicked' && myRoleRef.current === 'teacher') return;
+    exitNoticeRef.current = reason;
+    hasLeftRef.current = true;
+    keysRef.current.left = false;
+    keysRef.current.right = false;
+    keysRef.current.jump = false;
+    const me = playersRef.current.get(myIdRef.current);
+    if (me) {
+      me.vx = 0;
+      me.vy = 0;
+    }
+    setExitNotice(reason);
+  }
+
+  function applyLiveRoomStatus(nextStatus: string) {
+    if (!nextStatus) return;
+    if (nextStatus === 'deleted') {
+      if (myRoleRef.current === 'teacher') {
+        hasLeftRef.current = true;
+        router.replace('/dashboard/teacher/rooms');
+      } else {
+        triggerForcedExit('deleted');
+      }
+      return;
+    }
+    if (nextStatus === 'completed') {
+      hasLeftRef.current = true;
+      router.replace(myRoleRef.current === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+      return;
+    }
+    if (nextStatus === 'paused' && myRoleRef.current !== 'teacher') {
+      keysRef.current.left = false;
+      keysRef.current.right = false;
+      keysRef.current.jump = false;
+      const me = playersRef.current.get(myIdRef.current);
+      if (me) {
+        me.vx = 0;
+        me.vy = 0;
+      }
+    }
+    if (roomRef.current) {
+      roomRef.current = { ...roomRef.current, status: nextStatus };
+    }
+    setRoom((prev) => (prev && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev));
+  }
+
   const ably = useAblyRoom(roomId, ablyEnabled, {
     onDirectMove: (rp) => {
       ingestRemotePlayerSnapshot(rp);
     },
     onDirectLeave: (uid, kicked) => {
       if (uid === myIdRef.current) {
-        if (kicked) {
-          alert('Anda dikeluarkan dari ruang oleh guru.');
-          router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+        if (kicked && !hasLeftRef.current && myRoleRef.current !== 'teacher') {
+          triggerForcedExit('kicked');
         }
         return;
       }
@@ -434,6 +484,10 @@ export default function GamePage() {
         return;
       }
       if (!res.ok) {
+        if (res.status === 404) {
+          triggerForcedExit('deleted');
+          return;
+        }
         setError('Ruang tidak ditemukan');
         return;
       }
@@ -444,7 +498,13 @@ export default function GamePage() {
       const r: RoomData = data.room;
       myIdRef.current = p.id;
       myUsernameRef.current = p.username;
+      myRoleRef.current = p.role;
       setMyRole(p.role);
+
+      if (data.kicked && p.role !== 'teacher') {
+        triggerForcedExit('kicked');
+        return;
+      }
 
       if (typeof data.sessionId === 'string' && data.sessionId) {
         sessionIdRef.current = data.sessionId;
@@ -464,7 +524,7 @@ export default function GamePage() {
         setCorrectCount(list.length);
       }
 
-      if (r.status === 'completed' || (p.role !== 'teacher' && r.status !== 'in_progress')) {
+      if (r.status === 'completed' || (p.role !== 'teacher' && r.status !== 'in_progress' && r.status !== 'paused')) {
         router.replace(p.role === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
         return;
       }
@@ -745,6 +805,12 @@ export default function GamePage() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent, down: boolean) {
+      if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')) {
+        keysRef.current.left = false;
+        keysRef.current.right = false;
+        keysRef.current.jump = false;
+        return;
+      }
       const target = e.target as HTMLElement | null;
       const active = document.activeElement as HTMLElement | null;
       const isTyping =
@@ -896,7 +962,13 @@ export default function GamePage() {
         return { ...b, type };
       });
 
-      if (me && (room?.status === 'in_progress' || room?.status === 'waiting')) {
+      const isStudentPaused = room?.status === 'paused' && myRole !== 'teacher';
+      if (
+        me &&
+        !exitNoticeRef.current &&
+        !isStudentPaused &&
+        (myRole === 'teacher' || room?.status === 'in_progress' || room?.status === 'waiting')
+      ) {
         updatePlayerPhysics(
           me,
           keysRef.current,
@@ -1080,6 +1152,19 @@ export default function GamePage() {
               const rtt = Math.max(1, Math.round(performance.now() - tStart));
               ably.setPingMs(rtt);
               const data = await res.json();
+              if (data.roomDeleted || data.rs === 'deleted') {
+                active = false;
+                applyLiveRoomStatus('deleted');
+                return;
+              }
+              if (data.kicked && myRoleRef.current !== 'teacher') {
+                active = false;
+                triggerForcedExit('kicked');
+                return;
+              }
+              if (typeof data.rs === 'string' && data.rs) {
+                applyLiveRoomStatus(data.rs);
+              }
               const peers = Array.isArray(data.p) ? data.p : [];
               for (const rp of peers) {
                 const uid = typeof rp.u === 'string' ? rp.u : '';
@@ -1169,10 +1254,30 @@ export default function GamePage() {
         }
         if (!res.ok || !active) return;
         const data = await res.json();
+        if (data.roomDeleted || data.room === null || data.room?.status === 'deleted') {
+          active = false;
+          applyLiveRoomStatus('deleted');
+          return;
+        }
+        if (data.kicked && myRoleRef.current !== 'teacher') {
+          active = false;
+          triggerForcedExit('kicked');
+          return;
+        }
         if (typeof data.sessionId === 'string' && data.sessionId) {
           sessionIdRef.current = data.sessionId;
         }
         const serverPlayers: RoomPlayer[] = data.players ?? [];
+        if (
+          myRoleRef.current !== 'teacher' &&
+          myIdRef.current &&
+          serverPlayers.length > 0 &&
+          !serverPlayers.some((pl) => pl.userId === myIdRef.current)
+        ) {
+          active = false;
+          triggerForcedExit('kicked');
+          return;
+        }
         setScores((prev) => {
           const next = { ...prev };
           for (const p of serverPlayers) next[p.userId] = p.score ?? 0;
@@ -1217,8 +1322,11 @@ export default function GamePage() {
         }
         if (data.room?.status === 'completed') {
           active = false;
-          router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+          applyLiveRoomStatus('completed');
           return;
+        }
+        if (typeof data.room?.status === 'string') {
+          applyLiveRoomStatus(data.room.status);
         }
         setRoom((prev) => {
           if (!prev) return prev;
@@ -1227,11 +1335,13 @@ export default function GamePage() {
             prev.players.length !== serverPlayers.length ||
             prev.players.some((pl, idx) => pl.userId !== serverPlayers[idx]?.userId);
           if (!statusChanged && !playersChanged) return prev;
-          return {
+          const updated = {
             ...prev,
             status: data.room?.status ?? prev.status,
             players: serverPlayers,
           };
+          roomRef.current = updated;
+          return updated;
         });
         if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
           chatCursorRef.current = data.chatCursor;
@@ -1268,10 +1378,9 @@ export default function GamePage() {
   }, [ably.connected, roomId, levelQuestions]);
 
   useEffect(() => {
-    if (ably.roomStatusEvent === 'completed') {
-      router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
-    }
-  }, [ably.roomStatusEvent, myRole, router]);
+    if (!ably.roomStatusEvent) return;
+    applyLiveRoomStatus(ably.roomStatusEvent);
+  }, [ably.roomStatusEvent]);
 
   useEffect(() => {
     if (!ably.scoreEvent) return;
@@ -1281,12 +1390,16 @@ export default function GamePage() {
   useEffect(() => {
     if (!ably.kickedPlayerId) return;
     if (ably.kickedPlayerId === myIdRef.current) {
-      alert('Anda dikeluarkan dari ruang oleh guru.');
-      router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+      if (!hasLeftRef.current && myRoleRef.current !== 'teacher') {
+        triggerForcedExit('kicked');
+      }
     } else {
       playersRef.current.delete(ably.kickedPlayerId);
+      setRoom((prev) =>
+        prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== ably.kickedPlayerId) } : prev,
+      );
     }
-  }, [ably.kickedPlayerId, myRole, router]);
+  }, [ably.kickedPlayerId]);
 
   useEffect(() => {
     if (!chatMinimized) {
@@ -1354,7 +1467,11 @@ export default function GamePage() {
   }
 
   function touchControl(dir: 'left' | 'right' | 'jump', down: boolean) {
-    if (editingControlsLayout) {
+    if (
+      editingControlsLayout ||
+      exitNoticeRef.current ||
+      (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')
+    ) {
       keysRef.current.left = false;
       keysRef.current.right = false;
       keysRef.current.jump = false;
@@ -1402,6 +1519,7 @@ export default function GamePage() {
 
   async function sendChat(e: React.FormEvent) {
     e.preventDefault();
+    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')) return;
     const text = chatInput.trim();
     if (!text) return;
     setChatInput('');
@@ -1435,7 +1553,19 @@ export default function GamePage() {
   const allBottomMinimized = panelsHidden || !hasVisibleQuestion;
   const controlsPosClass = allBottomMinimized ? '' : ' mp-elevated';
 
+  async function togglePauseGame() {
+    if (!room) return;
+    const nextStatus = room.status === 'paused' ? 'in_progress' : 'paused';
+    applyLiveRoomStatus(nextStatus);
+    await fetch('/api/rooms/' + roomId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: nextStatus }),
+    });
+  }
+
   async function endGame() {
+    hasLeftRef.current = true;
     const res = await fetch('/api/rooms/' + roomId, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1459,6 +1589,7 @@ export default function GamePage() {
   }
   async function submitAnswer(e: React.FormEvent) {
     e.preventDefault();
+    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')) return;
     if (!question || !selected || submitting) return;
     setSubmitting(true);
     try {
@@ -1611,6 +1742,14 @@ export default function GamePage() {
                   </div>
                   {myRole === 'teacher' && (
                     <div className="mp-teacher-actions">
+                      <button
+                        type="button"
+                        className="btn-blue-action mp-menu-btn"
+                        onClick={togglePauseGame}
+                      >
+                        <span aria-hidden="true">{room?.status === 'paused' ? '▶' : '⏸'}</span>{' '}
+                        {room?.status === 'paused' ? 'Lanjut' : 'Jeda'}
+                      </button>
                       <button
                         type="button"
                         className="btn-blue-action mp-menu-btn"
@@ -2357,6 +2496,53 @@ export default function GamePage() {
                 }}
               >
                 Oke <span aria-hidden="true">▶</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {room?.status === 'paused' && myRole !== 'teacher' && !exitNotice && (
+          <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Room Dijeda">
+            <div className="parchment-card feedback-modal-card">
+              <div className="green-arch-ribbon">⏸ Room Dijeda</div>
+              <div className="big-star-wrap" aria-hidden="true" style={{ fontSize: 56, lineHeight: 1 }}>
+                ⏸️
+              </div>
+              <p className="feedback-star-bonus" style={{ fontSize: 22 }}>
+                Permainan Sedang Dijeda
+              </p>
+              <p className="feedback-subtext">
+                Room sedang dijeda, menunggu aksi dari guru untuk melanjutkan permainan...
+              </p>
+            </div>
+          </div>
+        )}
+
+        {exitNotice && (
+          <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Notifikasi Ruang">
+            <div className="parchment-card feedback-modal-card">
+              <div className="green-arch-ribbon">
+                {exitNotice === 'kicked' ? 'Dikeluarkan dari Ruang' : 'Room Dihapus'}
+              </div>
+              <div className="big-star-wrap" aria-hidden="true" style={{ fontSize: 56, lineHeight: 1 }}>
+                {exitNotice === 'kicked' ? '🚫' : '🗑️'}
+              </div>
+              <p className="feedback-star-bonus" style={{ fontSize: 22 }}>
+                {exitNotice === 'kicked' ? 'Kamu Di-kick Sama Guru' : 'Room Game Telah Dihapus'}
+              </p>
+              <p className="feedback-subtext">
+                {exitNotice === 'kicked'
+                  ? 'Kamu telah dikeluarkan dari ruang permainan ini oleh guru.'
+                  : 'Room game ini telah dihapus oleh guru. Silakan kembali ke dashboard.'}
+              </p>
+              <button
+                type="button"
+                className="btn-orange-action"
+                onClick={() => {
+                  router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+                }}
+              >
+                Kembali ke Dashboard
               </button>
             </div>
           </div>

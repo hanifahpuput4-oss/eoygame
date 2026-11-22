@@ -8,7 +8,16 @@ import { getRoom, updateRoomStatus, removePlayer, assertHost, leaveRoom, ensureS
 import { stripCorrectAnswer } from '@/server/services/question-service';
 import { publishToRoom } from '@/server/services/realtime-service';
 import { getEphemeralChatSince } from '@/server/services/chat-store';
-import { invalidateRoomSyncCache, removePresence, touchPresence } from '@/server/services/presence-store';
+import {
+  invalidateRoomSyncCache,
+  isPlayerKicked,
+  isRoomDeleted,
+  markPlayerKicked,
+  markRoomDeleted,
+  removePresence,
+  setLiveRoomStatus,
+  touchPresence,
+} from '@/server/services/presence-store';
 import { generateId } from '@/server/auth/crypto';
 import { ok, fail, handleError } from '@/server/middleware/http';
 
@@ -45,13 +54,21 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const { id } = await ctx.params;
     const bootstrap = req.nextUrl.searchParams.get('bootstrap') === '1';
 
+    if (isRoomDeleted(id)) {
+      return fail('Room game telah dihapus oleh guru', 404);
+    }
+
     if (!bootstrap) {
       return ok({ room: await getRoom(id) });
     }
 
     let room = await getRoom(id);
+    setLiveRoomStatus(id, room.status);
+    const kicked = user.role !== 'teacher' && isPlayerKicked(id, user.id);
     const isAllowedInArena =
-      room.status !== 'completed' && (user.role === 'teacher' || room.status === 'in_progress');
+      !kicked &&
+      room.status !== 'completed' &&
+      (user.role === 'teacher' || room.status === 'in_progress' || room.status === 'paused');
 
     if (isAllowedInArena) {
       touchPresence(id, user.id, true);
@@ -119,6 +136,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       answeredQuestionIds,
       answerResults,
       correctCount: answeredQuestionIds.length,
+      kicked,
     });
   } catch (err) {
     return handleError(err);
@@ -148,16 +166,18 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (body.action === 'remove-player') {
       const schema = z.object({ playerId: z.string().min(1) });
       const { playerId } = schema.parse(body);
-      removePresence(id, playerId);
+      markPlayerKicked(id, playerId);
       await removePlayer(id, user.id, playerId);
       invalidateRoomSyncCache(id);
+      await publishToRoom(id, 'kicked', { playerId, left: false });
       return ok({ room: await getRoom(id) });
     }
 
     const { status } = statusSchema.parse(body);
     const room = await updateRoomStatus(id, user.id, status);
+    setLiveRoomStatus(id, status);
     invalidateRoomSyncCache(id);
-    void publishToRoom(id, 'room-status', { status });
+    await publishToRoom(id, 'room-status', { status });
     return ok({ room });
   } catch (err) {
     return handleError(err);
@@ -172,7 +192,9 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     }
     const { id } = await ctx.params;
     await assertHost(id, user.id);
+    markRoomDeleted(id);
     await db.delete(rooms).where(eq(rooms.id, id));
+    await publishToRoom(id, 'room-status', { status: 'deleted' });
     return ok({ success: true });
   } catch (err) {
     return handleError(err);

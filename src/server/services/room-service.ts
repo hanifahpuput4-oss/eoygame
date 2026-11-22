@@ -12,6 +12,7 @@ import {
 } from '@/db/schema';
 import { generateCode, generateId } from '@/server/auth/crypto';
 import type { RoomInput } from '@/server/middleware/validation';
+import { clearPlayerKicked, setLiveRoomStatus } from './presence-store';
 
 export class RoomError extends Error {
   constructor(
@@ -169,7 +170,7 @@ export async function listTeacherRooms(hostId: string) {
 export async function joinRoom(code: string, userId: string, avatar: string, role: string) {
   const room = await getRoomByCode(code);
 
-  if (role !== 'teacher' && room.status !== 'in_progress') {
+  if (role !== 'teacher' && room.status !== 'in_progress' && room.status !== 'paused') {
     throw new RoomError(
       room.status === 'waiting'
         ? 'Game belum dimulai oleh guru. Tunggu guru menekan "Mulai Game".'
@@ -177,6 +178,8 @@ export async function joinRoom(code: string, userId: string, avatar: string, rol
       409,
     );
   }
+  clearPlayerKicked(room.id, userId);
+  setLiveRoomStatus(room.id, room.status);
   const existing = await db
     .select({ id: roomPlayers.id })
     .from(roomPlayers)

@@ -206,9 +206,13 @@ export function useAblyRoom(
           setScoreEvent(data as unknown as ScoreData);
         } else if (name === 'kicked' && data) {
           const pid = typeof data.playerId === 'string' ? data.playerId : '';
+          const isVoluntaryLeave = Boolean(data.left);
           if (pid) {
-            setKickedPlayerId(pid);
-            callbacksRef.current?.onDirectLeave?.(pid, !data.left);
+            if (!isVoluntaryLeave) {
+              setKickedPlayerId(pid);
+            }
+            callbacksRef.current?.onDirectLeave?.(pid, !isVoluntaryLeave);
+            setPresencePlayers((prev) => prev.filter((p) => p.id !== pid));
           }
         } else if (name === 'room-status' && data) {
           if (typeof data.status === 'string') {

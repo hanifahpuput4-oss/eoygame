@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getLiveRoomPositions,
+  getLiveRoomStatus,
+  isPlayerKicked,
+  isRoomDeleted,
   touchPresence,
   updateLivePlayerPosition,
 } from '@/server/services/presence-store';
@@ -75,6 +78,13 @@ export async function POST(req: NextRequest) {
     const userId = typeof body?.u === 'string' ? body.u : '';
     if (!roomId || !userId) {
       return NextResponse.json({ error: 'invalid' }, { status: 400 });
+    }
+
+    if (isRoomDeleted(roomId)) {
+      return NextResponse.json({ wsPort, roomDeleted: true, rs: 'deleted', p: [] });
+    }
+    if (isPlayerKicked(roomId, userId)) {
+      return NextResponse.json({ wsPort, kicked: true, p: [] });
     }
 
     if (typeof body.x === 'number' && typeof body.y === 'number') {
@@ -156,7 +166,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ wsPort, p: peers });
+    return NextResponse.json({ wsPort, rs: getLiveRoomStatus(roomId), p: peers });
   } catch {
     return NextResponse.json({ p: [] }, { status: 200 });
   }

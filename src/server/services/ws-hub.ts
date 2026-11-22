@@ -4,6 +4,8 @@ import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import {
   getLiveRoomPositions,
+  isPlayerKicked,
+  isRoomDeleted,
   removePresence,
   touchPresence,
   updateLivePlayerPosition,
@@ -211,6 +213,25 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
       client.socket.write(reply);
     }
     if (client.roomId && client.userId) {
+      if (isRoomDeleted(client.roomId)) {
+        if (!client.socket.destroyed && client.socket.writable) {
+          client.socket.write(
+            encodeWsTextFrame(JSON.stringify({ t: 'evt', name: 'room-status', data: { status: 'deleted' } })),
+          );
+        }
+        return;
+      }
+      if (client.role !== 'teacher' && isPlayerKicked(client.roomId, client.userId)) {
+        if (!client.socket.destroyed && client.socket.writable) {
+          client.socket.write(
+            encodeWsTextFrame(
+              JSON.stringify({ t: 'evt', name: 'kicked', data: { playerId: client.userId, left: false } }),
+            ),
+          );
+        }
+        removeClientFromRoom(client);
+        return;
+      }
       touchPresence(client.roomId, client.userId);
     }
     return;
@@ -282,6 +303,25 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
 
   // High-frequency kinematics / movement packet (slimmed payload supported)
   if (t === 'm') {
+    if (isRoomDeleted(client.roomId)) {
+      if (!client.socket.destroyed && client.socket.writable) {
+        client.socket.write(
+          encodeWsTextFrame(JSON.stringify({ t: 'evt', name: 'room-status', data: { status: 'deleted' } })),
+        );
+      }
+      return;
+    }
+    if (client.role !== 'teacher' && isPlayerKicked(client.roomId, client.userId)) {
+      if (!client.socket.destroyed && client.socket.writable) {
+        client.socket.write(
+          encodeWsTextFrame(
+            JSON.stringify({ t: 'evt', name: 'kicked', data: { playerId: client.userId, left: false } }),
+          ),
+        );
+      }
+      removeClientFromRoom(client);
+      return;
+    }
     const x = typeof msg.x === 'number' ? msg.x : 0;
     const y = typeof msg.y === 'number' ? msg.y : 0;
     const vx = typeof msg.vx === 'number' ? msg.vx : 0;
