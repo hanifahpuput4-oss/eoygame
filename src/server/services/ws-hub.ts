@@ -394,6 +394,12 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
     return;
   }
 
+  if (t === 'cmd') {
+    if (client.role !== 'teacher' && client.role !== 'admin') return;
+    broadcastRoomEvent(client.roomId, { ...msg }, client.userId, client.id);
+    return;
+  }
+
   // High-frequency kinematics / movement packet (slimmed payload supported)
   if (t === 'm') {
     if (isRoomDeleted(client.roomId)) {

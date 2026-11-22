@@ -1,6 +1,7 @@
 export type LivePlayerState = {
   userId: string;
   username: string;
+  fullName?: string;
   avatar: string;
   role: string;
   stage?: number;
@@ -22,6 +23,7 @@ export type CachedRoomDbState = {
   players: {
     userId: string;
     username: string;
+    fullName?: string | null;
     avatar: string;
     role: string;
     lastX: number | null;

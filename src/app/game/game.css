@@ -255,6 +255,113 @@
   border-color: #4ade80;
 }
 
+.mp-stage-chip-compact {
+  appearance: none;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1.5px solid rgba(173, 198, 255, 0.4);
+  background: rgba(15, 23, 42, 0.65);
+  color: #e2e8f0;
+  font-family: var(--font-fredoka), sans-serif;
+  font-size: 0.78rem;
+  font-weight: 800;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.mp-stage-chip-compact:hover {
+  background: rgba(59, 130, 246, 0.45);
+  border-color: #93c5fd;
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.mp-stage-chip-compact.is-active {
+  background: linear-gradient(180deg, #ffca28, #f59e0b);
+  border-color: #fde68a;
+  color: #1e1b4b;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.55);
+  transform: scale(1.08);
+}
+
+.mp-stage-chip-compact.is-cleared {
+  border-color: #4ade80;
+}
+
+.mirror-indicator-pill {
+  position: absolute;
+  top: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 28;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 2px solid #38bdf8;
+  border-radius: 999px;
+  color: #bae6fd;
+  font-size: 0.8rem;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5), 0 0 12px rgba(56, 189, 248, 0.4);
+  animation: pulse-mirror 2s infinite alternate;
+}
+
+.mirror-close-btn {
+  background: rgba(239, 68, 68, 0.8);
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.mirror-close-btn:hover {
+  background: #dc2626;
+}
+
+@keyframes pulse-mirror {
+  0% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 8px rgba(56, 189, 248, 0.3); }
+  100% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6), 0 0 16px rgba(56, 189, 248, 0.7); }
+}
+
+.admin-key-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #059669;
+  color: #ecfdf5;
+  border: 1px solid #34d399;
+  box-shadow: 0 2px 6px rgba(5, 150, 105, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.sys-chat-entry {
+  color: #fde047;
+  font-size: 0.82rem;
+  background: rgba(245, 158, 11, 0.12);
+  border-left: 2.5px solid #f59e0b;
+  padding: 3px 6px;
+  border-radius: 0 4px 4px 0;
+  margin: 2px 0;
+}
+
 .mp-stage-banner-toast {
   position: absolute;
   top: 76px;

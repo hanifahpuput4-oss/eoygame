@@ -19,7 +19,7 @@ import {
   type StagePowerUp,
 } from '@/game-engine/maps/world';
 import { soundEngine } from '@/game-engine/audio/sound-engine';
-import { useAblyRoom, type ObstacleEvent } from '@/features/multiplayer/use-ably-room';
+import { useAblyRoom, type ObstacleEvent, type RoomCommandEvent } from '@/features/multiplayer/use-ably-room';
 import { clearCachedData } from '@/lib/client-cache';
 import '../game.css';
 
@@ -50,6 +50,7 @@ const HUD_CONTROLS_STORAGE_KEY = 'llys_hud_controls_v1';
 type RoomPlayer = {
   userId: string;
   username: string;
+  fullName?: string | null;
   avatar: string;
   role?: string;
   stage?: number;
@@ -111,7 +112,16 @@ function getRoomSubjectTitle(room: RoomData | null): string {
   return room.name?.split(/\s*\(|\s*-/)[0]?.trim() || 'Arena llysSmart';
 }
 
-type ChatMsg = { seq?: number; id: string; userId?: string; senderName: string; text: string; createdAt: string };
+type ChatMsg = {
+  seq?: number;
+  id: string;
+  userId?: string;
+  senderName: string;
+  senderFullName?: string;
+  role?: string;
+  text: string;
+  createdAt: string;
+};
 
 type Question = {
   id: string;
@@ -119,6 +129,7 @@ type Question = {
   points: number;
   timeLimit: number;
   options: { label: string; content: string }[];
+  correctAnswer?: string;
 };
 
 const CHIP_COLORS = ['blue', 'pink', 'green', 'yellow', 'purple'] as const;
@@ -219,7 +230,7 @@ export default function GamePage() {
   const [sfxVolume, setSfxVolume] = useState(0.75);
   const [answeredQuestionIds, setAnsweredQuestionIds] = useState<string[]>([]);
   const answeredIdsRef = useRef<Set<string>>(new Set());
-  const answerResultsRef = useRef<Map<string, boolean>>(new Map());
+  const answerResultsRef = useRef<Map<string, boolean | 'assisted'>>(new Map());
   const [correctCount, setCorrectCount] = useState(0);
   const [levelQuestions, setLevelQuestions] = useState<Question[]>([]);
   const levelQuestionsRef = useRef<Question[]>([]);
@@ -234,6 +245,10 @@ export default function GamePage() {
   const projectilesRef = useRef<Projectile[]>([]);
   const lastShotAtRef = useRef<number>(0);
   const [ammoCount, setAmmoCount] = useState<number>(0);
+  const [isGodMode, setIsGodMode] = useState(false);
+  const isGodModeRef = useRef(false);
+  const [mirrorTarget, setMirrorTarget] = useState<string | null>(null);
+  const mirrorTargetRef = useRef<{ userId: string; username: string } | 'all' | null>(null);
   const [stageBanner, setStageBanner] = useState<string | null>(null);
   const stageBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scores, setScores] = useState<Record<string, number>>({});
@@ -247,6 +262,7 @@ export default function GamePage() {
   const seenMsgIdsRef = useRef<Set<string>>(new Set());
   const chatCursorRef = useRef<number>(-1);
   const myUsernameRef = useRef<string>('');
+  const myFullNameRef = useRef<string>('');
   const sessionIdRef = useRef<string>('');
   const lastSyncedPosRef = useRef<{ x: number; y: number; facing: number }>({ x: -9999, y: -9999, facing: 1 });
   const hasLeftRef = useRef(false);
@@ -258,6 +274,7 @@ export default function GamePage() {
   function ingestRemotePlayerSnapshot(rp: {
     id: string;
     username: string;
+    fullName?: string;
     avatar: string;
     role?: string;
     stage?: number;
@@ -283,6 +300,7 @@ export default function GamePage() {
       existing.vx = pvx;
       existing.vy = pvy;
       existing.facing = rp.facing;
+      if (rp.fullName) existing.fullName = rp.fullName;
       if (typeof rp.stage === 'number') existing.stage = rp.stage;
       if (typeof rp.onGround === 'boolean') existing.onGround = rp.onGround;
       if (typeof rp.isDying === 'boolean') existing.isDying = rp.isDying;
@@ -310,9 +328,11 @@ export default function GamePage() {
       }
       existing.lastPacketAt = nowWall;
     } else {
+      const resolvedFullName = rp.fullName || roomRef.current?.players?.find((pl) => pl.userId === rp.id)?.fullName || undefined;
       playersRef.current.set(rp.id, {
         id: rp.id,
         username: rp.username,
+        fullName: resolvedFullName,
         avatar: rp.avatar,
         role: rp.role,
         stage: rp.stage ?? 1,
@@ -389,11 +409,19 @@ export default function GamePage() {
     const allQs = opts?.allQuestions ?? levelQuestionsRef.current;
     const stageQs = getStageQuestions(allQs, stg, tStg);
     const uid = opts?.seedId || myIdRef.current || 'anon';
-    questionBlocksRef.current = generateQuestionBlocks(
-      stageQs.map((q) => q.id),
-      `${uid}:${roomId}:s${stg}`,
-      stg,
-    );
+    
+    // Default Guru & Admin: kotak soal bersih/hilang total, kecuali sedang mirror!
+    if (isStaff && !mirrorTargetRef.current) {
+      questionBlocksRef.current = [];
+    } else {
+      const mirror = mirrorTargetRef.current;
+      const seedUserId = mirror && mirror !== 'all' ? mirror.userId : uid;
+      questionBlocksRef.current = generateQuestionBlocks(
+        stageQs.map((q) => q.id),
+        `${seedUserId}:${roomId}:s${stg}`,
+        stg,
+      );
+    }
 
     if (opts?.persistCheckpoint !== false && uid && roomId) {
       try {
@@ -554,6 +582,87 @@ export default function GamePage() {
     }
   }, []);
 
+  const applyIncomingCommand = useCallback((cmd: RoomCommandEvent) => {
+    const isTarget = cmd.targetId === 'all' || cmd.targetId === myIdRef.current;
+    if (cmd.op === 'god') {
+      const targetP = playersRef.current.get(cmd.targetId);
+      if (targetP) {
+        targetP.isGodMode = cmd.value;
+      }
+      if (isTarget) {
+        isGodModeRef.current = cmd.value;
+        setIsGodMode(cmd.value);
+        const me = playersRef.current.get(myIdRef.current);
+        if (me) me.isGodMode = cmd.value;
+        if (cmd.value) {
+          soundEngine.playPowerUp();
+          setStageBanner('👑 GOD MODE DIAKTIFKAN! Kamu kebal rintangan & infinite power-up.');
+        } else {
+          setStageBanner('🛡️ God Mode telah dinonaktifkan.');
+        }
+      }
+    } else if (cmd.op === 'teleport') {
+      if (isTarget) {
+        if (typeof cmd.stage === 'number' && cmd.stage !== currentStageRef.current) {
+          applyStage(cmd.stage, { respawnPlayer: true, showToast: true });
+        } else if (typeof cmd.x === 'number' && typeof cmd.y === 'number') {
+          const me = playersRef.current.get(myIdRef.current);
+          if (me) {
+            me.x = cmd.x;
+            me.y = cmd.y;
+            me.vx = 0;
+            me.vy = 0;
+          }
+          soundEngine.playBounce();
+          setStageBanner('🌀 Kamu diteleportasikan oleh Guru/Admin!');
+        }
+      }
+    } else if (cmd.op === 'reset') {
+      if (isTarget) {
+        answeredIdsRef.current.clear();
+        answerResultsRef.current.clear();
+        setAnsweredQuestionIds([]);
+        setCorrectCount(0);
+        questionRef.current = null;
+        setQuestion(null);
+        setQuestionMinimized(false);
+        setSelected('');
+        if (myIdRef.current) {
+          setScores((prev) => ({ ...prev, [myIdRef.current]: 0 }));
+          try {
+            window.localStorage.setItem(`llys_stage_${roomId}_${myIdRef.current}`, '1');
+          } catch {}
+        }
+        applyStage(1, { respawnPlayer: true, showToast: true });
+        soundEngine.playDeath();
+        setStageBanner('🔄 Jawaban & Progres kamu telah di-reset ke Stage 1 oleh Guru/Admin.');
+      }
+      if (isStaff && mirrorTargetRef.current) {
+        const curM = mirrorTargetRef.current;
+        if (cmd.targetId === 'all' || (curM !== 'all' && curM.userId === cmd.targetId)) {
+          answerResultsRef.current.clear();
+          const curStg = currentStageRef.current;
+          const stageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
+          const seedUserId = curM !== 'all' ? curM.userId : (myIdRef.current || 'anon');
+          questionBlocksRef.current = generateQuestionBlocks(
+            stageQs.map((q) => q.id),
+            `${seedUserId}:${roomId}:s${curStg}`,
+            curStg,
+          );
+        }
+      }
+    } else if (cmd.op === 'assist_answer') {
+      if (isTarget) {
+        answeredIdsRef.current.add(cmd.qid);
+        answerResultsRef.current.set(cmd.qid, 'assisted');
+        setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
+        setCorrectCount(answeredIdsRef.current.size);
+        soundEngine.playAnswerCorrect();
+        setStageBanner('🌟 Soal telah dibantu dijawab oleh Guru/Admin! (+0 Poin, Misi Tercatat)');
+      }
+    }
+  }, [applyStage]);
+
   const ably = useAblyRoom(roomId, ablyEnabled, {
     onDirectMove: (rp) => {
       ingestRemotePlayerSnapshot(rp);
@@ -570,6 +679,7 @@ export default function GamePage() {
       setRoom((prev) => (prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== uid) } : prev));
     },
     onObstacleEvent: applyObstacleEvent,
+    onCommandEvent: applyIncomingCommand,
   });
 
   const fireLaser = useCallback(() => {
@@ -826,6 +936,7 @@ export default function GamePage() {
       setRoom(r);
       roomRef.current = r;
       const myEntry = (r.players ?? []).find((pl: RoomPlayer) => pl.userId === p.id);
+      myFullNameRef.current = p.fullName || myEntry?.fullName || '';
 
       for (const pl of r.players ?? []) {
         const isMe = pl.userId === p.id;
@@ -836,6 +947,7 @@ export default function GamePage() {
           playersRef.current.set(pl.userId, {
             id: pl.userId,
             username: pl.username,
+            fullName: pl.fullName || undefined,
             avatar: pl.avatar,
             role: isMe ? p.role : pl.role,
             stage: pl.stage ?? 1,
@@ -857,6 +969,7 @@ export default function GamePage() {
         playersRef.current.set(p.id, {
           id: p.id,
           username: p.username,
+          fullName: p.fullName || myEntry?.fullName || undefined,
           avatar: p.avatar,
           role: p.role,
           stage: myEntry?.stage ?? 1,
@@ -1110,12 +1223,15 @@ export default function GamePage() {
         existing.targetX = rp.x;
         existing.targetY = rp.y;
         existing.facing = rp.facing;
+        if ((rp as any).fullName) existing.fullName = (rp as any).fullName;
         if (typeof rp.stage === 'number') existing.stage = rp.stage;
         if (rp.role) existing.role = rp.role;
       } else {
+        const resolvedFullName = (rp as any).fullName || roomRef.current?.players?.find((pl) => pl.userId === rp.id)?.fullName || undefined;
         playersRef.current.set(rp.id, {
           id: rp.id,
           username: rp.username,
+          fullName: resolvedFullName,
           avatar: rp.avatar,
           role: rp.role,
           stage: rp.stage ?? 1,
@@ -1159,6 +1275,24 @@ export default function GamePage() {
       }
       if (['f', 'F', 'x', 'X', 'e', 'E', 'j', 'J'].includes(e.key) && down) {
         fireLaser();
+      }
+      if (e.key === '/' && down) {
+        if (!isStaffRole(myRoleRef.current)) return;
+        e.preventDefault();
+        keysRef.current.left = false;
+        keysRef.current.right = false;
+        keysRef.current.jump = false;
+        setPanelsHidden(false);
+        setChatMinimized(false);
+        chatMinimizedRef.current = false;
+        setChatInput('/');
+        setTimeout(() => {
+          const inputEl = document.getElementById('mp-chat-input') as HTMLInputElement | null;
+          if (inputEl) {
+            inputEl.focus();
+            inputEl.setSelectionRange(1, 1);
+          }
+        }, 30);
       }
     }
     const kd = (e: KeyboardEvent) => onKey(e, true);
@@ -1323,7 +1457,7 @@ export default function GamePage() {
       const dynBlocks: Platform[] = questionBlocksRef.current.map((b) => {
         const qid = b.questionId ?? '';
         const res = answerResultsRef.current.get(qid);
-        const type = res === true ? 'qblock-correct' : res === false ? 'qblock-wrong' : 'qblock';
+        const type = res === 'assisted' ? 'qblock-assisted' : res === true ? 'qblock-correct' : res === false ? 'qblock-wrong' : 'qblock';
         return { ...b, type };
       });
 
@@ -1346,23 +1480,39 @@ export default function GamePage() {
           playersRef.current.values(),
           dynBlocks,
           (qid) => {
-            if (isStaff) return;
-            if (answeredIdsRef.current.has(qid)) return;
-            if (questionRef.current && !answeredIdsRef.current.has(questionRef.current.id)) {
-              setQuestionMinimized(false);
-              return;
-            }
-            const found = levelQuestionsRef.current.find((q) => q.id === qid);
-            if (found) {
-              keysRef.current.left = false;
-              keysRef.current.right = false;
-              keysRef.current.jump = false;
-              me.vx = 0;
-              soundEngine.playQuestionOpen();
-              questionRef.current = found;
-              setQuestion(found);
-              setQuestionMinimized(false);
-              setSelected('');
+            if (!isStaff) {
+              if (answeredIdsRef.current.has(qid)) return;
+              if (questionRef.current && !answeredIdsRef.current.has(questionRef.current.id)) {
+                setQuestionMinimized(false);
+                return;
+              }
+              const found = levelQuestionsRef.current.find((q) => q.id === qid);
+              if (found) {
+                keysRef.current.left = false;
+                keysRef.current.right = false;
+                keysRef.current.jump = false;
+                me.vx = 0;
+                soundEngine.playQuestionOpen();
+                questionRef.current = found;
+                setQuestion(found);
+                setQuestionMinimized(false);
+                setSelected('');
+              }
+            } else if (mirrorTargetRef.current) {
+              const res = answerResultsRef.current.get(qid);
+              if (res === true || res === 'assisted') return;
+              const found = levelQuestionsRef.current.find((q) => q.id === qid);
+              if (found) {
+                keysRef.current.left = false;
+                keysRef.current.right = false;
+                keysRef.current.jump = false;
+                me.vx = 0;
+                soundEngine.playQuestionOpen();
+                questionRef.current = found;
+                setQuestion(found);
+                setQuestionMinimized(false);
+                setSelected('');
+              }
             }
           },
           dtScale,
@@ -1468,6 +1618,7 @@ export default function GamePage() {
         if (pStage !== curStage) continue;
 
         const role = p.id === myIdRef.current ? myRole : (p.role ?? (room?.hostId === p.id ? 'teacher' : 'student'));
+        const displayName = p.fullName?.trim() || p.username;
         drawCat(
           ctx,
           p.x,
@@ -1476,7 +1627,7 @@ export default function GamePage() {
           PLAYER_H,
           p.avatar,
           p.facing,
-          p.username,
+          displayName,
           role,
           bubblesRef.current.get(p.id) ?? null,
           {
@@ -1485,6 +1636,7 @@ export default function GamePage() {
             burnUntil: p.burnUntil,
             blasterAmmo: p.blasterAmmo,
             blasterUntil: p.blasterUntil,
+            isGodMode: p.isGodMode || (p.id === myIdRef.current && isGodModeRef.current),
           },
         );
       }
@@ -1555,6 +1707,7 @@ export default function GamePage() {
                   r: roomId,
                   u: me.id,
                   un: me.username,
+                  fn: myFullNameRef.current || me.fullName || undefined,
                   av: me.avatar,
                   rl: myRole,
                   stg: currentStageRef.current,
@@ -1632,6 +1785,7 @@ export default function GamePage() {
                 ingestRemotePlayerSnapshot({
                   id: uid,
                   username: typeof rp.un === 'string' ? rp.un : 'Player',
+                  fullName: typeof rp.fn === 'string' ? rp.fn : undefined,
                   avatar: typeof rp.av === 'string' ? rp.av : 'cat-orange',
                   role: typeof rp.rl === 'string' ? rp.rl : undefined,
                   stage: typeof rp.stg === 'number' ? rp.stg : typeof rp.stage === 'number' ? rp.stage : 1,
@@ -1758,6 +1912,7 @@ export default function GamePage() {
               if (p.lastY !== undefined) existing.targetY = p.lastY;
               if (p.lastFacing !== undefined) existing.facing = p.lastFacing as 1 | -1;
             }
+            if (p.fullName) existing.fullName = p.fullName;
             if (p.role) existing.role = p.role;
             if (typeof p.stage === 'number') existing.stage = p.stage;
           } else {
@@ -1766,6 +1921,7 @@ export default function GamePage() {
             playersRef.current.set(p.userId, {
               id: p.userId,
               username: p.username,
+              fullName: p.fullName || undefined,
               avatar: p.avatar,
               role: p.role,
               stage: p.stage ?? 1,
@@ -1810,13 +1966,23 @@ export default function GamePage() {
           ingestMessages(data.messages);
         }
         if (data.answerResults && typeof data.answerResults === 'object') {
-          for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
-            answerResultsRef.current.set(qid, Boolean(okAns));
+          if (Array.isArray(data.answeredQuestionIds) && data.answeredQuestionIds.length === 0) {
+            answerResultsRef.current.clear();
+          } else {
+            for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
+              answerResultsRef.current.set(qid, Boolean(okAns));
+            }
           }
         }
         if (Array.isArray(data.answeredQuestionIds)) {
-          for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
-          setAnsweredQuestionIds((prev) => (prev.length === answeredIdsRef.current.size ? prev : Array.from(answeredIdsRef.current)));
+          if (data.answeredQuestionIds.length === 0) {
+            answeredIdsRef.current.clear();
+            setAnsweredQuestionIds([]);
+            setCorrectCount(0);
+          } else {
+            for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
+            setAnsweredQuestionIds((prev) => (prev.length === answeredIdsRef.current.size ? prev : Array.from(answeredIdsRef.current)));
+          }
         }
         if (typeof data.correctCount === 'number') {
           setCorrectCount(data.correctCount);
@@ -1996,12 +2162,311 @@ export default function GamePage() {
     controlDragRef.current = null;
   }
 
+  function addSystemChatMessage(text: string) {
+    const sysMsg: ChatMsg = {
+      id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      senderName: 'SYSTEM',
+      text,
+      createdAt: new Date().toISOString(),
+    };
+    ingestMessages([sysMsg]);
+  }
+
+  function handleChatCommand(rawText: string) {
+    const isStaff = isStaffRole(myRoleRef.current);
+    const isAdmin = myRoleRef.current === 'admin';
+
+    if (!isStaff) {
+      addSystemChatMessage('Perintah command (/) hanya dapat digunakan oleh Guru dan Administrator.');
+      return;
+    }
+
+    const parts = rawText.slice(1).trim().split(/\s+/);
+    const cmd = parts[0]?.toLowerCase();
+    const arg1 = parts[1]?.toLowerCase();
+    const arg2 = parts[2]?.toLowerCase();
+
+    // Helper to find player by username or 'me'
+    const findPlayer = (nameQuery?: string) => {
+      if (!nameQuery) return null;
+      if (nameQuery === 'me') {
+        const myP = playersRef.current.get(myIdRef.current);
+        return myP ? { id: myIdRef.current, username: myUsernameRef.current || 'Me' } : null;
+      }
+      for (const p of playersRef.current.values()) {
+        if (p.username.toLowerCase() === nameQuery) {
+          return { id: p.id, username: p.username };
+        }
+      }
+      const foundInRoom = roomRef.current?.players?.find((pl) => pl.username.toLowerCase() === nameQuery);
+      if (foundInRoom) {
+        return { id: foundInRoom.userId, username: foundInRoom.username };
+      }
+      return null;
+    };
+
+    if (cmd === 'help' || cmd === 'cmd') {
+      const helpLines = [
+        '--- DAFTAR CHAT COMMAND ---',
+        '• /cls : Bersihkan seluruh chat di layar (Clear Screen)',
+        '• /set god <user|me> : Aktifkan God Mode (Kebal & Infinite Laser)',
+        '• /unset god <user|me> : Nonaktifkan God Mode',
+        '• /teleport <user|me> me : Tarik player ke posisimu',
+        '• /teleport <user|me> <stage> : Lempar player ke Stage tertentu (1-4)',
+        isAdmin ? '• /teleport all me : Tarik SELURUH siswa ke posisimu' : null,
+        isAdmin ? '• /teleport all <stage> : Lempar SELURUH siswa ke Stage tertentu' : null,
+        '• /mirror <username> : Tampilkan & bantu jawab kotak soal siswa',
+        '• /mirror all : Mode soal bonus untuk seluruh kelas',
+        '• /unset mirror : Sembunyikan kembali kotak soal',
+        '• /reset <user|me> : Reset jawaban & skor player ke Stage 1',
+        isAdmin ? '• /reset all : Reset SEMUA jawaban 1 room ke Stage 1' : null,
+      ].filter(Boolean);
+      for (const line of helpLines) {
+        addSystemChatMessage(line as string);
+      }
+      return;
+    }
+
+    if (cmd === 'cls' || cmd === 'clear') {
+      setChat([]);
+      seenMsgIdsRef.current.clear();
+      setUnreadCount(0);
+      return;
+    }
+
+    if (cmd === 'set' && arg1 === 'god') {
+      const targetQuery = arg2 || parts[2];
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Gagal: Player '${targetQuery || ''}' tidak ditemukan di room.`);
+        return;
+      }
+      const p = playersRef.current.get(target.id);
+      if (p) p.isGodMode = true;
+      if (target.id === myIdRef.current) {
+        isGodModeRef.current = true;
+        setIsGodMode(true);
+      }
+      ably.publishCommand({ op: 'god', targetId: target.id, value: true, targetName: target.username });
+      addSystemChatMessage(`👑 God Mode DIAKTIFKAN untuk '${target.username}'. (Kebal & Infinite Laser)`);
+      soundEngine.playPowerUp();
+      return;
+    }
+
+    if (cmd === 'unset' && arg1 === 'god') {
+      const targetQuery = arg2 || parts[2];
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Gagal: Player '${targetQuery || ''}' tidak ditemukan di room.`);
+        return;
+      }
+      const p = playersRef.current.get(target.id);
+      if (p) p.isGodMode = false;
+      if (target.id === myIdRef.current) {
+        isGodModeRef.current = false;
+        setIsGodMode(false);
+      }
+      ably.publishCommand({ op: 'god', targetId: target.id, value: false, targetName: target.username });
+      addSystemChatMessage(`🛡️ God Mode DINONAKTIFKAN untuk '${target.username}'.`);
+      return;
+    }
+
+    if (cmd === 'teleport') {
+      const targetQuery = arg1;
+      const dest = arg2;
+
+      if (!targetQuery || !dest) {
+        addSystemChatMessage('Format salah. Contoh: /teleport bims me atau /teleport bims 2');
+        return;
+      }
+
+      if (targetQuery === 'all') {
+        if (!isAdmin) {
+          addSystemChatMessage('Perintah /teleport all hanya dapat digunakan oleh Administrator.');
+          return;
+        }
+        if (dest === 'me') {
+          const me = playersRef.current.get(myIdRef.current);
+          ably.publishCommand({
+            op: 'teleport',
+            targetId: 'all',
+            stage: currentStageRef.current,
+            x: me?.x ?? 120,
+            y: me?.y ?? 600,
+          });
+          addSystemChatMessage(`Berhasil teleport SELURUH siswa ke posisimu di Stage ${currentStageRef.current}.`);
+        } else {
+          const stg = Number(dest);
+          if (stg >= 1 && stg <= totalStagesRef.current) {
+            ably.publishCommand({ op: 'teleport', targetId: 'all', stage: stg });
+            addSystemChatMessage(`Berhasil teleport SELURUH siswa ke Stage ${stg}.`);
+          } else {
+            addSystemChatMessage(`Nomor stage tidak valid (1-${totalStagesRef.current}).`);
+          }
+        }
+        soundEngine.playBounce();
+        return;
+      }
+
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+
+      if (dest === 'me') {
+        const me = playersRef.current.get(myIdRef.current);
+        ably.publishCommand({
+          op: 'teleport',
+          targetId: target.id,
+          stage: currentStageRef.current,
+          x: me?.x ?? 120,
+          y: me?.y ?? 600,
+        });
+        addSystemChatMessage(`Berhasil teleport '${target.username}' ke posisimu.`);
+      } else {
+        const stg = Number(dest);
+        if (stg >= 1 && stg <= totalStagesRef.current) {
+          ably.publishCommand({ op: 'teleport', targetId: target.id, stage: stg });
+          addSystemChatMessage(`Berhasil teleport '${target.username}' ke Stage ${stg}.`);
+        } else {
+          addSystemChatMessage(`Nomor stage tidak valid (1-${totalStagesRef.current}).`);
+        }
+      }
+      soundEngine.playBounce();
+      return;
+    }
+
+    if (cmd === 'reset') {
+      const targetQuery = arg1;
+      if (!targetQuery) {
+        addSystemChatMessage('Format salah. Contoh: /reset bims atau /reset all');
+        return;
+      }
+      if (targetQuery === 'all') {
+        if (!isAdmin) {
+          addSystemChatMessage('Perintah /reset all hanya dapat digunakan oleh Administrator.');
+          return;
+        }
+        fetch('/api/game/reset-progress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, targetId: 'all' }),
+        }).catch(() => {});
+        ably.publishCommand({ op: 'reset', targetId: 'all' });
+        if (mirrorTargetRef.current) {
+          answerResultsRef.current.clear();
+          const curStg = currentStageRef.current;
+          const stageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
+          questionBlocksRef.current = generateQuestionBlocks(
+            stageQs.map((q) => q.id),
+            `all:${roomId}:s${curStg}`,
+            curStg,
+          );
+        }
+        addSystemChatMessage('Berhasil me-reset jawaban seluruh siswa ke Stage 1.');
+        soundEngine.playDeath();
+        return;
+      }
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+      fetch('/api/game/reset-progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, targetId: target.id }),
+      }).catch(() => {});
+      ably.publishCommand({ op: 'reset', targetId: target.id });
+      const curMirror = mirrorTargetRef.current;
+      if (curMirror && (curMirror === 'all' || curMirror.userId === target.id)) {
+        answerResultsRef.current.clear();
+        const curStg = currentStageRef.current;
+        const stageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
+        questionBlocksRef.current = generateQuestionBlocks(
+          stageQs.map((q) => q.id),
+          `${target.id}:${roomId}:s${curStg}`,
+          curStg,
+        );
+      }
+      addSystemChatMessage(`Berhasil me-reset jawaban '${target.username}' ke Stage 1.`);
+      soundEngine.playDeath();
+      return;
+    }
+
+    if (cmd === 'mirror') {
+      const targetQuery = arg1;
+      if (!targetQuery) {
+        addSystemChatMessage('Format: /mirror <username> atau /mirror all');
+        return;
+      }
+      if (targetQuery === 'all') {
+        mirrorTargetRef.current = 'all';
+        setMirrorTarget('Seluruh Kelas (Bonus)');
+        const curStg = currentStageRef.current;
+        const curStageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
+        questionBlocksRef.current = generateQuestionBlocks(
+          curStageQs.map((q) => q.id),
+          `all:${roomId}:s${curStg}`,
+          curStg,
+        );
+        addSystemChatMessage('🔍 Mode Mirror ALL aktif! Kotak soal bonus sekelas dimunculkan di map.');
+        soundEngine.playPowerUp();
+        return;
+      }
+
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+
+      mirrorTargetRef.current = { userId: target.id, username: target.username };
+      setMirrorTarget(target.username);
+      const curStg = currentStageRef.current;
+      const curStageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
+      questionBlocksRef.current = generateQuestionBlocks(
+        curStageQs.map((q) => q.id),
+        `${target.id}:${roomId}:s${curStg}`,
+        curStg,
+      );
+      addSystemChatMessage(`🔍 Mode Mirroring '${target.username}' aktif! Kotak soal siswa dimunculkan di map.`);
+      soundEngine.playPowerUp();
+      return;
+    }
+
+    if (cmd === 'unset' && arg1 === 'mirror') {
+      mirrorTargetRef.current = null;
+      setMirrorTarget(null);
+      questionBlocksRef.current = [];
+      addSystemChatMessage('Mode Mirror dimatikan. Kotak soal disembunyikan kembali dari pandangan.');
+      soundEngine.playBounce();
+      return;
+    }
+
+    addSystemChatMessage(`Perintah '/${cmd}' tidak dikenali. Ketik /help untuk melihat daftar perintah.`);
+  }
+
   async function sendChat(e: React.FormEvent) {
     e.preventDefault();
     if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))) return;
     const text = chatInput.trim();
     if (!text) return;
     setChatInput('');
+
+    if (text.toLowerCase() === '/cls' || text.toLowerCase() === '/clear') {
+      setChat([]);
+      seenMsgIdsRef.current.clear();
+      setUnreadCount(0);
+      return;
+    }
+
+    if (text.startsWith('/')) {
+      handleChatCommand(text);
+      return;
+    }
+
     if (myIdRef.current) {
       bubblesRef.current.set(myIdRef.current, { text, at: Date.now() });
     }
@@ -2027,7 +2492,7 @@ export default function GamePage() {
   // Hitung semua soal yang sudah dijawab oleh player (baik benar maupun salah) ke dalam progres misi
   const doneSteps = Math.min(Math.max(answeredQuestionIds.length, correctCount), totalSteps);
   const sortedPlayers = [...players].sort((a, b) => (scores[b.userId] ?? 0) - (scores[a.userId] ?? 0) || a.username.localeCompare(b.username));
-  const hasVisibleQuestion = Boolean(question && !isStaff && !answeredQuestionIds.includes(question.id));
+  const hasVisibleQuestion = Boolean(question && (!isStaff ? !answeredQuestionIds.includes(question.id) : Boolean(mirrorTargetRef.current)));
   const questionActive = hasVisibleQuestion;
   const allBottomMinimized = panelsHidden || !hasVisibleQuestion;
   const controlsPosClass = allBottomMinimized ? '' : ' mp-elevated';
@@ -2118,8 +2583,30 @@ export default function GamePage() {
   }
   async function submitAnswer(e: React.FormEvent) {
     e.preventDefault();
-    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && myRoleRef.current !== 'teacher')) return;
+    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))) return;
     if (!question || !selected || submitting) return;
+
+    if (isStaffRole(myRoleRef.current) && mirrorTargetRef.current) {
+      const answeredId = question.id;
+      const targetId = mirrorTargetRef.current === 'all' ? 'all' : mirrorTargetRef.current.userId;
+      const targetName = mirrorTargetRef.current === 'all' ? 'Seluruh Siswa' : mirrorTargetRef.current.username;
+
+      answerResultsRef.current.set(answeredId, 'assisted');
+      answeredIdsRef.current.add(answeredId);
+      setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
+      setCorrectCount(answeredIdsRef.current.size);
+
+      ably.publishCommand({ op: 'assist_answer', targetId, qid: answeredId });
+      soundEngine.playAnswerCorrect();
+      setStageBanner(`🟦 Berhasil membantu soal untuk ${targetName}! (+0 Poin, Misi Tercatat)`);
+      if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
+      stageBannerTimerRef.current = setTimeout(() => setStageBanner(null), 4000);
+      setQuestion(null);
+      questionRef.current = null;
+      setSelected('');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const answeredId = question.id;
@@ -2280,14 +2767,14 @@ export default function GamePage() {
                           <button
                             key={stgNum}
                             type="button"
-                            className={`mp-stage-chip${currentStage === stgNum ? ' is-active' : ''}${isCleared ? ' is-cleared' : ''}`}
-                            title={`Pindah ke Stage ${stgNum} (${stgAns}/${stgQs.length} soal)`}
+                            className={`mp-stage-chip-compact${currentStage === stgNum ? ' is-active' : ''}${isCleared ? ' is-cleared' : ''}`}
+                            title={`Stage ${stgNum} (${stgAns}/${stgQs.length} soal)`}
                             onClick={() => {
                               soundEngine.playClick();
                               applyStage(stgNum, { respawnPlayer: true, showToast: true });
                             }}
                           >
-                            Stage {stgNum} ({stgAns}/{stgQs.length})
+                            {stgNum}
                           </button>
                         );
                       })}
@@ -2301,6 +2788,24 @@ export default function GamePage() {
                   )
                 )}
               </div>
+
+              {mirrorTarget && isStaff && (
+                <div className="mirror-indicator-pill" role="status">
+                  <span>🔍 Mirroring: <strong>{mirrorTarget}</strong></span>
+                  <button
+                    type="button"
+                    className="mirror-close-btn"
+                    title="Tutup Mode Mirror (/unset mirror)"
+                    onClick={() => {
+                      mirrorTargetRef.current = null;
+                      setMirrorTarget(null);
+                      questionBlocksRef.current = [];
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
               <div className="mp-top-right">
                 <div className="mp-timer-row">
@@ -2504,14 +3009,24 @@ export default function GamePage() {
                             </button>
                           </h2>
                           <ol className="mp-rank-list">
-                            {sortedPlayers.slice(0, 5).map((p, i) => (
-                              <li key={p.userId} className="mp-rank-row">
-                                <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
-                                <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
-                                <span className="rank-name">{p.username}</span>
-                                <span className="rank-score">{scores[p.userId] ?? 0}</span>
-                              </li>
-                            ))}
+                            {sortedPlayers
+                              .filter((p) => p.role !== 'admin')
+                              .slice(0, 5)
+                              .map((p, i) => {
+                                const pFullName = p.fullName || playersRef.current.get(p.userId)?.fullName;
+                                const rankDisplayName =
+                                  pFullName && pFullName.trim().toLowerCase() !== p.username.trim().toLowerCase()
+                                    ? `[${p.username}] - ${pFullName.trim()}`
+                                    : `[${p.username}]`;
+                                return (
+                                  <li key={p.userId} className="mp-rank-row">
+                                    <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
+                                    <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
+                                    <span className="rank-name" title={rankDisplayName}>{rankDisplayName}</span>
+                                    <span className="rank-score">{scores[p.userId] ?? 0}</span>
+                                  </li>
+                                );
+                              })}
                           </ol>
                         </aside>
                       )}
@@ -2779,14 +3294,41 @@ export default function GamePage() {
                   </div>
 
                   <div className="mp-chat-messages" ref={chatBoxRef} role="log" aria-live="polite">
-                    {displayChat.map((m) => (
-                      <div key={m.id} className="chat-msg-item">
-                        <span>
-                          <span className={`chat-sender ${chipColor(m.senderName)}`}>{m.senderName}</span>
-                          <span className="chat-text">: {m.text}</span>
-                        </span>
-                      </div>
-                    ))}
+                    {displayChat.map((m) => {
+                      if (m.senderName === 'SYSTEM') {
+                        return (
+                          <div key={m.id} className="sys-chat-entry">
+                            <span className="font-bold">{m.text}</span>
+                          </div>
+                        );
+                      }
+
+                      const senderPlayer = (m.userId ? playersRef.current.get(m.userId) : null) ||
+                        roomRef.current?.players?.find((pl) => pl.userId === m.userId || pl.username === m.senderName);
+                      const isSenderAdmin = m.role === 'admin' || senderPlayer?.role === 'admin' || m.senderName.toLowerCase() === 'admin' || m.senderName.toLowerCase() === 'administrator';
+
+                      let senderLabel = '';
+                      if (isSenderAdmin) {
+                        senderLabel = '[Administrator]';
+                      } else {
+                        const uname = m.senderName;
+                        const fname = m.senderFullName || senderPlayer?.fullName;
+                        if (fname && fname.trim().toLowerCase() !== uname.trim().toLowerCase()) {
+                          senderLabel = `[${uname}] - ${fname.trim()}`;
+                        } else {
+                          senderLabel = `[${uname}]`;
+                        }
+                      }
+
+                      return (
+                        <div key={m.id} className="chat-msg-item">
+                          <span>
+                            <span className={`chat-sender ${chipColor(m.senderName)}`}>{senderLabel}</span>
+                            <span className="chat-text">: {m.text}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <form className="mp-chat-form" onSubmit={sendChat}>
@@ -2795,7 +3337,7 @@ export default function GamePage() {
                       id="mp-chat-input"
                       type="text"
                       className="mp-chat-input"
-                      placeholder="Ketik pesan..."
+                      placeholder={isStaff ? 'Ketik pesan atau /cmd...' : 'Ketik pesan...'}
                       maxLength={120}
                       autoComplete="off"
                       value={chatInput}
@@ -2815,18 +3357,35 @@ export default function GamePage() {
                 </aside>
               )}
 
-              {question && !isStaff && !answeredQuestionIds.includes(question.id) && (
+              {question && (!isStaff ? !answeredQuestionIds.includes(question.id) : Boolean(mirrorTargetRef.current)) && (
                 <section className="parchment-card mp-question-dock" aria-label="Tantangan soal" style={panelStyle('question')}>
                   <div
-                    className="mp-dock-ribbon mp-drag-handle"
+                    className="mp-dock-ribbon mp-drag-handle flex items-center justify-between"
                     onPointerDown={(e) => startPanelDrag('question', e)}
                     onPointerMove={movePanelDrag}
                     onPointerUp={(e) => endPanelDrag(e)}
                     onPointerCancel={(e) => endPanelDrag(e)}
                   >
                     <span className="mp-panel-heading-title">
-                      <span aria-hidden="true">📖</span> Tantangan Soal
+                      <span aria-hidden="true">📖</span> Tantangan Soal {isStaff && mirrorTarget && (
+                        <span className="text-xs text-yellow-300 font-normal ml-2">
+                          (Mirror: {mirrorTarget})
+                        </span>
+                      )}
                     </span>
+                    {isStaff && (
+                      <button
+                        type="button"
+                        className="mp-win-btn ml-auto text-sm font-bold text-slate-300 hover:text-white"
+                        title="Tutup Modal Soal (Guru/Admin)"
+                        onClick={() => {
+                          setQuestion(null);
+                          questionRef.current = null;
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
 
                   <div className="mp-bonus-badge" aria-label={`Bonus ${question.points} poin`}>
@@ -2841,27 +3400,38 @@ export default function GamePage() {
                     <div className="mp-options-grid-2x2" role="radiogroup" aria-label="Pilihan jawaban">
                       {question.options.map((o, idx) => {
                         const displayLabel = OPTION_DISPLAY_LABELS[idx] ?? o.label;
+                        const isCorrectKey = myRoleRef.current === 'admin' && Boolean(question.correctAnswer) && (
+                          question.correctAnswer === o.label ||
+                          question.correctAnswer === o.content ||
+                          question.correctAnswer?.toLowerCase() === o.label.toLowerCase() ||
+                          question.correctAnswer?.toLowerCase() === o.content.toLowerCase()
+                        );
                         return (
                           <button
                             key={o.label}
                             type="button"
                             role="radio"
                             aria-checked={selected === o.label}
-                            className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}`}
+                            className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}${isCorrectKey ? ' border-emerald-500 ring-2 ring-emerald-400' : ''}`}
                             onClick={() => {
                               soundEngine.playClick();
                               setSelected(o.label);
                             }}
                           >
                             <span className="opt-badge">{displayLabel}</span>
-                            {o.content}
+                            <span className="flex-1 text-left">{o.content}</span>
+                            {isCorrectKey && (
+                              <span className="admin-key-badge ml-2" title="Kunci Jawaban Benar (Admin Only)">
+                                ✓ KUNCI JAWABAN
+                              </span>
+                            )}
                           </button>
                         );
                       })}
                     </div>
                     <div className="mt-3 flex items-center justify-end">
                       <button type="submit" className="btn-orange-action" disabled={!selected || submitting}>
-                        <span aria-hidden="true">✔</span> {submitting ? 'Mengirim...' : 'Submit'}
+                        <span aria-hidden="true">✔</span> {submitting ? 'Mengirim...' : isStaff ? 'Bantu Jawab (Centang Biru)' : 'Submit'}
                       </button>
                     </div>
                   </form>

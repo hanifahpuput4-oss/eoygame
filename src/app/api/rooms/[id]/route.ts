@@ -29,7 +29,7 @@ const statusSchema = z.object({
   status: z.enum(['waiting', 'starting', 'in_progress', 'paused', 'completed']),
 });
 
-async function loadSafeLevelQuestions(levelId: string) {
+async function loadSafeLevelQuestions(levelId: string, isAdmin = false) {
   const links = await db
     .select()
     .from(levelQuestions)
@@ -47,7 +47,7 @@ async function loadSafeLevelQuestions(levelId: string) {
     .map((qid) => qRows.find((q) => q.id === qid))
     .filter((q): q is NonNullable<typeof q> => Boolean(q))
     .map((q) => ({
-      ...stripCorrectAnswer(q),
+      ...(isAdmin ? q : stripCorrectAnswer(q)),
       options: opts.filter((o) => o.questionId === q.id),
     }));
 }
@@ -114,7 +114,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     const levelId = room.level?.id;
     const [levelQs, session] = await Promise.all([
-      levelId ? loadSafeLevelQuestions(levelId) : Promise.resolve([]),
+      levelId ? loadSafeLevelQuestions(levelId, user.role === 'admin') : Promise.resolve([]),
       levelId && isAllowedInArena
         ? ensureSession(id, user.id, levelId).catch(() => null)
         : Promise.resolve(null),

@@ -3,6 +3,7 @@ import { DECOR, PHYSICS, PLATFORMS, WORLD, rectsOverlap, type Platform, type Sta
 export type Player = {
   id: string;
   username: string;
+  fullName?: string;
   avatar: string;
   role?: string;
   stage?: number;
@@ -24,6 +25,7 @@ export type Player = {
   burnUntil?: number;
   blasterAmmo?: number;
   blasterUntil?: number;
+  isGodMode?: boolean;
   lastPacketAt?: number;
   avgInterval?: number;
   snapshots?: { x: number; y: number; vx: number; vy: number; time: number }[];
@@ -43,11 +45,11 @@ const PLAYER_W = 36;
 const PLAYER_H = 44;
 
 function isSolidBox(type: string) {
-  return type === 'crate' || type === 'qblock' || type === 'qblock-correct' || type === 'qblock-wrong';
+  return type === 'crate' || type === 'qblock' || type === 'qblock-correct' || type === 'qblock-wrong' || type === 'qblock-assisted';
 }
 
 function isQuestionBox(type: string) {
-  return type === 'qblock' || type === 'qblock-correct' || type === 'qblock-wrong';
+  return type === 'qblock' || type === 'qblock-correct' || type === 'qblock-wrong' || type === 'qblock-assisted';
 }
 
 function respawnToStart(p: Player) {
@@ -297,6 +299,12 @@ export function updatePlayerPhysics(
     if (!rectsOverlap(box, plat)) continue;
 
     if (plat.type === 'spike') {
+      if (p.isGodMode) {
+        p.vy = -8.5;
+        p.onGround = false;
+        onSoundEvent?.('bounce');
+        continue;
+      }
       p.isDying = true;
       p.deathStartedAt = now;
       p.vx = 0;
@@ -310,6 +318,7 @@ export function updatePlayerPhysics(
     }
 
     if (plat.type === 'fire') {
+      if (p.isGodMode) continue;
       const alreadyBurning = Boolean(p.burnUntil && p.burnUntil > now + 4400);
       p.burnUntil = now + 5000;
       if (!alreadyBurning) {
@@ -374,8 +383,8 @@ export function updatePlayerPhysics(
     const puBox = { x: pu.x, y: pu.y, w: pu.w, h: pu.h };
     if (rectsOverlap(box, puBox)) {
       pu.collectedUntil = now + 40000;
-      p.blasterAmmo = 10;
-      p.blasterUntil = now + 30000;
+      p.blasterAmmo = p.isGodMode ? 999 : 10;
+      p.blasterUntil = p.isGodMode ? now + 99999999 : now + 30000;
       stageOptions?.onCollectPowerUp?.(pu);
       stageOptions?.onObstacleEvent?.({
         op: 'powerup',
@@ -393,8 +402,8 @@ export function updatePlayerPhysics(
     const eHitbox = { x: enemy.x + 3, y: enemy.y + 3, w: enemy.w - 6, h: enemy.h - 4 };
     if (!rectsOverlap(box, eHitbox)) continue;
 
-    // Super Cat invulnerability shield defeats enemy on touch!
-    if (p.blasterUntil && p.blasterUntil > now) {
+    // Super Cat invulnerability shield or God Mode defeats enemy on touch!
+    if (p.isGodMode || (p.blasterUntil && p.blasterUntil > now)) {
       enemy.stompedUntil = now + 9000;
       p.vy = -10.5;
       p.onGround = false;

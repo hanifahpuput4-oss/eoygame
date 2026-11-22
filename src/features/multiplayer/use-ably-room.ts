@@ -68,10 +68,17 @@ export type ObstacleEvent =
   | { op: 'powerup'; stg: number; id: string; until: number }
   | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number };
 
+export type RoomCommandEvent =
+  | { op: 'god'; targetId: string; value: boolean; targetName?: string }
+  | { op: 'teleport'; targetId: string; stage?: number; x?: number; y?: number }
+  | { op: 'reset'; targetId: string }
+  | { op: 'assist_answer'; targetId: string; qid: string };
+
 type RealtimeCallbacks = {
   onDirectMove?: (player: PresencePlayer) => void;
   onDirectLeave?: (userId: string, kicked?: boolean) => void;
   onObstacleEvent?: (evt: ObstacleEvent) => void;
+  onCommandEvent?: (cmd: RoomCommandEvent) => void;
 };
 
 export function useAblyRoom(
@@ -314,6 +321,14 @@ export function useAblyRoom(
           callbacksRef.current?.onObstacleEvent?.({ op: 'powerup', stg, id: msg.id, until: msg.until });
         } else if (op === 'shoot' && typeof msg.pid === 'string' && typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.vx === 'number') {
           callbacksRef.current?.onObstacleEvent?.({ op: 'shoot', stg, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx });
+        }
+        return;
+      }
+
+      if (t === 'cmd') {
+        const op = msg.op;
+        if (typeof op === 'string' && typeof msg.targetId === 'string') {
+          callbacksRef.current?.onCommandEvent?.(msg as unknown as RoomCommandEvent);
         }
         return;
       }
@@ -608,6 +623,17 @@ export function useAblyRoom(
     }
   }, []);
 
+  const publishCommand = useCallback((cmd: RoomCommandEvent) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ t: 'cmd', ...cmd }));
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
   const getSyncedServerTime = useCallback(() => {
     return Date.now() + serverTimeOffsetRef.current;
   }, []);
@@ -641,6 +667,7 @@ export function useAblyRoom(
     rejoinRequestsEvent,
     publishPosition,
     publishObstacle,
+    publishCommand,
     getSyncedServerTime,
     setServerTimeOffset,
     publishChat,

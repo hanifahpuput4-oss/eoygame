@@ -31,6 +31,7 @@ export type CatHazardState = {
   burnUntil?: number;
   blasterAmmo?: number;
   blasterUntil?: number;
+  isGodMode?: boolean;
 };
 
 function drawCat(
@@ -184,6 +185,24 @@ function drawCat(
 
   const hasStaffTitle = role === 'teacher' || role === 'admin';
   const isSuperCat = Boolean(hazard?.blasterUntil && hazard.blasterUntil > now);
+  const isGodMode = Boolean(hazard?.isGodMode);
+
+  if (isGodMode) {
+    ctx.save();
+    ctx.shadowColor = '#eab308';
+    ctx.shadowBlur = 22;
+    ctx.strokeStyle = 'rgba(234, 179, 8, 0.95)';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.arc(drawX + w / 2, y + h / 2, Math.max(w, h) * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.font = '16px Nunito, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('👑', drawX + w / 2, y - (hasStaffTitle ? 40 : 28));
+    ctx.restore();
+  }
+
   if (isSuperCat) {
     ctx.save();
     const pulse = 0.75 + 0.25 * Math.sin(now * 0.01);
@@ -745,11 +764,12 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
       ctx.moveTo(p.x + p.w - 5, p.y + 5);
       ctx.lineTo(p.x + 5, p.y + p.h - 5);
       ctx.stroke();
-    } else if (p.type === 'qblock' || p.type === 'qblock-correct' || p.type === 'qblock-wrong') {
+    } else if (p.type === 'qblock' || p.type === 'qblock-correct' || p.type === 'qblock-wrong' || p.type === 'qblock-assisted') {
       const isCorrect = p.type === 'qblock-correct';
       const isWrong = p.type === 'qblock-wrong';
-      ctx.fillStyle = isCorrect ? '#22c55e' : isWrong ? '#ef4444' : '#fbbf24';
-      ctx.strokeStyle = isCorrect ? '#14532d' : isWrong ? '#7f1d1d' : '#92400e';
+      const isAssisted = p.type === 'qblock-assisted';
+      ctx.fillStyle = isAssisted ? '#0284c7' : isCorrect ? '#22c55e' : isWrong ? '#ef4444' : '#fbbf24';
+      ctx.strokeStyle = isAssisted ? '#0369a1' : isCorrect ? '#14532d' : isWrong ? '#7f1d1d' : '#92400e';
       ctx.lineWidth = 3;
       roundRect(ctx, p.x, p.y, p.w, p.h, 8);
       ctx.fill();
@@ -759,7 +779,7 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 26px Nunito, sans-serif';
       ctx.textAlign = 'center';
-      const symbol = isCorrect ? '✔' : isWrong ? '✖' : '?';
+      const symbol = isAssisted || isCorrect ? '✔' : isWrong ? '✖' : '?';
       ctx.fillText(symbol, p.x + p.w / 2, p.y + p.h / 2 + 9);
     } else if (p.type === 'bounce') {
       // Spring base + bright red/yellow bounce pad

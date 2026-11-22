@@ -21,6 +21,7 @@ export type PlatformType =
   | 'qblock'
   | 'qblock-correct'
   | 'qblock-wrong'
+  | 'qblock-assisted'
   | 'bounce'
   | 'spike'
   | 'fire'

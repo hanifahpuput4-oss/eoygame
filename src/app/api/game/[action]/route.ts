@@ -79,6 +79,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         updateLivePlayerPosition(roomId, {
           userId,
           username: typeof body.un === 'string' ? body.un : 'Player',
+          fullName: typeof body.fn === 'string' ? body.fn : undefined,
           avatar: typeof body.av === 'string' ? body.av : 'cat-orange',
           role: typeof body.rl === 'string' ? body.rl : 'student',
           stage,
@@ -113,6 +114,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         peers.push({
           u: p.userId,
           un: p.username,
+          fn: p.fullName,
           av: p.avatar,
           rl: p.role,
           stg: p.stage ?? 1,
@@ -274,6 +276,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         roomId,
         userId: user.id,
         senderName: user.username,
+        senderFullName: user.fullName,
+        role: user.role,
         text: input.text,
         createdAt: new Date().toISOString(),
       });
@@ -470,6 +474,132 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       });
     }
 
+    if (action === 'reset-progress') {
+      if (!isStaff) return fail('Hanya guru dan admin yang dapat me-reset progres', 403);
+      const schema = z.object({
+        roomId: z.string().min(1),
+        targetId: z.string().min(1),
+      });
+      const { roomId, targetId } = schema.parse(body);
+
+      if (targetId === 'all') {
+        if (user.role !== 'admin') {
+          return fail('Hanya administrator yang dapat me-reset seluruh siswa sekaligus', 403);
+        }
+        const allSessions = await db
+          .select({ id: gameSessions.id, userId: gameSessions.userId, score: gameSessions.score })
+          .from(gameSessions)
+          .where(eq(gameSessions.roomId, roomId));
+        const allSessionIds = allSessions.map((s) => s.id);
+
+        if (allSessionIds.length > 0) {
+          const answers = await db
+            .select({ sessionId: playerAnswers.sessionId, pointsEarned: playerAnswers.pointsEarned })
+            .from(playerAnswers)
+            .where(inArray(playerAnswers.sessionId, allSessionIds));
+
+          const userPointsDeduct: Record<string, number> = {};
+          const sessionUserMap = new Map(allSessions.map((s) => [s.id, s.userId]));
+          for (const a of answers) {
+            const uId = sessionUserMap.get(a.sessionId);
+            if (uId) {
+              userPointsDeduct[uId] = (userPointsDeduct[uId] || 0) + (a.pointsEarned || 0);
+            }
+          }
+
+          for (const [uId, deduct] of Object.entries(userPointsDeduct)) {
+            if (deduct > 0) {
+              const uRow = await db.select({ totalPoints: users.totalPoints }).from(users).where(eq(users.id, uId)).limit(1);
+              if (uRow[0]) {
+                const nextPts = Math.max(0, (uRow[0].totalPoints || 0) - deduct);
+                await db.update(users).set({ totalPoints: nextPts }).where(eq(users.id, uId)).catch(() => {});
+              }
+            }
+          }
+
+          await Promise.all([
+            db.delete(playerAnswers).where(inArray(playerAnswers.sessionId, allSessionIds)),
+            db
+              .update(gameSessions)
+              .set({ score: 0, stars: 0, completedAt: null, updatedAt: new Date() })
+              .where(inArray(gameSessions.id, allSessionIds)),
+          ]);
+        }
+
+        await db.update(roomPlayers).set({ lastX: 120, lastY: 650 }).where(eq(roomPlayers.roomId, roomId));
+
+        const ansCache = getUserAnswerCache();
+        for (const key of Array.from(ansCache.keys())) {
+          if (key.startsWith(`${roomId}:`)) {
+            ansCache.delete(key);
+          }
+        }
+        invalidateRoomSyncCache(roomId);
+
+        void publishToRoom(roomId, 'cmd', { op: 'reset', targetId: 'all' });
+        void publishToRoom(roomId, 'score', {
+          userId: 'all',
+          username: '',
+          score: 0,
+          stars: 0,
+          isCorrect: false,
+        });
+
+        return ok({ success: true, targetId: 'all' });
+      }
+
+      // Single student reset
+      const playerSessions = await db
+        .select({ id: gameSessions.id, score: gameSessions.score })
+        .from(gameSessions)
+        .where(and(eq(gameSessions.roomId, roomId), eq(gameSessions.userId, targetId)));
+      const sessionIds = playerSessions.map((s) => s.id);
+
+      if (sessionIds.length > 0) {
+        const answers = await db
+          .select({ pointsEarned: playerAnswers.pointsEarned })
+          .from(playerAnswers)
+          .where(inArray(playerAnswers.sessionId, sessionIds));
+        const answerPointsSum = answers.reduce((acc, a) => acc + (a.pointsEarned || 0), 0);
+        const pointsToDeduct = Math.max(playerSessions.reduce((acc, s) => acc + (s.score || 0), 0), answerPointsSum);
+
+        if (pointsToDeduct > 0) {
+          const uRow = await db.select({ totalPoints: users.totalPoints }).from(users).where(eq(users.id, targetId)).limit(1);
+          if (uRow[0]) {
+            const nextPts = Math.max(0, (uRow[0].totalPoints || 0) - pointsToDeduct);
+            await db.update(users).set({ totalPoints: nextPts }).where(eq(users.id, targetId)).catch(() => {});
+          }
+        }
+
+        await Promise.all([
+          db.delete(playerAnswers).where(inArray(playerAnswers.sessionId, sessionIds)),
+          db
+            .update(gameSessions)
+            .set({ score: 0, stars: 0, completedAt: null, updatedAt: new Date() })
+            .where(inArray(gameSessions.id, sessionIds)),
+        ]);
+      }
+
+      await db
+        .update(roomPlayers)
+        .set({ lastX: 120, lastY: 650 })
+        .where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, targetId)));
+
+      getUserAnswerCache().delete(`${roomId}:${targetId}`);
+      invalidateRoomSyncCache(roomId);
+
+      void publishToRoom(roomId, 'cmd', { op: 'reset', targetId });
+      void publishToRoom(roomId, 'score', {
+        userId: targetId,
+        username: '',
+        score: 0,
+        stars: 0,
+        isCorrect: false,
+      });
+
+      return ok({ success: true, targetId });
+    }
+
     if (action === 'room-sync') {
       const schema = z.object({
         roomId: z.string().min(1),
@@ -548,6 +678,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
             .select({
               userId: roomPlayers.userId,
               username: users.username,
+              fullName: users.fullName,
               avatar: roomPlayers.avatar,
               role: users.role,
               lastX: roomPlayers.lastX,
@@ -586,6 +717,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
             {
               userId: user.id,
               username: user.username,
+              fullName: user.fullName,
               avatar: user.avatar,
               role: user.role,
               lastX: x ?? 120,
@@ -697,6 +829,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
           const live = freshLiveMap.get(p.userId);
           return {
             ...p,
+            fullName: p.fullName || live?.fullName,
             stage: live?.stage ?? 1,
             lastX: isMe ? x : (live?.x ?? p.lastX),
             lastY: isMe ? y : (live?.y ?? p.lastY),

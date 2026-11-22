@@ -4,6 +4,8 @@ export type EphemeralChatMessage = {
   roomId: string;
   userId: string;
   senderName: string;
+  senderFullName?: string;
+  role?: string;
   text: string;
   createdAt: string;
 };

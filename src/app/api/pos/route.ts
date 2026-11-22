@@ -183,6 +183,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (body.cmd && typeof body.cmd === 'object') {
+      broadcastRoomEvent(roomId, { t: 'cmd', ...(body.cmd as Record<string, unknown>) }, userId);
+    }
+
     const liveMap = getLiveRoomPositions(roomId);
     const peers: Record<string, unknown>[] = [];
     const now = Date.now();
