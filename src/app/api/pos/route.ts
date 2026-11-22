@@ -4,11 +4,67 @@ import {
   touchPresence,
   updateLivePlayerPosition,
 } from '@/server/services/presence-store';
-import { broadcastRoomEvent, ensureWsServer } from '@/server/services/ws-hub';
+import { broadcastRoomEvent, ensureWsServer, registerSseClient } from '@/server/services/ws-hub';
 
-export async function GET() {
+export const dynamic = 'force-dynamic';
+
+export async function GET(req: NextRequest) {
   const wsPort = ensureWsServer();
-  return NextResponse.json({ wsPort });
+  const stream = req.nextUrl.searchParams.get('stream') === '1';
+  if (!stream) {
+    return NextResponse.json({ wsPort });
+  }
+
+  const roomId = req.nextUrl.searchParams.get('r') ?? '';
+  const userId = req.nextUrl.searchParams.get('u') ?? '';
+  if (!roomId) {
+    return NextResponse.json({ error: 'missing room' }, { status: 400 });
+  }
+
+  const encoder = new TextEncoder();
+  let cleanupSse: (() => void) | null = null;
+  let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  const readable = new ReadableStream({
+    start(controller) {
+      const sendRaw = (jsonText: string): boolean => {
+        try {
+          controller.enqueue(encoder.encode(`data: ${jsonText}\n\n`));
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      // Kirim snapshot awal begitu SSE tersambung (tembus Cloudflare / Nginx / Tunnel HTTPS)
+      const snapshot = Array.from(getLiveRoomPositions(roomId).values());
+      sendRaw(JSON.stringify({ t: 'snapshot', players: snapshot }));
+
+      cleanupSse = registerSseClient(roomId, userId, sendRaw);
+
+      keepAliveTimer = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(': keepalive\n\n'));
+        } catch {
+          if (keepAliveTimer) clearInterval(keepAliveTimer);
+          cleanupSse?.();
+        }
+      }, 15000);
+    },
+    cancel() {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      cleanupSse?.();
+    },
+  });
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -49,7 +105,7 @@ export async function POST(req: NextRequest) {
         burnUntil,
       });
 
-      // Push immediately (< 0.2ms) to all LAN WebSocket clients so outside-LAN players never lag LAN players
+      // Push immediately (< 0.2ms) to all LAN WebSocket AND Cloudflare/Domain SSE clients!
       if (updated) {
         broadcastRoomEvent(
           roomId,

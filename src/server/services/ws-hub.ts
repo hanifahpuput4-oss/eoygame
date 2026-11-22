@@ -19,12 +19,20 @@ type WsClient = {
   role: string;
 };
 
+type SseClient = {
+  id: string;
+  roomId: string;
+  userId: string;
+  send: (jsonText: string) => boolean;
+};
+
 type WsHubState = {
   server: http.Server | null;
   port: number;
   starting: boolean;
   samePortHooked: boolean;
   rooms: Map<string, Map<string, WsClient>>;
+  sseRooms?: Map<string, Map<string, SseClient>>;
 };
 
 const globalForWsHub = globalThis as unknown as {
@@ -116,6 +124,33 @@ function removeClientFromRoom(client: WsClient) {
   }
 }
 
+export function registerSseClient(
+  roomId: string,
+  userId: string,
+  send: (jsonText: string) => boolean,
+): () => void {
+  const hub = getHub();
+  if (!hub.sseRooms) {
+    hub.sseRooms = new Map();
+  }
+  let roomSse = hub.sseRooms.get(roomId);
+  if (!roomSse) {
+    roomSse = new Map();
+    hub.sseRooms.set(roomId, roomSse);
+  }
+  const id = `sse_${crypto.randomBytes(6).toString('hex')}`;
+  roomSse.set(id, { id, roomId, userId, send });
+
+  return () => {
+    const map = hub.sseRooms?.get(roomId);
+    if (!map) return;
+    map.delete(id);
+    if (map.size === 0) {
+      hub.sseRooms?.delete(roomId);
+    }
+  };
+}
+
 export function broadcastRoomEvent(
   roomId: string,
   payload: Record<string, unknown>,
@@ -124,21 +159,36 @@ export function broadcastRoomEvent(
 ) {
   const hub = getHub();
   const roomClients = hub.rooms.get(roomId);
-  if (!roomClients || roomClients.size === 0) return;
+  const sseClients = hub.sseRooms?.get(roomId);
+  const hasWs = Boolean(roomClients && roomClients.size > 0);
+  const hasSse = Boolean(sseClients && sseClients.size > 0);
+  if (!hasWs && !hasSse) return;
 
   const json = JSON.stringify(payload);
   let wsFrame: Buffer | null = null;
 
-  for (const client of roomClients.values()) {
-    if (excludeClientId && client.id === excludeClientId) continue;
-    if (excludeUserId && client.userId === excludeUserId) continue;
+  if (roomClients && roomClients.size > 0) {
+    for (const client of roomClients.values()) {
+      if (excludeClientId && client.id === excludeClientId) continue;
+      if (excludeUserId && client.userId === excludeUserId) continue;
 
-    if (!client.socket.destroyed && client.socket.writable) {
-      if (!wsFrame) wsFrame = encodeWsTextFrame(json);
-      try {
-        client.socket.write(wsFrame);
-      } catch {
-        // ignore write error on closing socket
+      if (!client.socket.destroyed && client.socket.writable) {
+        if (!wsFrame) wsFrame = encodeWsTextFrame(json);
+        try {
+          client.socket.write(wsFrame);
+        } catch {
+          // ignore write error on closing socket
+        }
+      }
+    }
+  }
+
+  if (sseClients && sseClients.size > 0) {
+    for (const sse of Array.from(sseClients.values())) {
+      if (excludeUserId && sse.userId && sse.userId === excludeUserId) continue;
+      const ok = sse.send(json);
+      if (!ok) {
+        sseClients.delete(sse.id);
       }
     }
   }

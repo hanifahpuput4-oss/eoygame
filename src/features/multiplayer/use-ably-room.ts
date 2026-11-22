@@ -228,8 +228,32 @@ export function useAblyRoom(
     let cancelled = false;
     let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let pingTimer: ReturnType<typeof setInterval> | null = null;
+    let sseSource: EventSource | null = null;
     let currentWsPort = 3001;
     let attemptIndex = 0;
+
+    function ensureSseFallback() {
+      if (cancelled || sseSource || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) return;
+      try {
+        const uid = myInfoRef.current?.id ?? '';
+        const es = new EventSource(`/api/pos?stream=1&r=${encodeURIComponent(roomId)}&u=${encodeURIComponent(uid)}`);
+        sseSource = es;
+        es.onmessage = (ev) => {
+          try {
+            const parsed = JSON.parse(ev.data as string);
+            handleServerPacket(parsed);
+          } catch {
+            // ignore
+          }
+        };
+        es.onerror = () => {
+          es.close();
+          if (sseSource === es) sseSource = null;
+        };
+      } catch {
+        // ignore
+      }
+    }
 
     function connectWebSocket(port: number) {
       if (cancelled) return;
@@ -255,6 +279,10 @@ export function useAblyRoom(
           if (cancelled) {
             ws.close();
             return;
+          }
+          if (sseSource) {
+            sseSource.close();
+            sseSource = null;
           }
           setConnected(true);
           setTransportMode('ws');
@@ -297,8 +325,9 @@ export function useAblyRoom(
           }
           setConnected(false);
           setTransportMode('http');
+          ensureSseFallback();
           if (!cancelled) {
-            wsReconnectTimer = setTimeout(() => connectWebSocket(currentWsPort), 1200);
+            wsReconnectTimer = setTimeout(() => connectWebSocket(currentWsPort), 2000);
           }
         };
 
@@ -340,6 +369,10 @@ export function useAblyRoom(
       cancelled = true;
       if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
       if (pingTimer) clearInterval(pingTimer);
+      if (sseSource) {
+        sseSource.close();
+        sseSource = null;
+      }
 
       const ws = wsRef.current;
       if (ws) {

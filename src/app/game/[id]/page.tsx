@@ -73,6 +73,28 @@ type Question = {
 };
 
 const CHIP_COLORS = ['blue', 'pink', 'green', 'yellow', 'purple'] as const;
+const OPTION_DISPLAY_LABELS = ['A', 'B', 'C', 'D', 'E'] as const;
+
+function shuffleQuestionOptions(q: Question, seedStr: string): Question {
+  const opts = [...(q.options ?? [])];
+  if (opts.length <= 1) return q;
+  let h = 2166136261 >>> 0;
+  const fullSeed = `${seedStr}:${q.id}`;
+  for (let i = 0; i < fullSeed.length; i += 1) {
+    h ^= fullSeed.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  for (let i = opts.length - 1; i > 0; i -= 1) {
+    h ^= h << 13;
+    h ^= h >>> 17;
+    h ^= h << 5;
+    const j = (h >>> 0) % (i + 1);
+    const tmp = opts[i];
+    opts[i] = opts[j];
+    opts[j] = tmp;
+  }
+  return { ...q, options: opts };
+}
 
 function chipColor(seed: string) {
   let h = 0;
@@ -509,7 +531,9 @@ export default function GamePage() {
         });
       }
 
-      const qs: Question[] = data.questions ?? [];
+      const rawQs: Question[] = data.questions ?? [];
+      const shuffleSeed = `${p.id}:${roomId}:${Date.now()}`;
+      const qs: Question[] = rawQs.map((q) => shuffleQuestionOptions(q, shuffleSeed));
       setLevelQuestions(qs);
       levelQuestionsRef.current = qs;
       questionBlocksRef.current = generateQuestionBlocks(
@@ -994,56 +1018,88 @@ export default function GamePage() {
     if (ably.connected) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let lastUploadX = -9999;
+    let lastUploadY = -9999;
+    let lastUploadVx = 0;
+    let lastUploadVy = 0;
+    let lastUploadFacing = 1;
+    let lastUploadDying = false;
+    let lastHeartbeatAt = 0;
 
     async function posLoop() {
       if (!active || ably.connected) return;
       const tStart = performance.now();
+      let didSendMove = false;
       try {
         const me = playersRef.current.get(myIdRef.current);
         if (me && myIdRef.current) {
-          const res = await fetch('/api/pos', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              r: roomId,
-              u: me.id,
-              un: me.username,
-              av: me.avatar,
-              rl: myRole,
-              x: Math.round(me.x * 10) / 10,
-              y: Math.round(me.y * 10) / 10,
-              vx: Math.round(me.vx * 100) / 100,
-              vy: Math.round(me.vy * 100) / 100,
-              f: me.facing,
-              g: me.onGround ? 1 : 0,
-              d: me.isDying ? 1 : 0,
-              ds: me.deathStartedAt,
-              b: me.burnUntil,
-            }),
-          });
-          if (res.ok && active) {
-            const rtt = Math.max(1, Math.round(performance.now() - tStart));
-            ably.setPingMs(rtt);
-            const data = await res.json();
-            const peers = Array.isArray(data.p) ? data.p : [];
-            for (const rp of peers) {
-              const uid = typeof rp.u === 'string' ? rp.u : '';
-              if (!uid || uid === myIdRef.current) continue;
-              ingestRemotePlayerSnapshot({
-                id: uid,
-                username: typeof rp.un === 'string' ? rp.un : 'Player',
-                avatar: typeof rp.av === 'string' ? rp.av : 'cat-orange',
-                role: typeof rp.rl === 'string' ? rp.rl : undefined,
-                x: typeof rp.x === 'number' ? rp.x : 120,
-                y: typeof rp.y === 'number' ? rp.y : 600,
-                vx: typeof rp.vx === 'number' ? rp.vx : 0,
-                vy: typeof rp.vy === 'number' ? rp.vy : 0,
-                facing: rp.f === -1 ? -1 : 1,
-                onGround: Boolean(rp.g),
-                isDying: Boolean(rp.d),
-                deathStartedAt: typeof rp.ds === 'number' ? rp.ds : undefined,
-                burnUntil: typeof rp.b === 'number' ? rp.b : undefined,
-              });
+          const nowMs = Date.now();
+          const isMoving = Math.abs(me.vx) > 0.04 || Math.abs(me.vy) > 0.04;
+          const wasMoving = Math.abs(lastUploadVx) > 0.04 || Math.abs(lastUploadVy) > 0.04;
+          const justStopped = !isMoving && wasMoving;
+          const moved =
+            justStopped ||
+            Math.abs(me.x - lastUploadX) > 0.3 ||
+            Math.abs(me.y - lastUploadY) > 0.3 ||
+            me.facing !== lastUploadFacing ||
+            Boolean(me.isDying) !== lastUploadDying;
+
+          // Saat diam, gunakan SSE push stream untuk menerima gerakan player lain secara real-time,
+          // dan hanya kirim heartbeat /api/pos setiap 900ms agar bandwidth Cloudflare/4G 100% hemat!
+          if (moved || nowMs - lastHeartbeatAt >= 900) {
+            didSendMove = moved;
+            lastHeartbeatAt = nowMs;
+            lastUploadX = me.x;
+            lastUploadY = me.y;
+            lastUploadVx = isMoving ? me.vx : 0;
+            lastUploadVy = isMoving ? me.vy : 0;
+            lastUploadFacing = me.facing;
+            lastUploadDying = Boolean(me.isDying);
+
+            const res = await fetch('/api/pos', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                r: roomId,
+                u: me.id,
+                un: me.username,
+                av: me.avatar,
+                rl: myRole,
+                x: Math.round(me.x * 10) / 10,
+                y: Math.round(me.y * 10) / 10,
+                vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
+                vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
+                f: me.facing,
+                g: me.onGround ? 1 : 0,
+                d: me.isDying ? 1 : 0,
+                ds: me.deathStartedAt,
+                b: me.burnUntil,
+              }),
+            });
+            if (res.ok && active) {
+              const rtt = Math.max(1, Math.round(performance.now() - tStart));
+              ably.setPingMs(rtt);
+              const data = await res.json();
+              const peers = Array.isArray(data.p) ? data.p : [];
+              for (const rp of peers) {
+                const uid = typeof rp.u === 'string' ? rp.u : '';
+                if (!uid || uid === myIdRef.current) continue;
+                ingestRemotePlayerSnapshot({
+                  id: uid,
+                  username: typeof rp.un === 'string' ? rp.un : 'Player',
+                  avatar: typeof rp.av === 'string' ? rp.av : 'cat-orange',
+                  role: typeof rp.rl === 'string' ? rp.rl : undefined,
+                  x: typeof rp.x === 'number' ? rp.x : 120,
+                  y: typeof rp.y === 'number' ? rp.y : 600,
+                  vx: typeof rp.vx === 'number' ? rp.vx : 0,
+                  vy: typeof rp.vy === 'number' ? rp.vy : 0,
+                  facing: rp.f === -1 ? -1 : 1,
+                  onGround: Boolean(rp.g),
+                  isDying: Boolean(rp.d),
+                  deathStartedAt: typeof rp.ds === 'number' ? rp.ds : undefined,
+                  burnUntil: typeof rp.b === 'number' ? rp.b : undefined,
+                });
+              }
             }
           }
         }
@@ -1052,7 +1108,7 @@ export default function GamePage() {
       } finally {
         if (active && !ably.connected) {
           const elapsed = performance.now() - tStart;
-          const waitMs = Math.max(35, Math.round(55 - elapsed));
+          const waitMs = didSendMove ? Math.max(12, Math.round(35 - elapsed)) : 24;
           timer = setTimeout(posLoop, waitMs);
         }
       }
@@ -1988,22 +2044,25 @@ export default function GamePage() {
 
                   <form onSubmit={submitAnswer}>
                     <div className="mp-options-grid-2x2" role="radiogroup" aria-label="Pilihan jawaban">
-                      {question.options.map((o) => (
-                        <button
-                          key={o.label}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected === o.label}
-                          className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}`}
-                          onClick={() => {
-                            soundEngine.playClick();
-                            setSelected(o.label);
-                          }}
-                        >
-                          <span className="opt-badge">{o.label}</span>
-                          {o.content}
-                        </button>
-                      ))}
+                      {question.options.map((o, idx) => {
+                        const displayLabel = OPTION_DISPLAY_LABELS[idx] ?? o.label;
+                        return (
+                          <button
+                            key={o.label}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected === o.label}
+                            className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}`}
+                            onClick={() => {
+                              soundEngine.playClick();
+                              setSelected(o.label);
+                            }}
+                          >
+                            <span className="opt-badge">{displayLabel}</span>
+                            {o.content}
+                          </button>
+                        );
+                      })}
                     </div>
                     <div className="mt-3 flex items-center justify-end">
                       <button type="submit" className="btn-orange-action" disabled={!selected || submitting}>
