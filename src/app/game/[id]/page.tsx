@@ -59,8 +59,28 @@ type RoomData = {
   code: string;
   status: string;
   players: RoomPlayer[];
-  level: { id: string; name: string; subject?: string; grade?: string; topic?: string } | null;
+  level: { id: string; name: string; subject?: string; mapConfig?: string } | null;
 };
+
+function getRoomSubjectTitle(room: RoomData | null): string {
+  if (!room) return 'Arena llysSmart';
+  if (room.level?.subject?.trim()) return room.level.subject.trim();
+  if (room.level?.mapConfig) {
+    try {
+      const parsed = JSON.parse(room.level.mapConfig);
+      if (parsed && typeof parsed.subjectName === 'string' && parsed.subjectName.trim()) {
+        return parsed.subjectName.trim();
+      }
+    } catch {
+      // fallback below
+    }
+  }
+  if (room.level?.name) {
+    const clean = room.level.name.split(/\s*\(|\s*-/)[0]?.trim();
+    if (clean) return clean;
+  }
+  return room.name?.split(/\s*\(|\s*-/)[0]?.trim() || 'Arena llysSmart';
+}
 
 type ChatMsg = { seq?: number; id: string; userId?: string; senderName: string; text: string; createdAt: string };
 
@@ -1014,6 +1034,12 @@ export default function GamePage() {
       });
 
       const isStudentPaused = room?.status === 'paused' && !isStaff;
+      const isQuestionModalBusy = !isStaff && Boolean(questionRef.current && !answeredIdsRef.current.has(questionRef.current.id));
+      if (isQuestionModalBusy) {
+        keysRef.current.left = false;
+        keysRef.current.right = false;
+        keysRef.current.jump = false;
+      }
       if (
         me &&
         !exitNoticeRef.current &&
@@ -1022,18 +1048,22 @@ export default function GamePage() {
       ) {
         updatePlayerPhysics(
           me,
-          keysRef.current,
+          isQuestionModalBusy ? { left: false, right: false, jump: false } : keysRef.current,
           playersRef.current.values(),
           dynBlocks,
           (qid) => {
             if (isStaff) return;
             if (answeredIdsRef.current.has(qid)) return;
-            if (questionRef.current?.id === qid) {
+            if (questionRef.current && !answeredIdsRef.current.has(questionRef.current.id)) {
               setQuestionMinimized(false);
               return;
             }
             const found = levelQuestionsRef.current.find((q) => q.id === qid);
             if (found) {
+              keysRef.current.left = false;
+              keysRef.current.right = false;
+              keysRef.current.jump = false;
+              me.vx = 0;
               soundEngine.playQuestionOpen();
               questionRef.current = found;
               setQuestion(found);
@@ -1043,6 +1073,7 @@ export default function GamePage() {
           },
           dtScale,
           (soundEvt) => {
+            if (isQuestionModalBusy) return;
             if (soundEvt === 'jump') soundEngine.playJump();
             else if (soundEvt === 'bounce') soundEngine.playBounce();
             else if (soundEvt === 'burn') soundEngine.playBurn();
@@ -1540,6 +1571,9 @@ export default function GamePage() {
   }
 
   function touchControl(dir: 'left' | 'right' | 'jump', down: boolean) {
+    if (down) {
+      soundEngine.unlockAndStartBgm();
+    }
     if (
       editingControlsLayout ||
       exitNoticeRef.current ||
@@ -1849,12 +1883,7 @@ export default function GamePage() {
               </div>
 
               <div className="mp-center-stage-pill">
-                <div className="mp-stage-title">
-                  {room?.level?.subject?.trim() ||
-                    room?.level?.name?.split(/\s*\(|\s*-/)[0]?.trim() ||
-                    room?.name ||
-                    'Arena llysSmart'}
-                </div>
+                <div className="mp-stage-title">{getRoomSubjectTitle(room)}</div>
               </div>
 
               <div className="mp-top-right">
