@@ -42,13 +42,18 @@ export async function getClassroomForTeacher(id: string, teacherId: string, isAd
 export async function updateClassroom(
   id: string,
   teacherId: string,
-  data: Partial<{ name: string; subject: string; grade: string; description: string }>,
+  data: Partial<{ name: string; subject: string; grade: string; description: string; teacherId: string }>,
   isAdmin = false,
 ) {
   await getClassroomForTeacher(id, teacherId, isAdmin);
+  const { teacherId: nextTeacherId, ...rest } = data;
   await db
     .update(classrooms)
-    .set({ ...data, updatedAt: new Date() })
+    .set({
+      ...rest,
+      ...(isAdmin && nextTeacherId ? { teacherId: nextTeacherId } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(classrooms.id, id));
   return getClassroomForTeacher(id, teacherId, isAdmin);
 }

@@ -26,7 +26,7 @@ const updateUserSchema = z.object({
 
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    await requireRole('admin');
+    const admin = await requireRole('admin');
     const { id } = await ctx.params;
     const input = updateUserSchema.parse(await req.json());
 
@@ -34,8 +34,14 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const existing = existingRows[0];
     if (!existing) return fail('User tidak ditemukan', 404);
 
-    const nextUsername = input.username ?? existing.username;
+    const isProtectedOwner = existing.username.toLowerCase() === 'masbimmm';
+    if (isProtectedOwner && admin.id !== existing.id) {
+      return fail('Akun utama @masbimmm dilindungi dan tidak dapat diedit oleh admin lain', 403);
+    }
+
+    const nextUsername = isProtectedOwner ? existing.username : (input.username ?? existing.username);
     const nextEmail = input.email ?? existing.email;
+    const nextRole = isProtectedOwner ? 'admin' : (input.role ?? existing.role);
 
     const dup = await db
       .select({ id: users.id })
@@ -59,7 +65,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       fullName: input.fullName ?? existing.fullName,
       username: nextUsername,
       email: nextEmail,
-      role: input.role ?? existing.role,
+      role: nextRole,
       totalPoints: input.totalPoints !== undefined ? input.totalPoints : existing.totalPoints,
       updatedAt: new Date(),
     };
@@ -97,6 +103,18 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   try {
     const admin = await requireRole('admin');
     const { id } = await ctx.params;
+
+    const existingRows = await db
+      .select({ id: users.id, username: users.username })
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    const existing = existingRows[0];
+    if (!existing) return fail('User tidak ditemukan', 404);
+
+    if (existing.username.toLowerCase() === 'masbimmm') {
+      return fail('Akun utama @masbimmm dilindungi secara permanen dan tidak dapat dihapus', 403);
+    }
 
     if (id === admin.id) {
       return fail('Tidak dapat menghapus akun sendiri', 400);

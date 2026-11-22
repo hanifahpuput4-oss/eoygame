@@ -155,7 +155,7 @@ export default function DashboardShell({
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-white/10 bg-[var(--navy-panel)] text-white transition-transform duration-200 ease-out lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-white/10 bg-[var(--navy-panel)] text-white transition-transform duration-200 ease-out lg:z-30 lg:translate-x-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >

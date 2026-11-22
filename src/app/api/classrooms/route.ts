@@ -1,4 +1,7 @@
 import { NextRequest } from 'next/server';
+import { inArray } from 'drizzle-orm';
+import { db } from '@/db';
+import { users } from '@/db/schema';
 import { requireUser } from '@/server/auth/session';
 import {
   createClassroom,
@@ -28,8 +31,28 @@ export async function GET(req: NextRequest) {
       : undefined;
 
     if (user.role === 'teacher' || user.role === 'admin') {
-      const classrooms = await listClassrooms(user.id, user.role === 'admin');
-      return ok(withProfile ? { classrooms, profile: profilePayload } : { classrooms });
+      const isAdmin = user.role === 'admin';
+      const [classrooms, teachers] = await Promise.all([
+        listClassrooms(user.id, isAdmin),
+        isAdmin
+          ? db
+              .select({
+                id: users.id,
+                username: users.username,
+                fullName: users.fullName,
+                role: users.role,
+              })
+              .from(users)
+              .where(inArray(users.role, ['teacher', 'admin']))
+          : Promise.resolve([]),
+      ]);
+      return ok({
+        classrooms,
+        teachers,
+        isAdmin,
+        currentUserId: user.id,
+        ...(withProfile ? { profile: profilePayload } : {}),
+      });
     }
 
     const classrooms = await listStudentClassrooms(user.id);
@@ -56,7 +79,11 @@ export async function POST(req: NextRequest) {
       return fail('Hanya guru yang dapat membuat kelas', 403);
     }
     const input = classroomSchema.parse(body);
-    const classroom = await createClassroom(user.id, input);
+    const ownerId =
+      user.role === 'admin' && typeof body?.teacherId === 'string' && body.teacherId.trim()
+        ? body.teacherId.trim()
+        : user.id;
+    const classroom = await createClassroom(ownerId, input);
     return ok({ classroom }, 201);
   } catch (err) {
     return handleError(err);

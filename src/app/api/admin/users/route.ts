@@ -24,7 +24,7 @@ const createUserSchema = z.object({
 
 export async function GET() {
   try {
-    await requireRole('admin');
+    const admin = await requireRole('admin');
     const rows = await db
       .select({
         id: users.id,
@@ -40,7 +40,13 @@ export async function GET() {
       .from(users)
       .orderBy(desc(users.createdAt));
 
-    return ok({ users: rows });
+    return ok({
+      users: rows,
+      currentUser: {
+        id: admin.id,
+        username: admin.username,
+      },
+    });
   } catch (err) {
     return handleError(err);
   }

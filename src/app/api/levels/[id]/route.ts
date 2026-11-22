@@ -7,9 +7,20 @@ import { ok, handleError } from '@/server/middleware/http';
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const teacher = await requireRole('teacher');
+    const isAdmin = teacher.role === 'admin';
     const { id } = await ctx.params;
-    const input = levelSchema.parse(await req.json());
-    const level = await updateLevel(id, teacher.id, input, teacher.role === 'admin');
+    const rawBody = await req.json();
+    const input = levelSchema.parse(rawBody);
+    const targetTeacherId =
+      isAdmin && typeof rawBody?.teacherId === 'string' && rawBody.teacherId.trim()
+        ? rawBody.teacherId.trim()
+        : undefined;
+    const level = await updateLevel(
+      id,
+      teacher.id,
+      { ...input, teacherId: targetTeacherId },
+      isAdmin,
+    );
     return ok({ level });
   } catch (err) {
     return handleError(err);

@@ -1,6 +1,6 @@
 import { and, eq, asc, inArray } from 'drizzle-orm';
 import { db } from '@/db';
-import { levelQuestions, levels } from '@/db/schema';
+import { levelQuestions, levels, questions } from '@/db/schema';
 import { generateId } from '@/server/auth/crypto';
 import type { LevelInput } from '@/server/middleware/validation';
 
@@ -37,13 +37,15 @@ export async function createLevel(
 export async function updateLevel(
   id: string,
   teacherId: string,
-  input: LevelInput & { mapConfig?: Record<string, unknown> },
+  input: LevelInput & { mapConfig?: Record<string, unknown>; teacherId?: string },
   isAdmin = false,
 ) {
   const current = await getLevel(id, teacherId, isAdmin);
+  const nextTeacherId = isAdmin && input.teacherId ? input.teacherId : current.teacherId;
   await db
     .update(levels)
     .set({
+      teacherId: nextTeacherId,
       name: input.name,
       description: input.description,
       difficulty: input.difficulty,
@@ -54,6 +56,12 @@ export async function updateLevel(
     })
     .where(eq(levels.id, id));
   await setLevelQuestions(id, input.questionIds);
+  if (isAdmin && input.teacherId && input.questionIds.length > 0) {
+    await db
+      .update(questions)
+      .set({ creatorId: input.teacherId, updatedAt: new Date() })
+      .where(inArray(questions.id, input.questionIds));
+  }
   return getLevel(id, teacherId, isAdmin);
 }
 

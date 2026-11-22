@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, asc, inArray } from 'drizzle-orm';
 import { db } from '@/db';
-import { roomPlayers } from '@/db/schema';
+import { roomPlayers, users } from '@/db/schema';
 import { requireUser } from '@/server/auth/session';
 import { createRoom, listTeacherRooms, joinRoom, getRoom, getRoomByCode, assertHost } from '@/server/services/room-service';
 import { listClassrooms } from '@/server/services/classroom-service';
@@ -12,7 +12,6 @@ import { ok, fail, handleError } from '@/server/middleware/http';
 import { generateId } from '@/server/auth/crypto';
 import {
   addRejoinRequest,
-  consumeRejoinRejection,
   getRejoinRequests,
   isPlayerKicked,
 } from '@/server/services/presence-store';
@@ -25,14 +24,26 @@ export async function GET(req: NextRequest) {
     if (user.role === 'teacher' || isAdmin) {
       const bootstrap = req.nextUrl.searchParams.get('bootstrap') === '1';
       if (bootstrap) {
-        const [rooms, classrooms, levels] = await Promise.all([
+        const [rooms, classrooms, levels, teachers] = await Promise.all([
           listTeacherRooms(user.id, isAdmin),
           listClassrooms(user.id, isAdmin),
           listLevels(user.id, isAdmin),
+          isAdmin
+            ? db
+                .select({
+                  id: users.id,
+                  username: users.username,
+                  fullName: users.fullName,
+                  role: users.role,
+                })
+                .from(users)
+                .where(inArray(users.role, ['teacher', 'admin']))
+                .orderBy(asc(users.fullName))
+            : Promise.resolve([]),
         ]);
-        return ok({ rooms, classrooms, levels });
+        return ok({ rooms, classrooms, levels, teachers, isAdmin });
       }
-      return ok({ rooms: await listTeacherRooms(user.id, isAdmin) });
+      return ok({ rooms: await listTeacherRooms(user.id, isAdmin), isAdmin });
     }
     return ok({ rooms: [] });
   } catch (err) {
@@ -47,7 +58,7 @@ export async function POST(req: NextRequest) {
 
     if ((user.role === 'teacher' || user.role === 'admin') && !body?.code) {
       const input = roomSchema.parse(body);
-      const room = await createRoom(user.id, input);
+      const room = await createRoom(user.id, input, user.role === 'admin');
       return ok({ room }, 201);
     }
 

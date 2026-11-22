@@ -29,6 +29,7 @@ const ROLE_BADGES: Record<'admin' | 'teacher' | 'student', string> = {
 
 export default function AdminUsersManagementPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'teacher' | 'student'>('all');
@@ -62,6 +63,9 @@ export default function AdminUsersManagementPage() {
       if (res.ok) {
         const data = await res.json();
         setUsers(data.users ?? []);
+        if (data.currentUser) {
+          setCurrentUser(data.currentUser);
+        }
       }
     } finally {
       setLoading(false);
@@ -197,213 +201,239 @@ export default function AdminUsersManagementPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-3xl font-bold">Manajemen User (Administrator)</h1>
-          <p className="mt-1 text-sm text-[var(--wood-text)]/70">
-            Kelola seluruh akun Administrator, Guru, dan Siswa. Ubah role, reset password, atau sesuaikan total poin siswa.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="btn-primary !px-4 !py-2.5 text-sm"
-          onClick={() => setCreateOpen((v) => !v)}
-        >
-          {createOpen ? 'Tutup Form User' : '+ Tambah User Baru'}
-        </button>
-      </div>
-
-      {statusMsg && (
-        <div
-          role="status"
-          className={`rounded-2xl px-4 py-3 text-sm font-bold ${
-            statusMsg.type === 'ok' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'
-          }`}
-        >
-          {statusMsg.text}
-        </div>
-      )}
-
-      {createOpen && (
-        <form onSubmit={onCreateUser} className="card-panel grid gap-4 md:grid-cols-3">
-          <div className="md:col-span-3">
-            <h2 className="font-display text-xl font-bold">Buat Akun User Baru</h2>
-          </div>
+    <>
+      <div className="space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <label className="label-field">Nama Lengkap</label>
-            <input
-              className="input-field"
-              required
-              placeholder="Contoh: Budi Santoso"
-              value={createForm.fullName}
-              onChange={(e) => setCreateForm({ ...createForm, fullName: e.target.value })}
-            />
+            <h1 className="font-display text-2xl font-bold sm:text-3xl">Manajemen User</h1>
+            <p className="mt-1 text-sm text-[var(--wood-text)]/70">
+              Kelola seluruh akun Administrator, Guru, dan Siswa. Ubah role, reset password, atau sesuaikan total poin siswa.
+            </p>
           </div>
-          <div>
-            <label className="label-field">Username</label>
-            <input
-              className="input-field lowercase"
-              required
-              placeholder="contoh: budi_tkj"
-              value={createForm.username}
-              onChange={(e) => setCreateForm({ ...createForm, username: e.target.value.toLowerCase() })}
-            />
-          </div>
-          <div>
-            <label className="label-field">Email</label>
-            <input
-              type="email"
-              className="input-field lowercase"
-              required
-              placeholder="budi@sekolah.sch.id"
-              value={createForm.email}
-              onChange={(e) => setCreateForm({ ...createForm, email: e.target.value.toLowerCase() })}
-            />
-          </div>
-          <div>
-            <label className="label-field">Password</label>
-            <input
-              type="password"
-              className="input-field"
-              required
-              minLength={6}
-              placeholder="Minimal 6 karakter"
-              value={createForm.password}
-              onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label-field">Role / Peran</label>
-            <select
-              className="input-field"
-              value={createForm.role}
-              onChange={(e) =>
-                setCreateForm({ ...createForm, role: e.target.value as 'admin' | 'teacher' | 'student' })
-              }
-            >
-              <option value="student">Siswa</option>
-              <option value="teacher">Guru</option>
-              <option value="admin">Administrator</option>
-            </select>
-          </div>
-          <div>
-            <label className="label-field">Poin Awal</label>
-            <input
-              type="number"
-              min={0}
-              className="input-field"
-              value={createForm.totalPoints}
-              onChange={(e) => setCreateForm({ ...createForm, totalPoints: Number(e.target.value) })}
-            />
-          </div>
-          <div className="flex justify-end gap-2 md:col-span-3">
-            <button
-              type="button"
-              className="btn-secondary !px-4 !py-2 text-sm"
-              onClick={() => setCreateOpen(false)}
-            >
-              Batal
-            </button>
-            <button type="submit" disabled={creating} className="btn-primary !px-5 !py-2 text-sm">
-              {creating ? 'Menyimpan...' : 'Simpan User'}
-            </button>
-          </div>
-        </form>
-      )}
-
-      {/* Filter & Search */}
-      <section className="card-panel space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-2">
-            {(
-              [
-                { key: 'all', label: `Semua (${counts.all})` },
-                { key: 'admin', label: `Admin (${counts.admin})` },
-                { key: 'teacher', label: `Guru (${counts.teacher})` },
-                { key: 'student', label: `Siswa (${counts.student})` },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setRoleFilter(tab.key)}
-                className={`rounded-xl px-3.5 py-1.5 text-xs font-bold transition ${
-                  roleFilter === tab.key
-                    ? 'bg-[var(--navy-panel)] text-white shadow'
-                    : 'bg-[var(--cream-soft)] text-[var(--wood-text)] hover:bg-black/10'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="w-full sm:w-72">
-            <input
-              className="input-field !py-2 text-sm"
-              placeholder="Cari nama, username, atau email..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
+          <button
+            type="button"
+            className="btn-primary shrink-0 self-start sm:self-auto"
+            onClick={() => setCreateOpen((v) => !v)}
+          >
+            {createOpen ? 'Tutup Form' : '+ Tambah User Baru'}
+          </button>
         </div>
 
-        {loading ? (
-          <DashboardLoader label="Memuat daftar pengguna..." compact />
-        ) : filteredUsers.length === 0 ? (
-          <p className="py-8 text-center text-sm text-[var(--wood-text)]/60">
-            Tidak ada pengguna yang cocok dengan pencarian.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b-2 border-black/10 text-xs uppercase text-[var(--wood-text)]/70">
-                  <th className="py-2.5 pr-3">Nama Lengkap</th>
-                  <th className="py-2.5 pr-3">Username</th>
-                  <th className="py-2.5 pr-3">Email</th>
-                  <th className="py-2.5 pr-3">Role</th>
-                  <th className="py-2.5 pr-3 text-right">Total Poin</th>
-                  <th className="py-2.5 text-right">Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredUsers.map((u) => (
-                  <tr key={u.id} className="border-b border-black/10 hover:bg-black/[0.02]">
-                    <td className="py-3 pr-3 font-bold">{u.fullName}</td>
-                    <td className="py-3 pr-3 font-mono text-xs font-semibold">@{u.username}</td>
-                    <td className="py-3 pr-3 text-xs text-[var(--wood-text)]/80">{u.email}</td>
-                    <td className="py-3 pr-3">
-                      <span className={`inline-block rounded-lg px-2.5 py-0.5 text-xs font-bold ${ROLE_BADGES[u.role]}`}>
-                        {ROLE_LABELS[u.role]}
-                      </span>
-                    </td>
-                    <td className="py-3 pr-3 text-right font-bold">{u.totalPoints} poin</td>
-                    <td className="py-3 text-right">
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(u)}
-                          className="rounded-xl bg-[var(--cream-soft)] px-3 py-1.5 text-xs font-bold hover:bg-black/10"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onDeleteUser(u)}
-                          className="rounded-xl bg-red-100 px-3 py-1.5 text-xs font-bold text-red-700 hover:bg-red-200"
-                        >
-                          Hapus
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {statusMsg && (
+          <div
+            role="status"
+            className={`rounded-xl px-4 py-3 text-sm font-semibold ${
+              statusMsg.type === 'ok' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'
+            }`}
+          >
+            {statusMsg.text}
           </div>
         )}
-      </section>
+
+        {createOpen && (
+          <form onSubmit={onCreateUser} className="card-panel space-y-4">
+            <div className="flex items-center justify-between border-b border-black/10 pb-3">
+              <h2 className="font-display text-lg font-bold">Buat Akun User Baru</h2>
+              <button
+                type="button"
+                className="rounded-lg bg-black/5 px-2.5 py-1 text-xs font-bold hover:bg-black/10"
+                onClick={() => setCreateOpen(false)}
+              >
+                Tutup
+              </button>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <label className="label-field">Nama Lengkap</label>
+                <input
+                  className="input-field"
+                  required
+                  placeholder="Contoh: Budi Santoso"
+                  value={createForm.fullName}
+                  onChange={(e) => setCreateForm({ ...createForm, fullName: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="label-field">Username</label>
+                <input
+                  className="input-field lowercase"
+                  required
+                  placeholder="contoh: budi_tkj"
+                  value={createForm.username}
+                  onChange={(e) => setCreateForm({ ...createForm, username: e.target.value.toLowerCase() })}
+                />
+              </div>
+              <div>
+                <label className="label-field">Email</label>
+                <input
+                  type="email"
+                  className="input-field lowercase"
+                  required
+                  placeholder="budi@sekolah.sch.id"
+                  value={createForm.email}
+                  onChange={(e) => setCreateForm({ ...createForm, email: e.target.value.toLowerCase() })}
+                />
+              </div>
+              <div>
+                <label className="label-field">Password</label>
+                <input
+                  type="password"
+                  className="input-field"
+                  required
+                  minLength={6}
+                  placeholder="Minimal 6 karakter"
+                  value={createForm.password}
+                  onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="label-field">Role / Peran</label>
+                <select
+                  className="input-field"
+                  value={createForm.role}
+                  onChange={(e) =>
+                    setCreateForm({ ...createForm, role: e.target.value as 'admin' | 'teacher' | 'student' })
+                  }
+                >
+                  <option value="student">Siswa</option>
+                  <option value="teacher">Guru</option>
+                  <option value="admin">Administrator</option>
+                </select>
+              </div>
+              <div>
+                <label className="label-field">Poin Awal</label>
+                <input
+                  type="number"
+                  min={0}
+                  className="input-field"
+                  value={createForm.totalPoints}
+                  onChange={(e) => setCreateForm({ ...createForm, totalPoints: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 pt-1">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCreateOpen(false)}
+              >
+                Batal
+              </button>
+              <button type="submit" disabled={creating} className="btn-primary">
+                {creating ? 'Menyimpan...' : 'Simpan User'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Filter & Search */}
+        <section className="card-panel space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  { key: 'all', label: `Semua (${counts.all})` },
+                  { key: 'admin', label: `Admin (${counts.admin})` },
+                  { key: 'teacher', label: `Guru (${counts.teacher})` },
+                  { key: 'student', label: `Siswa (${counts.student})` },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setRoleFilter(tab.key)}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                    roleFilter === tab.key
+                      ? 'bg-[var(--navy-panel)] text-white'
+                      : 'bg-[var(--cream-soft)] text-[var(--wood-text)] hover:bg-black/10'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <div className="w-full sm:w-72">
+              <input
+                className="input-field !py-2 text-sm"
+                placeholder="Cari nama, username, atau email..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {loading ? (
+            <DashboardLoader label="Memuat daftar pengguna..." compact />
+          ) : filteredUsers.length === 0 ? (
+            <p className="py-8 text-center text-sm text-[var(--wood-text)]/60">
+              Tidak ada pengguna yang cocok dengan pencarian.
+            </p>
+          ) : (
+            <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+              <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-black/10 text-xs font-bold uppercase tracking-wide text-[var(--wood-text)]/65">
+                    <th className="py-2.5 pr-3">Nama Lengkap</th>
+                    <th className="py-2.5 pr-3">Username</th>
+                    <th className="py-2.5 pr-3">Email</th>
+                    <th className="py-2.5 pr-3">Role</th>
+                    <th className="py-2.5 pr-3 text-right">Total Poin</th>
+                    <th className="py-2.5 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-black/5">
+                  {filteredUsers.map((u) => {
+                    const isMasbimmm = u.username.toLowerCase() === 'masbimmm';
+                    const isSelf = currentUser?.id === u.id;
+                    const canEdit = !isMasbimmm || isSelf;
+                    const canDelete = !isMasbimmm && !isSelf;
+
+                    return (
+                      <tr key={u.id} className="hover:bg-black/[0.015]">
+                        <td className="py-3 pr-3 font-semibold">{u.fullName}</td>
+                        <td className="py-3 pr-3 font-mono text-xs font-semibold">@{u.username}</td>
+                        <td className="py-3 pr-3 text-xs text-[var(--wood-text)]/75">{u.email}</td>
+                        <td className="py-3 pr-3">
+                          <span className={`inline-block rounded-lg px-2.5 py-0.5 text-xs font-bold ${ROLE_BADGES[u.role]}`}>
+                            {ROLE_LABELS[u.role]}
+                          </span>
+                        </td>
+                        <td className="py-3 pr-3 text-right font-semibold">{u.totalPoints} poin</td>
+                        <td className="py-3 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            {canEdit ? (
+                              <button
+                                type="button"
+                                onClick={() => openEditModal(u)}
+                                className="rounded-lg bg-[var(--cream-soft)] px-2.5 py-1 text-xs font-bold hover:bg-black/10"
+                              >
+                                Edit
+                              </button>
+                            ) : (
+                              <span className="rounded-lg bg-black/5 px-2.5 py-1 text-xs font-semibold text-[var(--wood-text)]/55">
+                                Dilindungi
+                              </span>
+                            )}
+                            {canDelete && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteUser(u)}
+                                className="rounded-lg bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
+                              >
+                                Hapus
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
 
       {editingUser && (
         <div
@@ -413,19 +443,19 @@ export default function AdminUsersManagementPage() {
           onClick={() => setEditingUser(null)}
         >
           <div
-            className="card-panel w-full max-w-lg bg-[var(--cream-bg)]"
+            className="card-panel max-h-[90vh] w-full max-w-lg overflow-y-auto bg-[var(--cream-bg)]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between border-b border-black/10 pb-3">
               <div>
-                <h2 className="font-display text-2xl font-bold">Edit User: @{editingUser.username}</h2>
+                <h2 className="font-display text-xl font-bold">Edit User: @{editingUser.username}</h2>
                 <p className="text-xs text-[var(--wood-text)]/70">
                   Ubah informasi profil, role akses, poin, atau reset password.
                 </p>
               </div>
               <button
                 type="button"
-                className="rounded-xl bg-black/10 px-3 py-1 text-sm font-bold hover:bg-black/20"
+                className="rounded-lg bg-black/10 px-2.5 py-1 text-xs font-bold hover:bg-black/20"
                 onClick={() => setEditingUser(null)}
               >
                 ✕
@@ -446,8 +476,9 @@ export default function AdminUsersManagementPage() {
                 <div>
                   <label className="label-field">Username</label>
                   <input
-                    className="input-field lowercase"
+                    className="input-field lowercase disabled:opacity-60"
                     required
+                    disabled={editingUser.username.toLowerCase() === 'masbimmm'}
                     value={editForm.username}
                     onChange={(e) => setEditForm({ ...editForm, username: e.target.value.toLowerCase() })}
                   />
@@ -467,7 +498,8 @@ export default function AdminUsersManagementPage() {
                 <div>
                   <label className="label-field">Role / Peran</label>
                   <select
-                    className="input-field"
+                    className="input-field disabled:opacity-60"
+                    disabled={editingUser.username.toLowerCase() === 'masbimmm'}
                     value={editForm.role}
                     onChange={(e) =>
                       setEditForm({ ...editForm, role: e.target.value as 'admin' | 'teacher' | 'student' })
@@ -503,12 +535,12 @@ export default function AdminUsersManagementPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  className="btn-secondary !px-4 !py-2 text-sm"
+                  className="btn-secondary"
                   onClick={() => setEditingUser(null)}
                 >
                   Batal
                 </button>
-                <button type="submit" disabled={savingEdit} className="btn-primary !px-5 !py-2 text-sm">
+                <button type="submit" disabled={savingEdit} className="btn-primary">
                   {savingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}
                 </button>
               </div>
@@ -516,6 +548,6 @@ export default function AdminUsersManagementPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

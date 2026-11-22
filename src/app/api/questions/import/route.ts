@@ -29,10 +29,11 @@ export async function POST(req: NextRequest) {
     const isAdmin = teacher.role === 'admin';
     const body = bulkSchema.parse(await req.json());
     const level = await getLevel(body.levelId, teacher.id, isAdmin);
+    const ownerTeacherId = level.teacherId || teacher.id;
 
     const createdIds: string[] = [];
     for (const item of body.items) {
-      const q = await createQuestion(teacher.id, {
+      const q = await createQuestion(ownerTeacherId, {
         type: 'multiple_choice',
         content: item.content,
         imageUrl: '',

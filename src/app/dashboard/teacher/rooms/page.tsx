@@ -7,6 +7,7 @@ import DashboardLoader from '@/components/dashboard/dashboard-loader';
 
 type Room = {
   id: string;
+  hostId?: string;
   name: string;
   code: string;
   status: string;
@@ -18,8 +19,9 @@ type Room = {
   classroom: { id: string; name: string; subject: string; grade: string } | null;
 };
 
-type Classroom = { id: string; name: string; subject: string; grade: string };
-type LevelRow = { id: string; name: string; mapConfig: string; questionIds: string[] };
+type Classroom = { id: string; teacherId?: string; name: string; subject: string; grade: string };
+type LevelRow = { id: string; teacherId?: string; name: string; mapConfig: string; questionIds: string[] };
+type TeacherOption = { id: string; username: string; fullName: string; role: string };
 
 type RecapData = {
   room: { id: string; name: string; code: string; status: string };
@@ -85,12 +87,18 @@ export default function RoomsPage() {
   const [rooms, setRooms] = useState<Room[]>(() => getCachedData<Room[]>('teacher:rooms') ?? []);
   const [classrooms, setClassrooms] = useState<Classroom[]>(() => getCachedData<Classroom[]>('teacher:classrooms') ?? []);
   const [levels, setLevels] = useState<LevelRow[]>(() => getCachedData<LevelRow[]>('teacher:levels') ?? []);
+  const [teachers, setTeachers] = useState<TeacherOption[]>(() => getCachedData<TeacherOption[]>('teacher:teachers') ?? []);
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => Boolean(getCachedData<boolean>('teacher:isAdmin')));
 
   const [classroomId, setClassroomId] = useState('');
   const [subjectKey, setSubjectKey] = useState('');
   const [levelId, setLevelId] = useState('');
   const [customName, setCustomName] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(40);
+
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'waiting' | 'completed'>('all');
+  const [filterTeacherId, setFilterTeacherId] = useState<string>('');
+  const [filterClassroomId, setFilterClassroomId] = useState<string>('');
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(() => getCachedData<Room[]>('teacher:rooms') === null);
@@ -117,6 +125,14 @@ export default function RoomsPage() {
           setLevels(data.levels);
           setCachedData('teacher:levels', data.levels);
         }
+        if (Array.isArray(data.teachers)) {
+          setTeachers(data.teachers);
+          setCachedData('teacher:teachers', data.teachers);
+        }
+        if (typeof data.isAdmin === 'boolean') {
+          setIsAdmin(data.isAdmin);
+          setCachedData('teacher:isAdmin', data.isAdmin);
+        }
       }
     } finally {
       setLoading(false);
@@ -127,22 +143,29 @@ export default function RoomsPage() {
     const cachedRooms = getPersistedCache<Room[]>('teacher:rooms');
     const cachedClassrooms = getPersistedCache<Classroom[]>('teacher:classrooms');
     const cachedLevels = getPersistedCache<LevelRow[]>('teacher:levels');
+    const cachedTeachers = getPersistedCache<TeacherOption[]>('teacher:teachers');
+    const cachedIsAdmin = getPersistedCache<boolean>('teacher:isAdmin');
     if (cachedRooms) {
       setRooms(cachedRooms);
       setLoading(false);
     }
     if (cachedClassrooms) setClassrooms(cachedClassrooms);
     if (cachedLevels) setLevels(cachedLevels);
+    if (cachedTeachers) setTeachers(cachedTeachers);
+    if (typeof cachedIsAdmin === 'boolean') setIsAdmin(cachedIsAdmin);
     load();
     const timer = setInterval(load, 3000);
     return () => clearInterval(timer);
   }, [load]);
+
+  const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers]);
 
   const subjectGroups = useMemo(() => {
     const map = new Map<
       string,
       {
         key: string;
+        teacherId: string;
         subjectName: string;
         grade: string;
         objectives: { level: LevelRow; objectiveName: string }[];
@@ -150,14 +173,61 @@ export default function RoomsPage() {
     >();
     for (const lvl of levels) {
       const meta = parseLevelMeta(lvl);
-      const key = `${meta.subjectName}__${meta.grade}`;
+      const ownerId = lvl.teacherId ?? '';
+      const key = `${ownerId}__${meta.subjectName}__${meta.grade}`;
       if (!map.has(key)) {
-        map.set(key, { key, subjectName: meta.subjectName, grade: meta.grade, objectives: [] });
+        map.set(key, {
+          key,
+          teacherId: ownerId,
+          subjectName: meta.subjectName,
+          grade: meta.grade,
+          objectives: [],
+        });
       }
       map.get(key)!.objectives.push({ level: lvl, objectiveName: meta.objectiveName });
     }
     return Array.from(map.values());
   }, [levels]);
+
+  const statusCounts = useMemo(() => {
+    let active = 0;
+    let waiting = 0;
+    let completed = 0;
+    for (const r of rooms) {
+      if (r.status === 'in_progress' || r.status === 'paused' || r.status === 'starting') active += 1;
+      else if (r.status === 'waiting') waiting += 1;
+      else if (r.status === 'completed') completed += 1;
+    }
+    return { all: rooms.length, active, waiting, completed };
+  }, [rooms]);
+
+  const filterableClassrooms = useMemo(() => {
+    if (!filterTeacherId) return classrooms;
+    return classrooms.filter((c) => c.teacherId === filterTeacherId);
+  }, [classrooms, filterTeacherId]);
+
+  const filteredRooms = useMemo(() => {
+    return rooms.filter((r) => {
+      if (filterStatus === 'active') {
+        if (r.status !== 'in_progress' && r.status !== 'paused' && r.status !== 'starting') return false;
+      } else if (filterStatus === 'waiting') {
+        if (r.status !== 'waiting') return false;
+      } else if (filterStatus === 'completed') {
+        if (r.status !== 'completed') return false;
+      }
+
+      if (filterTeacherId) {
+        const roomTeacherId = r.host?.id ?? r.hostId ?? '';
+        if (roomTeacherId !== filterTeacherId) return false;
+      }
+
+      if (filterClassroomId) {
+        if (r.classroom?.id !== filterClassroomId) return false;
+      }
+
+      return true;
+    });
+  }, [rooms, filterStatus, filterTeacherId, filterClassroomId]);
 
   const activeSubjectGroup = subjectGroups.find((g) => g.key === subjectKey) ?? null;
 
@@ -371,252 +441,394 @@ export default function RoomsPage() {
   }
 
   return (
-    <div>
-      <h1 className="font-display text-3xl font-bold">Ruang Game & Rekap Nilai</h1>
-      <p className="mt-1 text-sm text-[var(--wood-text)]/70">
-        Pilih Kelas, Mata Pelajaran, dan Tujuan Pembelajaran untuk membuka ruang game. Saat game diakhiri, rekap nilai otomatis tersedia.
-      </p>
-
-      <form onSubmit={onSubmit} className="card-panel mt-6 grid gap-4 md:grid-cols-3">
+    <>
+      <div className="space-y-6">
         <div>
-          <label className="label-field">1. Pilih Kelas</label>
-          <select
-            className="input-field"
-            required
-            value={classroomId}
-            onChange={(e) => setClassroomId(e.target.value)}
-          >
-            <option value="">Pilih kelas...</option>
-            {classrooms.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.grade})
-              </option>
-            ))}
-          </select>
+          <h1 className="font-display text-2xl font-bold sm:text-3xl">Ruang Game &amp; Rekap Nilai</h1>
+          <p className="mt-1 text-sm text-[var(--wood-text)]/70">
+            Pilih Kelas, Mata Pelajaran, dan Tujuan Pembelajaran untuk membuka ruang game. Saat game diakhiri, rekap nilai otomatis tersedia.
+          </p>
         </div>
 
-        <div>
-          <label className="label-field">2. Pilih Mata Pelajaran</label>
-          <select
-            className="input-field"
-            required
-            value={subjectKey}
-            onChange={(e) => onSelectSubject(e.target.value)}
-          >
-            <option value="">Pilih mapel...</option>
-            {subjectGroups.map((g) => (
-              <option key={g.key} value={g.key}>
-                {g.subjectName} ({g.grade})
-              </option>
-            ))}
-          </select>
-        </div>
+        <form onSubmit={onSubmit} className="card-panel space-y-4">
+          <div className="border-b border-black/10 pb-3">
+            <h2 className="font-display text-lg font-bold">Buat Sesi Ruang Game Baru</h2>
+          </div>
 
-        <div>
-          <label className="label-field">3. Pilih Tujuan Pembelajaran / Kategori Soal</label>
-          <select
-            className="input-field"
-            required
-            value={levelId}
-            onChange={(e) => setLevelId(e.target.value)}
-            disabled={!activeSubjectGroup}
-          >
-            <option value="">
-              {activeSubjectGroup ? 'Pilih tujuan pembelajaran...' : 'Pilih mapel dulu...'}
-            </option>
-            {activeSubjectGroup?.objectives.map((o) => (
-              <option key={o.level.id} value={o.level.id}>
-                {o.objectiveName} ({o.level.questionIds.length} soal)
-              </option>
-            ))}
-          </select>
-        </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label className="label-field">1. Pilih Kelas</label>
+              <select
+                className="input-field"
+                required
+                value={classroomId}
+                onChange={(e) => setClassroomId(e.target.value)}
+              >
+                <option value="">Pilih kelas...</option>
+                {classrooms.map((c) => {
+                  const t = c.teacherId ? teacherMap.get(c.teacherId) : undefined;
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.grade}){isAdmin && t ? ` — Guru: ${t.fullName}` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
 
-        <div className="md:col-span-2">
-          <label className="label-field">Judul Sesi Ruang (Opsional - Otomatis jika dikosongkan)</label>
-          <input
-            className="input-field"
-            value={customName}
-            onChange={(e) => setCustomName(e.target.value)}
-            placeholder="Kosongkan agar otomatis mengikuti nama Kelas + Mapel + Tujuan Pembelajaran"
-          />
-        </div>
+            <div>
+              <label className="label-field">2. Pilih Mata Pelajaran</label>
+              <select
+                className="input-field"
+                required
+                value={subjectKey}
+                onChange={(e) => onSelectSubject(e.target.value)}
+              >
+                <option value="">Pilih mapel...</option>
+                {subjectGroups.map((g) => {
+                  const t = g.teacherId ? teacherMap.get(g.teacherId) : undefined;
+                  return (
+                    <option key={g.key} value={g.key}>
+                      {g.subjectName} ({g.grade}){isAdmin && t ? ` — Guru: ${t.fullName}` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
 
-        <div>
-          <label className="label-field">Maks Pemain</label>
-          <input
-            type="number"
-            min={2}
-            max={60}
-            className="input-field"
-            value={maxPlayers}
-            onChange={(e) => setMaxPlayers(Number(e.target.value))}
-          />
-        </div>
+            <div className="sm:col-span-2 lg:col-span-1">
+              <label className="label-field">3. Pilih Tujuan Pembelajaran</label>
+              <select
+                className="input-field"
+                required
+                value={levelId}
+                onChange={(e) => setLevelId(e.target.value)}
+                disabled={!activeSubjectGroup}
+              >
+                <option value="">
+                  {activeSubjectGroup ? 'Pilih tujuan pembelajaran...' : 'Pilih mapel dulu...'}
+                </option>
+                {activeSubjectGroup?.objectives.map((o) => (
+                  <option key={o.level.id} value={o.level.id}>
+                    {o.objectiveName} ({o.level.questionIds.length} soal)
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        {error && <p className="text-sm text-red-600 md:col-span-3">{error}</p>}
-        <button type="submit" disabled={creating} className="btn-primary disabled:opacity-60 md:col-span-3">
-          {creating ? '⏳ Membuat Ruang Game...' : '🎮 Buat Ruang Game Sekarang'}
-        </button>
-      </form>
+            <div className="sm:col-span-2">
+              <label className="label-field">Judul Sesi Ruang (Opsional — Otomatis jika dikosongkan)</label>
+              <input
+                className="input-field"
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                placeholder="Kosongkan agar otomatis mengikuti nama Kelas + Mapel + Tujuan Pembelajaran"
+              />
+            </div>
 
-      {loading ? (
-        <DashboardLoader label="Memuat daftar ruang game..." cards={2} />
-      ) : rooms.length === 0 ? (
-        <p className="mt-8 text-center text-sm text-[var(--wood-text)]/60">Belum ada ruang game.</p>
-      ) : (
-        <div className="mt-8 space-y-4">
-          {rooms.map((r) => (
-            <div key={r.id} className="card-panel">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="font-display text-xl font-semibold">{r.name}</h2>
-                  <p className="text-sm text-[var(--wood-text)]/70">
-                    {r.host ? (
-                      <>
-                        Guru Host: <strong>{r.host.fullName} (@{r.host.username})</strong> |{' '}
-                      </>
-                    ) : null}
-                    Kelas: <strong>{r.classroom?.name ?? '-'}</strong> | Tujuan Pembelajaran:{' '}
-                    <strong>{r.level?.name ?? '-'}</strong> | Pemain: {r.players.length}/{r.maxPlayers}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-xl bg-[var(--yellow-accent)] px-3 py-1 font-mono text-sm font-bold tracking-widest">
-                    {r.code}
-                  </span>
-                  <span
-                    className={`rounded-xl px-3 py-1 text-sm font-bold ${
-                      r.status === 'completed'
-                        ? 'bg-green-100 text-green-800'
-                        : r.status === 'in_progress'
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-[var(--cream-soft)]'
-                    }`}
-                  >
-                    {statusLabels[r.status] ?? r.status}
-                  </span>
-                </div>
-              </div>
+            <div>
+              <label className="label-field">Maks Pemain</label>
+              <input
+                type="number"
+                min={2}
+                max={60}
+                className="input-field"
+                value={maxPlayers}
+                onChange={(e) => setMaxPlayers(Number(e.target.value))}
+              />
+            </div>
+          </div>
 
-              {r.players.length > 0 && (
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm">
-                  <span className="font-semibold text-[var(--wood-text)]/80">Pemain di ruang:</span>
-                  {r.players.map((p) => (
-                    <span
-                      key={p.userId}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e8d5b0] bg-[var(--cream-soft)] px-2.5 py-0.5 text-xs font-semibold"
-                    >
-                      <span>
-                        {p.username}
-                        {p.role === 'admin' ? ' (ADMIN)' : p.role === 'teacher' ? ' (GURU)' : ''}
-                      </span>
-                      {p.role !== 'admin' && p.role !== 'teacher' && (
-                        <button
-                          type="button"
-                          title={`Kick ${p.username}`}
-                          onClick={() => onKickFromDashboard(r.id, p.userId, p.username)}
-                          className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-700 hover:bg-red-200"
-                        >
-                          Kick
-                        </button>
-                      )}
-                    </span>
+          {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
+
+          <div className="pt-1">
+            <button type="submit" disabled={creating} className="btn-primary w-full sm:w-auto">
+              {creating ? 'Membuat Ruang Game...' : '+ Buat Ruang Game'}
+            </button>
+          </div>
+        </form>
+
+        {/* FILTER BAR: Status Game, Guru, Kelas */}
+        <div className="card-panel space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-display text-base font-bold">Filter Daftar Ruang Game</span>
+            {(filterStatus !== 'all' || filterTeacherId !== '' || filterClassroomId !== '') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterStatus('all');
+                  setFilterTeacherId('');
+                  setFilterClassroomId('');
+                }}
+                className="rounded-lg bg-black/5 px-3 py-1 text-xs font-bold text-[var(--wood-text)] hover:bg-black/10"
+              >
+                Reset Filter
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setFilterStatus('all')}
+              className={`rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                filterStatus === 'all'
+                  ? 'bg-[var(--navy-panel)] text-white'
+                  : 'bg-[var(--cream-soft)] text-[var(--wood-text)] hover:bg-black/10'
+              }`}
+            >
+              Semua Status ({statusCounts.all})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterStatus('active')}
+              className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                filterStatus === 'active'
+                  ? 'bg-blue-700 text-white'
+                  : 'bg-blue-100/80 text-blue-800 hover:bg-blue-200/80'
+              }`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${filterStatus === 'active' ? 'bg-white' : 'bg-blue-700'}`} />
+              Aktif / Berjalan ({statusCounts.active})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterStatus('waiting')}
+              className={`rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                filterStatus === 'waiting'
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-amber-100/80 text-amber-900 hover:bg-amber-200/80'
+              }`}
+            >
+              Menunggu ({statusCounts.waiting})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterStatus('completed')}
+              className={`rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                filterStatus === 'completed'
+                  ? 'bg-green-700 text-white'
+                  : 'bg-green-100/80 text-green-800 hover:bg-green-200/80'
+              }`}
+            >
+              Selesai ({statusCounts.completed})
+            </button>
+          </div>
+
+          <div className={`grid gap-3 pt-1 ${isAdmin ? 'sm:grid-cols-2' : 'sm:grid-cols-1'}`}>
+            {isAdmin && (
+              <div>
+                <label className="label-field">Filter Berdasarkan Guru</label>
+                <select
+                  className="input-field"
+                  value={filterTeacherId}
+                  onChange={(e) => {
+                    setFilterTeacherId(e.target.value);
+                    setFilterClassroomId('');
+                  }}
+                >
+                  <option value="">Semua Guru ({teachers.length})</option>
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.fullName} (@{t.username}){t.role === 'admin' ? ' — Admin' : ''}
+                    </option>
                   ))}
-                  {r.players.some((p) => p.role !== 'admin' && p.role !== 'teacher') && (
-                    <button
-                      type="button"
-                      onClick={() => onKickAllFromDashboard(r.id)}
-                      className="rounded-lg bg-red-600 px-2.5 py-0.5 text-xs font-bold text-white hover:bg-red-700"
+                </select>
+              </div>
+            )}
+
+            <div>
+              <label className="label-field">Filter Berdasarkan Kelas</label>
+              <select
+                className="input-field"
+                value={filterClassroomId}
+                onChange={(e) => setFilterClassroomId(e.target.value)}
+              >
+                <option value="">Semua Kelas ({filterableClassrooms.length})</option>
+                {filterableClassrooms.map((c) => {
+                  const t = c.teacherId ? teacherMap.get(c.teacherId) : undefined;
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.grade}){isAdmin && t ? ` — ${t.fullName}` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <DashboardLoader label="Memuat daftar ruang game..." cards={2} />
+        ) : rooms.length === 0 ? (
+          <div className="card-panel py-10 text-center text-sm text-[var(--wood-text)]/60">
+            Belum ada sesi ruang game.
+          </div>
+        ) : filteredRooms.length === 0 ? (
+          <div className="card-panel py-8 text-center text-sm text-[var(--wood-text)]/70">
+            Tidak ada ruang game yang cocok dengan filter yang dipilih.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredRooms.map((r) => (
+              <div key={r.id} className="card-panel space-y-3">
+                <div className="flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <h2 className="font-display text-lg font-bold sm:text-xl">{r.name}</h2>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--wood-text)]/75 sm:text-sm">
+                      {r.host && (
+                        <span>
+                          Guru Host: <strong>{r.host.fullName} (@{r.host.username})</strong>
+                        </span>
+                      )}
+                      <span>
+                        Kelas: <strong>{r.classroom?.name ?? '-'}</strong>
+                      </span>
+                      <span>
+                        Tujuan Pembelajaran: <strong>{r.level?.name ?? '-'}</strong>
+                      </span>
+                      <span>
+                        Pemain: <strong>{r.players.length}/{r.maxPlayers}</strong>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="rounded-lg bg-[var(--yellow-accent)] px-2.5 py-1 font-mono text-xs font-bold tracking-widest text-[var(--wood-dark)] sm:text-sm">
+                      {r.code}
+                    </span>
+                    <span
+                      className={`rounded-lg px-2.5 py-1 text-xs font-bold sm:text-sm ${
+                        r.status === 'completed'
+                          ? 'bg-green-100 text-green-800'
+                          : r.status === 'in_progress'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-[var(--cream-soft)] text-[var(--wood-text)]'
+                      }`}
                     >
-                      🚫 Kick Semua
+                      {statusLabels[r.status] ?? r.status}
+                    </span>
+                  </div>
+                </div>
+
+                {r.players.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-[var(--cream-bg)]/70 p-2.5 text-xs">
+                    <span className="font-bold text-[var(--wood-text)]/75">Pemain di ruang:</span>
+                    {r.players.map((p) => (
+                      <span
+                        key={p.userId}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#dcc8a6] bg-white px-2.5 py-1 font-semibold"
+                      >
+                        <span>
+                          {p.username}
+                          {p.role === 'admin' ? ' (ADMIN)' : p.role === 'teacher' ? ' (GURU)' : ''}
+                        </span>
+                        {p.role !== 'admin' && p.role !== 'teacher' && (
+                          <button
+                            type="button"
+                            title={`Kick ${p.username}`}
+                            onClick={() => onKickFromDashboard(r.id, p.userId, p.username)}
+                            className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-bold text-red-700 hover:bg-red-200"
+                          >
+                            Kick
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                    {r.players.some((p) => p.role !== 'admin' && p.role !== 'teacher') && (
+                      <button
+                        type="button"
+                        onClick={() => onKickAllFromDashboard(r.id)}
+                        className="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-red-700"
+                      >
+                        Kick Semua
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {r.rejoinRequests && r.rejoinRequests.length > 0 && (
+                  <div className="rounded-xl border border-amber-300 bg-amber-50/90 p-3">
+                    <div className="text-xs font-bold text-amber-900">
+                      Permintaan Masuk Kembali (Approve akan me-reset soal &amp; poin sesi siswa ke 0):
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {r.rejoinRequests.map((req) => (
+                        <div
+                          key={req.userId}
+                          className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold shadow-sm"
+                        >
+                          <span className="font-bold text-[var(--wood-dark)]">{req.username}</span>
+                          <button
+                            type="button"
+                            onClick={() => onApproveRejoin(r.id, req.userId)}
+                            className="rounded-md bg-green-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-green-700"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRejectRejoin(r.id, req.userId)}
+                            className="rounded-md bg-red-100 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
+                          >
+                            Tolak
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 border-t border-black/5 pt-3">
+                  {r.status === 'waiting' && (
+                    <button className="btn-success !px-3.5 !py-2 text-xs sm:text-sm" onClick={() => setStatus(r.id, 'in_progress')}>
+                      Mulai Game
                     </button>
                   )}
-                </div>
-              )}
-
-              {r.rejoinRequests && r.rejoinRequests.length > 0 && (
-                <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50/90 p-3">
-                  <div className="text-xs font-bold text-amber-900">
-                    Permintaan Masuk Kembali (Approve akan me-reset soal &amp; poin sesi siswa ke 0):
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {r.rejoinRequests.map((req) => (
-                      <div
-                        key={req.userId}
-                        className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold shadow-sm"
-                      >
-                        <span className="font-bold text-[var(--wood-dark)]">{req.username}</span>
-                        <button
-                          type="button"
-                          onClick={() => onApproveRejoin(r.id, req.userId)}
-                          className="rounded-md bg-green-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-green-700"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onRejectRejoin(r.id, req.userId)}
-                          className="rounded-md bg-red-100 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
-                        >
-                          Tolak
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                {r.status === 'waiting' && (
-                  <button className="btn-success !px-4 !py-2 text-sm" onClick={() => setStatus(r.id, 'in_progress')}>
-                    ▶ Mulai Game
-                  </button>
-                )}
-                {r.status === 'in_progress' && (
-                  <button className="btn-secondary !px-4 !py-2 text-sm" onClick={() => setStatus(r.id, 'paused')}>
-                    Jeda
-                  </button>
-                )}
-                {r.status === 'paused' && (
-                  <button className="btn-success !px-4 !py-2 text-sm" onClick={() => setStatus(r.id, 'in_progress')}>
-                    Lanjutkan
-                  </button>
-                )}
-                {(r.status === 'in_progress' || r.status === 'paused') && (
-                  <button className="btn-primary !px-4 !py-2 text-sm" onClick={() => setStatus(r.id, 'completed')}>
-                    🏁 Akhiri & Lihat Rekap Nilai
-                  </button>
-                )}
-                {r.status !== 'completed' && (
-                  <Link
-                    className="rounded-xl bg-[var(--blue-info)] px-4 py-2 text-sm font-semibold text-white"
-                    href={`/game/${r.id}`}
-                  >
-                    Masuk Ruang
-                  </Link>
-                )}
-                {r.status === 'completed' && (
+                  {r.status === 'in_progress' && (
+                    <button className="btn-secondary !px-3.5 !py-2 text-xs sm:text-sm" onClick={() => setStatus(r.id, 'paused')}>
+                      Jeda
+                    </button>
+                  )}
+                  {r.status === 'paused' && (
+                    <button className="btn-success !px-3.5 !py-2 text-xs sm:text-sm" onClick={() => setStatus(r.id, 'in_progress')}>
+                      Lanjutkan
+                    </button>
+                  )}
+                  {(r.status === 'in_progress' || r.status === 'paused') && (
+                    <button className="btn-primary !px-3.5 !py-2 text-xs sm:text-sm" onClick={() => setStatus(r.id, 'completed')}>
+                      Akhiri &amp; Lihat Rekap
+                    </button>
+                  )}
+                  {r.status !== 'completed' && (
+                    <Link
+                      className="inline-flex items-center justify-center rounded-xl bg-[var(--blue-info)] px-3.5 py-2 text-xs font-bold text-white hover:opacity-95 sm:text-sm"
+                      href={`/game/${r.id}`}
+                    >
+                      Masuk Ruang
+                    </Link>
+                  )}
+                  {r.status === 'completed' && (
+                    <button
+                      type="button"
+                      className="rounded-xl bg-[var(--navy-panel)] px-3.5 py-2 text-xs font-bold text-white hover:bg-[var(--navy-deep)] sm:text-sm"
+                      onClick={() => openRecap(r.id)}
+                      disabled={loadingRecapId === r.id}
+                    >
+                      {loadingRecapId === r.id ? 'Memuat Rekap...' : 'Lihat Rekap Nilai'}
+                    </button>
+                  )}
                   <button
-                    type="button"
-                    className="rounded-xl bg-[var(--navy-panel)] px-4 py-2 text-sm font-bold text-white"
-                    onClick={() => openRecap(r.id)}
-                    disabled={loadingRecapId === r.id}
+                    className="ml-auto rounded-xl bg-red-100 px-3.5 py-2 text-xs font-bold text-red-700 hover:bg-red-200 sm:text-sm"
+                    onClick={() => onDelete(r.id)}
                   >
-                    📊 {loadingRecapId === r.id ? 'Memuat Rekap...' : 'Lihat Rekap Nilai'}
+                    Hapus
                   </button>
-                )}
-                <button
-                  className="rounded-xl bg-red-100 px-4 py-2 text-sm font-semibold text-red-700"
-                  onClick={() => onDelete(r.id)}
-                >
-                  Hapus
-                </button>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
 
       {recapModal && (
         <div
@@ -631,11 +843,11 @@ export default function RoomsPage() {
           >
             <div className="flex flex-wrap items-start justify-between gap-3 border-b border-black/10 pb-4">
               <div>
-                <span className="rounded-lg bg-green-100 px-2.5 py-1 text-xs font-bold text-green-800">
+                <span className="rounded-lg bg-green-100 px-2.5 py-0.5 text-xs font-bold text-green-800">
                   REKAP NILAI AKHIR
                 </span>
-                <h2 className="mt-1 font-display text-2xl font-bold">{recapModal.room.name}</h2>
-                <p className="text-sm text-[var(--wood-text)]/75">
+                <h2 className="mt-1 font-display text-xl font-bold sm:text-2xl">{recapModal.room.name}</h2>
+                <p className="mt-0.5 text-xs text-[var(--wood-text)]/75 sm:text-sm">
                   Kelas: <strong>{recapModal.classroom?.name ?? '-'}</strong> · Mapel:{' '}
                   <strong>{recapModal.level?.subjectName ?? '-'}</strong> · Tujuan Pembelajaran:{' '}
                   <strong>{recapModal.level?.objectiveName ?? '-'}</strong> · Total Soal:{' '}
@@ -645,14 +857,14 @@ export default function RoomsPage() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="btn-success !px-4 !py-2 text-sm"
+                  className="btn-success !px-3.5 !py-2 text-xs sm:text-sm"
                   onClick={() => downloadRecapCsv(recapModal)}
                 >
-                  ⬇ Download Nilai (CSV / Excel)
+                  Unduh Nilai (CSV)
                 </button>
                 <button
                   type="button"
-                  className="rounded-xl bg-black/10 px-3 py-1.5 text-sm font-bold hover:bg-black/20"
+                  className="rounded-lg bg-black/10 px-2.5 py-1.5 text-xs font-bold hover:bg-black/20"
                   onClick={() => setRecapModal(null)}
                 >
                   ✕
@@ -665,10 +877,10 @@ export default function RoomsPage() {
                 Belum ada data siswa atau jawaban pada sesi permainan ini.
               </p>
             ) : (
-              <div className="mt-4 overflow-x-auto">
-                <table className="w-full border-collapse text-left text-sm">
+              <div className="-mx-4 mt-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+                <table className="w-full min-w-[640px] border-collapse text-left text-sm">
                   <thead>
-                    <tr className="border-b-2 border-black/15 text-xs uppercase text-[var(--wood-text)]/75">
+                    <tr className="border-b border-black/15 text-xs font-bold uppercase tracking-wide text-[var(--wood-text)]/75">
                       <th className="py-2.5 pr-3">Peringkat</th>
                       <th className="py-2.5 pr-3">Nama Siswa</th>
                       <th className="py-2.5 pr-3">Username</th>
@@ -679,15 +891,15 @@ export default function RoomsPage() {
                       <th className="py-2.5 text-right">Nilai Akhir (0-100)</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-black/10">
                     {recapModal.students.map((st, idx) => (
-                      <tr key={st.userId} className="border-b border-black/10">
+                      <tr key={st.userId}>
                         <td className="py-2.5 pr-3 font-bold">#{idx + 1}</td>
-                        <td className="py-2.5 pr-3 font-bold">{st.fullName}</td>
-                        <td className="py-2.5 pr-3 font-mono text-xs">{st.username}</td>
+                        <td className="py-2.5 pr-3 font-semibold">{st.fullName}</td>
+                        <td className="py-2.5 pr-3 font-mono text-xs">@{st.username}</td>
                         <td className="py-2.5 pr-3 text-center">
                           <span
-                            className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                            className={`rounded-lg px-2.5 py-0.5 text-xs font-bold ${
                               st.participated ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700'
                             }`}
                           >
@@ -701,7 +913,7 @@ export default function RoomsPage() {
                         </td>
                         <td className="py-2.5 text-right">
                           <span
-                            className={`inline-block rounded-xl px-3 py-1 font-display text-base font-bold ${
+                            className={`inline-block rounded-lg px-2.5 py-0.5 font-display text-sm font-bold ${
                               st.finalGrade >= 75
                                 ? 'bg-green-100 text-green-900'
                                 : st.finalGrade >= 50
@@ -727,6 +939,6 @@ export default function RoomsPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

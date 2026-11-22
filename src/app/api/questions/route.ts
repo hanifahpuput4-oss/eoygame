@@ -27,8 +27,14 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const teacher = await requireRole('teacher');
-    const input = questionSchema.parse(await req.json());
-    const question = await createQuestion(teacher.id, input);
+    const isAdmin = teacher.role === 'admin';
+    const rawBody = await req.json();
+    const input = questionSchema.parse(rawBody);
+    const creatorId =
+      isAdmin && typeof rawBody?.teacherId === 'string' && rawBody.teacherId.trim()
+        ? rawBody.teacherId.trim()
+        : teacher.id;
+    const question = await createQuestion(creatorId, input);
     return ok({ question }, 201);
   } catch (err) {
     return handleError(err);

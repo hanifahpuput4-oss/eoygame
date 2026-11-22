@@ -23,23 +23,23 @@ export class RoomError extends Error {
   }
 }
 
-export async function createRoom(hostId: string, input: RoomInput) {
-  const membership = await db
-    .select({ id: classroomMembers.id })
-    .from(classroomMembers)
-    .where(
-      and(
-        eq(classroomMembers.classroomId, input.classroomId),
-        eq(classroomMembers.studentId, hostId),
-      ),
-    )
-    .limit(1);
-  void membership;
+export async function createRoom(hostId: string, input: RoomInput, isAdmin = false) {
+  let effectiveHostId = hostId;
+  if (isAdmin) {
+    const clsRows = await db
+      .select({ teacherId: classrooms.teacherId })
+      .from(classrooms)
+      .where(eq(classrooms.id, input.classroomId))
+      .limit(1);
+    if (clsRows[0]?.teacherId) {
+      effectiveHostId = clsRows[0].teacherId;
+    }
+  }
 
   const id = generateId('room');
   await db.insert(rooms).values({
     id,
-    hostId,
+    hostId: effectiveHostId,
     classroomId: input.classroomId,
     levelId: input.levelId,
     name: input.name,

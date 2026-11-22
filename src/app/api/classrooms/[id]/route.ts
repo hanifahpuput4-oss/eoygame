@@ -32,7 +32,16 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     }
 
     const input = classroomSchema.partial().parse(body);
-    const classroom = await updateClassroom(id, teacher.id, input, isAdmin);
+    const nextTeacherId =
+      isAdmin && typeof body?.teacherId === 'string' && body.teacherId.trim()
+        ? body.teacherId.trim()
+        : undefined;
+    const classroom = await updateClassroom(
+      id,
+      teacher.id,
+      nextTeacherId ? { ...input, teacherId: nextTeacherId } : input,
+      isAdmin,
+    );
     return ok({ classroom });
   } catch (err) {
     return handleError(err);
