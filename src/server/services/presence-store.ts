@@ -1,6 +1,41 @@
+export type LivePlayerState = {
+  userId: string;
+  username: string;
+  avatar: string;
+  role: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facing: 1 | -1;
+  onGround: boolean;
+  isDying?: boolean;
+  deathStartedAt?: number;
+  burnUntil?: number;
+  updatedAt: number;
+};
+
+export type CachedRoomDbState = {
+  CachedAt: number;
+  room: { id: string; status: string; name: string; levelId: string; activeQuestionId: string | null } | null;
+  players: {
+    userId: string;
+    username: string;
+    avatar: string;
+    role: string;
+    lastX: number | null;
+    lastY: number | null;
+    lastFacing: number | null;
+  }[];
+  scores: { userId: string; score: number; stars: number }[];
+};
+
 const globalForPresence = globalThis as unknown as {
   __llysRoomPresence?: Map<string, Map<string, number>>;
   __llysRecentlyLeft?: Map<string, number>;
+  __llysLivePositions?: Map<string, Map<string, LivePlayerState>>;
+  __llysRoomDbCache?: Map<string, CachedRoomDbState>;
+  __llysLastDbPosWrite?: Map<string, number>;
 };
 
 function getPresenceStore(): Map<string, Map<string, number>> {
@@ -17,11 +52,66 @@ function getRecentlyLeftStore(): Map<string, number> {
   return globalForPresence.__llysRecentlyLeft;
 }
 
+function getLivePositionsStore(): Map<string, Map<string, LivePlayerState>> {
+  if (!globalForPresence.__llysLivePositions) {
+    globalForPresence.__llysLivePositions = new Map();
+  }
+  return globalForPresence.__llysLivePositions;
+}
+
+function getRoomDbCacheStore(): Map<string, CachedRoomDbState> {
+  if (!globalForPresence.__llysRoomDbCache) {
+    globalForPresence.__llysRoomDbCache = new Map();
+  }
+  return globalForPresence.__llysRoomDbCache;
+}
+
+function getLastDbPosWriteStore(): Map<string, number> {
+  if (!globalForPresence.__llysLastDbPosWrite) {
+    globalForPresence.__llysLastDbPosWrite = new Map();
+  }
+  return globalForPresence.__llysLastDbPosWrite;
+}
+
+export function getCachedRoomDbState(roomId: string, ttlMs = 800): CachedRoomDbState | null {
+  const entry = getRoomDbCacheStore().get(roomId);
+  if (!entry) return null;
+  if (Date.now() - entry.CachedAt > ttlMs) return null;
+  return entry;
+}
+
+export function setCachedRoomDbState(roomId: string, state: Omit<CachedRoomDbState, 'CachedAt'>): void {
+  getRoomDbCacheStore().set(roomId, {
+    ...state,
+    CachedAt: Date.now(),
+  });
+}
+
+export function invalidateRoomSyncCache(roomId?: string): void {
+  const store = getRoomDbCacheStore();
+  if (!roomId) {
+    store.clear();
+  } else {
+    store.delete(roomId);
+  }
+}
+
+export function shouldWritePosToDb(roomId: string, userId: string, intervalMs = 3000): boolean {
+  const key = `${roomId}:${userId}`;
+  const store = getLastDbPosWriteStore();
+  const now = Date.now();
+  const last = store.get(key) ?? 0;
+  if (now - last < intervalMs) return false;
+  store.set(key, now);
+  return true;
+}
+
 export function touchPresence(roomId: string, userId: string, explicitJoin = false): boolean {
   const key = `${roomId}:${userId}`;
   const leftStore = getRecentlyLeftStore();
   if (explicitJoin) {
     leftStore.delete(key);
+    invalidateRoomSyncCache(roomId);
   } else {
     const leftAt = leftStore.get(key);
     if (leftAt && Date.now() - leftAt < 3000) {
@@ -39,20 +129,50 @@ export function touchPresence(roomId: string, userId: string, explicitJoin = fal
   return true;
 }
 
+export function updateLivePlayerPosition(
+  roomId: string,
+  state: Omit<LivePlayerState, 'updatedAt'>,
+): LivePlayerState | null {
+  if (!touchPresence(roomId, state.userId)) {
+    return null;
+  }
+  const store = getLivePositionsStore();
+  let roomPos = store.get(roomId);
+  if (!roomPos) {
+    roomPos = new Map();
+    store.set(roomId, roomPos);
+  }
+  const entry: LivePlayerState = {
+    ...state,
+    updatedAt: Date.now(),
+  };
+  roomPos.set(state.userId, entry);
+  return entry;
+}
+
+export function getLiveRoomPositions(roomId: string): Map<string, LivePlayerState> {
+  return getLivePositionsStore().get(roomId) ?? new Map();
+}
+
 export function removePresence(roomId: string, userId: string): void {
   const store = getPresenceStore();
   store.get(roomId)?.delete(userId);
+  getLivePositionsStore().get(roomId)?.delete(userId);
   getRecentlyLeftStore().set(`${roomId}:${userId}`, Date.now());
+  invalidateRoomSyncCache(roomId);
 }
 
 export function removeUserFromAllRoomsPresence(userId: string): void {
   const store = getPresenceStore();
+  const posStore = getLivePositionsStore();
   const leftStore = getRecentlyLeftStore();
   const now = Date.now();
   for (const [roomId, roomMap] of store.entries()) {
     if (roomMap.has(userId)) {
       roomMap.delete(userId);
+      posStore.get(roomId)?.delete(userId);
       leftStore.set(`${roomId}:${userId}`, now);
+      invalidateRoomSyncCache(roomId);
     }
   }
 }
@@ -63,6 +183,7 @@ export function getStaleUserIds(
   timeoutMs = 5500,
 ): string[] {
   const store = getPresenceStore();
+  const posStore = getLivePositionsStore();
   let roomMap = store.get(roomId);
   if (!roomMap) {
     roomMap = new Map();
@@ -78,7 +199,11 @@ export function getStaleUserIds(
     } else if (now - lastSeen > timeoutMs) {
       stale.push(uid);
       roomMap.delete(uid);
+      posStore.get(roomId)?.delete(uid);
     }
+  }
+  if (stale.length > 0) {
+    invalidateRoomSyncCache(roomId);
   }
   return stale;
 }

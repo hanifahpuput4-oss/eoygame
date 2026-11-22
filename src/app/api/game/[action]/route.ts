@@ -9,14 +9,106 @@ import { answerSchema, chatSchema } from '@/server/middleware/validation';
 import { ok, fail, handleError } from '@/server/middleware/http';
 import { publishToRoom } from '@/server/services/realtime-service';
 import { addEphemeralChat, getEphemeralChatSince } from '@/server/services/chat-store';
-import { getStaleUserIds, removePresence, touchPresence } from '@/server/services/presence-store';
+import {
+  getCachedRoomDbState,
+  getLiveRoomPositions,
+  getStaleUserIds,
+  invalidateRoomSyncCache,
+  removePresence,
+  setCachedRoomDbState,
+  shouldWritePosToDb,
+  touchPresence,
+  updateLivePlayerPosition,
+} from '@/server/services/presence-store';
 import { assertHost } from '@/server/services/room-service';
+
+// Cache per-user session & answered questions in RAM for 2s (invalidated immediately on answer)
+const globalForUserGameCache = globalThis as unknown as {
+  __llysUserAnswerCache?: Map<
+    string,
+    {
+      cachedAt: number;
+      sessionId: string | null;
+      answeredQuestionIds: string[];
+      answerResults: Record<string, boolean>;
+      correctCount: number;
+    }
+  >;
+};
+
+function getUserAnswerCache() {
+  if (!globalForUserGameCache.__llysUserAnswerCache) {
+    globalForUserGameCache.__llysUserAnswerCache = new Map();
+  }
+  return globalForUserGameCache.__llysUserAnswerCache;
+}
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
   try {
-    const user = await requireUser();
     const { action } = await ctx.params;
     const body = await req.json();
+
+    // Ultra-fast zero-DB, zero-cookie in-memory position exchange (< 0.2ms server time)
+    if (action === 'pos') {
+      const roomId = typeof body?.r === 'string' ? body.r : '';
+      const userId = typeof body?.u === 'string' ? body.u : '';
+      if (!roomId || !userId) return fail('Parameter tidak lengkap', 400);
+
+      if (typeof body.x === 'number' && typeof body.y === 'number') {
+        updateLivePlayerPosition(roomId, {
+          userId,
+          username: typeof body.un === 'string' ? body.un : 'Player',
+          avatar: typeof body.av === 'string' ? body.av : 'cat-orange',
+          role: typeof body.rl === 'string' ? body.rl : 'student',
+          x: body.x,
+          y: body.y,
+          vx: typeof body.vx === 'number' ? body.vx : 0,
+          vy: typeof body.vy === 'number' ? body.vy : 0,
+          facing: body.f === -1 ? -1 : 1,
+          onGround: Boolean(body.g ?? true),
+          isDying: Boolean(body.d),
+          deathStartedAt: typeof body.ds === 'number' ? body.ds : undefined,
+          burnUntil: typeof body.b === 'number' ? body.b : undefined,
+        });
+
+        if (shouldWritePosToDb(roomId, userId, 3500)) {
+          void db
+            .update(roomPlayers)
+            .set({ lastX: body.x, lastY: body.y, lastFacing: body.f === -1 ? -1 : 1 })
+            .where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, userId)))
+            .catch(() => {});
+        }
+      } else {
+        touchPresence(roomId, userId);
+      }
+
+      const liveMap = getLiveRoomPositions(roomId);
+      const peers: Record<string, unknown>[] = [];
+      const now = Date.now();
+      for (const p of liveMap.values()) {
+        if (p.userId === userId) continue;
+        if (now - p.updatedAt > 6000) continue;
+        peers.push({
+          u: p.userId,
+          un: p.username,
+          av: p.avatar,
+          rl: p.role,
+          x: p.x,
+          y: p.y,
+          vx: p.vx,
+          vy: p.vy,
+          f: p.facing,
+          g: p.onGround ? 1 : 0,
+          d: p.isDying ? 1 : 0,
+          ds: p.deathStartedAt,
+          b: p.burnUntil,
+        });
+      }
+
+      return ok({ p: peers });
+    }
+
+    const user = await requireUser();
 
     if (action === 'answer') {
       const input = answerSchema.parse(body);
@@ -116,6 +208,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       }
 
       await Promise.all(writeOps);
+      invalidateRoomSyncCache(activeSession.roomId);
+      getUserAnswerCache().delete(`${activeSession.roomId}:${user.id}`);
       if (isCorrect) {
         invalidateUserSessionCache(user.id);
       }
@@ -175,6 +269,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const { roomId, questionId } = schema.parse(body);
       await assertHost(roomId, user.id);
       await db.update(rooms).set({ activeQuestionId: questionId, updatedAt: new Date() }).where(eq(rooms.id, roomId));
+      invalidateRoomSyncCache(roomId);
 
       if (!questionId) {
         await publishToRoom(roomId, 'question', { question: null });
@@ -209,135 +304,216 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         roomId: z.string().min(1),
         x: z.number().min(-10000).max(10000).optional(),
         y: z.number().min(-10000).max(10000).optional(),
+        vx: z.number().min(-200).max(200).optional(),
+        vy: z.number().min(-200).max(200).optional(),
+        onGround: z.boolean().optional(),
+        isDying: z.boolean().optional(),
+        deathStartedAt: z.number().optional(),
+        burnUntil: z.number().optional(),
         facing: z.number().int().min(-1).max(1).optional(),
         chatCursor: z.number().int().optional(),
       });
-      const { roomId, x, y, facing, chatCursor } = schema.parse(body);
+      const { roomId, x, y, vx, vy, onGround, isDying, deathStartedAt, burnUntil, facing, chatCursor } =
+        schema.parse(body);
 
       const allowedPresence = touchPresence(roomId, user.id);
+      const liveMap = getLiveRoomPositions(roomId);
 
-      const [scores, players, mySession, rows] = await Promise.all([
-        db
-          .select({ userId: gameSessions.userId, score: gameSessions.score, stars: gameSessions.stars })
-          .from(gameSessions)
-          .where(eq(gameSessions.roomId, roomId)),
-        db
-          .select({
-            userId: roomPlayers.userId,
-            username: users.username,
-            avatar: roomPlayers.avatar,
-            role: users.role,
-            lastX: roomPlayers.lastX,
-            lastY: roomPlayers.lastY,
-            lastFacing: roomPlayers.lastFacing,
-          })
-          .from(roomPlayers)
-          .innerJoin(users, eq(roomPlayers.userId, users.id))
-          .where(eq(roomPlayers.roomId, roomId)),
-        db
+      // 1. Update position immediately in RAM (0ms, no DB lock!)
+      if (allowedPresence && x !== undefined && y !== undefined) {
+        const existingLive = liveMap.get(user.id);
+        updateLivePlayerPosition(roomId, {
+          userId: user.id,
+          username: user.username,
+          avatar: user.avatar,
+          role: user.role,
+          x,
+          y,
+          vx: vx ?? existingLive?.vx ?? 0,
+          vy: vy ?? existingLive?.vy ?? 0,
+          facing: facing === -1 ? -1 : 1,
+          onGround: onGround ?? existingLive?.onGround ?? true,
+          isDying: isDying ?? existingLive?.isDying,
+          deathStartedAt: deathStartedAt ?? existingLive?.deathStartedAt,
+          burnUntil: burnUntil ?? existingLive?.burnUntil,
+        });
+
+        // Checkpoint to SQLite asynchronously at most once every 3 seconds per player
+        if (shouldWritePosToDb(roomId, user.id, 3000)) {
+          void db
+            .update(roomPlayers)
+            .set({ lastX: x, lastY: y, lastFacing: facing ?? 1 })
+            .where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, user.id)))
+            .catch(() => {});
+        }
+      }
+
+      // 2. Get room & roster state (from 2500ms RAM cache or DB, invalidated immediately on mutations)
+      let dbState = getCachedRoomDbState(roomId, 2500);
+      if (!dbState) {
+        const [scores, players, rows] = await Promise.all([
+          db
+            .select({ userId: gameSessions.userId, score: gameSessions.score, stars: gameSessions.stars })
+            .from(gameSessions)
+            .where(eq(gameSessions.roomId, roomId)),
+          db
+            .select({
+              userId: roomPlayers.userId,
+              username: users.username,
+              avatar: roomPlayers.avatar,
+              role: users.role,
+              lastX: roomPlayers.lastX,
+              lastY: roomPlayers.lastY,
+              lastFacing: roomPlayers.lastFacing,
+            })
+            .from(roomPlayers)
+            .innerJoin(users, eq(roomPlayers.userId, users.id))
+            .where(eq(roomPlayers.roomId, roomId)),
+          db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1),
+        ]);
+
+        let activePlayers = players;
+        const roomRow = rows[0] ?? null;
+
+        if (
+          allowedPresence &&
+          !activePlayers.some((p) => p.userId === user.id) &&
+          roomRow &&
+          roomRow.status !== 'completed'
+        ) {
+          await db
+            .insert(roomPlayers)
+            .values({
+              id: generateId('rpl'),
+              roomId,
+              userId: user.id,
+              avatar: user.avatar,
+              lastX: x ?? 120,
+              lastY: y ?? 600,
+              lastFacing: facing ?? 1,
+            })
+            .catch(() => {});
+          activePlayers = [
+            ...activePlayers,
+            {
+              userId: user.id,
+              username: user.username,
+              avatar: user.avatar,
+              role: user.role,
+              lastX: x ?? 120,
+              lastY: y ?? 600,
+              lastFacing: facing ?? 1,
+            },
+          ];
+        }
+
+        const staleIds = getStaleUserIds(
+          roomId,
+          activePlayers.map((p) => p.userId),
+        );
+        if (staleIds.length > 0) {
+          const staleSet = new Set(staleIds);
+          activePlayers = activePlayers.filter((p) => !staleSet.has(p.userId));
+          void db
+            .delete(roomPlayers)
+            .where(and(eq(roomPlayers.roomId, roomId), inArray(roomPlayers.userId, staleIds)))
+            .catch(() => {});
+        }
+
+        const nextState = {
+          room: roomRow
+            ? {
+                id: roomRow.id,
+                status: roomRow.status,
+                name: roomRow.name,
+                levelId: roomRow.levelId,
+                activeQuestionId: roomRow.activeQuestionId,
+              }
+            : null,
+          players: activePlayers,
+          scores,
+        };
+        setCachedRoomDbState(roomId, nextState);
+        dbState = { ...nextState, CachedAt: Date.now() };
+      }
+
+      // 3. Get user's session & answered questions (cached in RAM for 8s, invalidated immediately on answer)
+      const userCacheKey = `${roomId}:${user.id}`;
+      const ansCache = getUserAnswerCache();
+      let userAns = ansCache.get(userCacheKey);
+      if (!userAns || Date.now() - userAns.cachedAt > 8000) {
+        const mySession = await db
           .select({ id: gameSessions.id })
           .from(gameSessions)
           .where(and(eq(gameSessions.roomId, roomId), eq(gameSessions.userId, user.id)))
-          .limit(1),
-        db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1),
-        x !== undefined && y !== undefined
-          ? db
-              .update(roomPlayers)
-              .set({ lastX: x, lastY: y, lastFacing: facing ?? 1 })
-              .where(and(eq(roomPlayers.roomId, roomId), eq(roomPlayers.userId, user.id)))
-          : Promise.resolve(),
-      ]);
+          .limit(1);
 
-      let activePlayers = players;
+        let activeSessionId = mySession[0]?.id ?? null;
+        if (!activeSessionId && dbState.room?.levelId) {
+          const newSessionId = generateId('gsn');
+          await db
+            .insert(gameSessions)
+            .values({
+              id: newSessionId,
+              roomId,
+              userId: user.id,
+              levelId: dbState.room.levelId,
+            })
+            .catch(() => {});
+          activeSessionId = newSessionId;
+        }
 
-      // Re-attach current user to roomPlayers if they returned from background tab
-      if (allowedPresence && !activePlayers.some((p) => p.userId === user.id) && rows[0] && rows[0].status !== 'completed') {
-        await db
-          .insert(roomPlayers)
-          .values({
-            id: generateId('rpl'),
-            roomId,
-            userId: user.id,
-            avatar: user.avatar,
-            lastX: x ?? 120,
-            lastY: y ?? 600,
-            lastFacing: facing ?? 1,
-          })
-          .catch(() => {});
-        activePlayers = [
-          ...activePlayers,
-          {
-            userId: user.id,
-            username: user.username,
-            avatar: user.avatar,
-            role: user.role,
-            lastX: x ?? 120,
-            lastY: y ?? 600,
-            lastFacing: facing ?? 1,
-          },
-        ];
+        const myAnswers = activeSessionId
+          ? await db
+              .select({ questionId: playerAnswers.questionId, isCorrect: playerAnswers.isCorrect })
+              .from(playerAnswers)
+              .where(eq(playerAnswers.sessionId, activeSessionId))
+          : [];
+
+        const answerResults: Record<string, boolean> = {};
+        for (const a of myAnswers) {
+          answerResults[a.questionId] = Boolean(a.isCorrect);
+        }
+
+        userAns = {
+          cachedAt: Date.now(),
+          sessionId: activeSessionId,
+          answeredQuestionIds: myAnswers.map((a) => a.questionId),
+          answerResults,
+          correctCount: myAnswers.filter((a) => a.isCorrect).length,
+        };
+        ansCache.set(userCacheKey, userAns);
       }
 
-      // Prune disconnected / inactive players (no heartbeat for >5.5s)
-      const staleIds = getStaleUserIds(
-        roomId,
-        activePlayers.map((p) => p.userId),
-      );
-      if (staleIds.length > 0) {
-        const staleSet = new Set(staleIds);
-        activePlayers = activePlayers.filter((p) => !staleSet.has(p.userId));
-        await db
-          .delete(roomPlayers)
-          .where(and(eq(roomPlayers.roomId, roomId), inArray(roomPlayers.userId, staleIds)))
-          .catch(() => {});
-      }
-
-      let activeSessionId = mySession[0]?.id;
-      if (!activeSessionId && rows[0]?.levelId) {
-        const newSessionId = generateId('gsn');
-        await db
-          .insert(gameSessions)
-          .values({
-            id: newSessionId,
-            roomId,
-            userId: user.id,
-            levelId: rows[0].levelId,
-          })
-          .catch(() => {});
-        activeSessionId = newSessionId;
-      }
-
-      const myAnswers = mySession[0]
-        ? await db
-            .select({ questionId: playerAnswers.questionId, isCorrect: playerAnswers.isCorrect })
-            .from(playerAnswers)
-            .where(eq(playerAnswers.sessionId, mySession[0].id))
-        : [];
-
-      const answerResults: Record<string, boolean> = {};
-      for (const a of myAnswers) {
-        answerResults[a.questionId] = Boolean(a.isCorrect);
-      }
+      const freshLiveMap = getLiveRoomPositions(roomId);
       const chatSync = getEphemeralChatSince(roomId, chatCursor);
+
       return ok({
-        sessionId: activeSessionId ?? null,
-        room: rows[0] ? { id: rows[0].id, status: rows[0].status, name: rows[0].name, activeQuestionId: rows[0].activeQuestionId } : null,
-        players: activePlayers.map((p) => {
+        sessionId: userAns.sessionId,
+        room: dbState.room,
+        players: dbState.players.map((p) => {
           const isMe = p.userId === user.id && x !== undefined && y !== undefined;
+          const live = freshLiveMap.get(p.userId);
           return {
             ...p,
-            lastX: isMe ? x : p.lastX,
-            lastY: isMe ? y : p.lastY,
-            lastFacing: isMe ? (facing ?? 1) : p.lastFacing,
-            score: scores.find((s) => s.userId === p.userId)?.score ?? 0,
-            stars: scores.find((s) => s.userId === p.userId)?.stars ?? 0,
+            lastX: isMe ? x : (live?.x ?? p.lastX),
+            lastY: isMe ? y : (live?.y ?? p.lastY),
+            lastFacing: isMe ? (facing ?? 1) : (live?.facing ?? p.lastFacing),
+            vx: live?.vx ?? 0,
+            vy: live?.vy ?? 0,
+            onGround: live?.onGround ?? true,
+            isDying: live?.isDying,
+            deathStartedAt: live?.deathStartedAt,
+            burnUntil: live?.burnUntil,
+            score: dbState!.scores.find((s) => s.userId === p.userId)?.score ?? 0,
+            stars: dbState!.scores.find((s) => s.userId === p.userId)?.stars ?? 0,
           };
         }),
         messages: chatSync.messages,
         chatCursor: chatSync.chatCursor,
-        answeredQuestionIds: myAnswers.map((a) => a.questionId),
-        answerResults,
-        correctCount: myAnswers.filter((a) => a.isCorrect).length,
+        answeredQuestionIds: userAns.answeredQuestionIds,
+        answerResults: userAns.answerResults,
+        correctCount: userAns.correctCount,
       });
     }
 

@@ -20,6 +20,9 @@ export type Player = {
   isDying?: boolean;
   deathStartedAt?: number;
   burnUntil?: number;
+  lastPacketAt?: number;
+  avgInterval?: number;
+  snapshots?: { x: number; y: number; vx: number; vy: number; time: number }[];
 };
 
 const PLAYER_W = 36;
@@ -46,6 +49,8 @@ function respawnToStart(p: Player) {
   p.lastCarrierX = undefined;
 }
 
+export type PhysicsSoundEvent = 'jump' | 'bounce' | 'burn' | 'death';
+
 export function updatePlayerPhysics(
   p: Player,
   input: { left: boolean; right: boolean; jump: boolean },
@@ -53,6 +58,7 @@ export function updatePlayerPhysics(
   extraPlatforms: Platform[] = [],
   onTouchQuestionBlock?: (questionId: string) => void,
   dtScale = 1,
+  onSoundEvent?: (event: PhysicsSoundEvent) => void,
 ) {
   const now = Date.now();
 
@@ -108,6 +114,7 @@ export function updatePlayerPhysics(
     p.onGround = false;
     p.ridingPlayerId = null;
     p.lastCarrierX = undefined;
+    onSoundEvent?.('jump');
   }
 
   const prevVy = p.vy;
@@ -157,15 +164,19 @@ export function updatePlayerPhysics(
       p.onGround = false;
       p.ridingPlayerId = null;
       p.lastCarrierX = undefined;
+      onSoundEvent?.('death');
       return;
     }
 
     if (plat.type === 'fire') {
       const alreadyBurning = Boolean(p.burnUntil && p.burnUntil > now + 4400);
       p.burnUntil = now + 5000;
-      if (!alreadyBurning && p.vy >= -4) {
-        p.vy = -8.6;
-        p.onGround = false;
+      if (!alreadyBurning) {
+        onSoundEvent?.('burn');
+        if (p.vy >= -4) {
+          p.vy = -8.6;
+          p.onGround = false;
+        }
       }
       continue;
     }
@@ -176,6 +187,7 @@ export function updatePlayerPhysics(
       if (plat.type === 'bounce') {
         p.vy = PHYSICS.bounceVelocity;
         p.onGround = false;
+        onSoundEvent?.('bounce');
       } else {
         p.vy = 0;
         p.onGround = true;

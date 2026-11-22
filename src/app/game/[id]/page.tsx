@@ -5,10 +5,35 @@ import { useParams, useRouter } from 'next/navigation';
 import { Camera } from '@/game-engine/camera/camera';
 import { updatePlayerPhysics, type Player, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
 import { drawWorld, drawPlatforms, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
-import { PLATFORMS, SPAWN_POINTS, WORLD, generateQuestionBlocks, type Platform } from '@/game-engine/maps/world';
+import { PHYSICS, PLATFORMS, SPAWN_POINTS, WORLD, generateQuestionBlocks, type Platform } from '@/game-engine/maps/world';
+import { soundEngine } from '@/game-engine/audio/sound-engine';
 import { useAblyRoom } from '@/features/multiplayer/use-ably-room';
 import { clearCachedData } from '@/lib/client-cache';
 import '../game.css';
+
+type HudControlsConfig = {
+  size: number;
+  gap: number;
+  opacity: number;
+  swapSides: boolean;
+  dpadX: number;
+  dpadY: number;
+  jumpX: number;
+  jumpY: number;
+};
+
+const DEFAULT_HUD_CONTROLS: HudControlsConfig = {
+  size: 86,
+  gap: 18,
+  opacity: 0.88,
+  swapSides: false,
+  dpadX: 0,
+  dpadY: 0,
+  jumpX: 0,
+  jumpY: 0,
+};
+
+const HUD_CONTROLS_STORAGE_KEY = 'llys_hud_controls_v1';
 
 type RoomPlayer = {
   userId: string;
@@ -18,6 +43,12 @@ type RoomPlayer = {
   lastX?: number;
   lastY?: number;
   lastFacing?: number;
+  vx?: number;
+  vy?: number;
+  onGround?: boolean;
+  isDying?: boolean;
+  deathStartedAt?: number;
+  burnUntil?: number;
   score?: number;
 };
 
@@ -99,6 +130,14 @@ export default function GamePage() {
   const [panelOffsets, setPanelOffsets] = useState<Record<string, { x: number; y: number }>>({});
   const panelDragRef = useRef<{ key: string; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null);
   const [kickModalOpen, setKickModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [editingControlsLayout, setEditingControlsLayout] = useState(false);
+  const [hudControls, setHudControls] = useState<HudControlsConfig>(DEFAULT_HUD_CONTROLS);
+  const controlDragRef = useRef<{ group: 'dpad' | 'jump'; startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const [bgmEnabled, setBgmEnabled] = useState(true);
+  const [bgmVolume, setBgmVolume] = useState(0.45);
+  const [sfxEnabled, setSfxEnabled] = useState(true);
+  const [sfxVolume, setSfxVolume] = useState(0.75);
   const [answeredQuestionIds, setAnsweredQuestionIds] = useState<string[]>([]);
   const answeredIdsRef = useRef<Set<string>>(new Set());
   const answerResultsRef = useRef<Map<string, boolean>>(new Map());
@@ -122,8 +161,100 @@ export default function GamePage() {
   const hasLeftRef = useRef(false);
   const chatMinimizedRef = useRef(chatMinimized);
   const [unreadCount, setUnreadCount] = useState(0);
-  const ablyEnabled = Boolean(process.env.NEXT_PUBLIC_ABLY_CLIENT_KEY);
-  const ably = useAblyRoom(roomId, ablyEnabled);
+  const ablyEnabled = true;
+
+  function ingestRemotePlayerSnapshot(rp: {
+    id: string;
+    username: string;
+    avatar: string;
+    role?: string;
+    x: number;
+    y: number;
+    vx?: number;
+    vy?: number;
+    facing: 1 | -1;
+    onGround?: boolean;
+    isDying?: boolean;
+    deathStartedAt?: number;
+    burnUntil?: number;
+  }) {
+    if (!rp.id || rp.id === myIdRef.current) return;
+    const nowPerf = performance.now();
+    const nowWall = Date.now();
+    const pvx = typeof rp.vx === 'number' ? rp.vx : 0;
+    const pvy = typeof rp.vy === 'number' ? rp.vy : 0;
+    const existing = playersRef.current.get(rp.id);
+    if (existing) {
+      existing.targetX = rp.x;
+      existing.targetY = rp.y;
+      existing.vx = pvx;
+      existing.vy = pvy;
+      existing.facing = rp.facing;
+      if (typeof rp.onGround === 'boolean') existing.onGround = rp.onGround;
+      if (typeof rp.isDying === 'boolean') existing.isDying = rp.isDying;
+      if (rp.deathStartedAt !== undefined) existing.deathStartedAt = rp.deathStartedAt;
+      if (rp.burnUntil !== undefined) existing.burnUntil = rp.burnUntil;
+      if (rp.role) existing.role = rp.role;
+
+      if (!existing.snapshots) existing.snapshots = [];
+      const snaps = existing.snapshots;
+      const lastSnap = snaps[snaps.length - 1];
+      const hasMovedSinceLastSnap =
+        !lastSnap ||
+        Math.abs(rp.x - lastSnap.x) > 0.08 ||
+        Math.abs(rp.y - lastSnap.y) > 0.08 ||
+        Math.abs(pvx - lastSnap.vx) > 0.04 ||
+        Math.abs(pvy - lastSnap.vy) > 0.04;
+      if (hasMovedSinceLastSnap) {
+        if (lastSnap) {
+          const dt = Math.max(12, Math.min(220, nowPerf - lastSnap.time));
+          existing.avgInterval =
+            existing.avgInterval !== undefined ? existing.avgInterval * 0.75 + dt * 0.25 : dt;
+        }
+        snaps.push({ x: rp.x, y: rp.y, vx: pvx, vy: pvy, time: nowPerf });
+        if (snaps.length > 10) snaps.splice(0, snaps.length - 10);
+      }
+      existing.lastPacketAt = nowWall;
+    } else {
+      playersRef.current.set(rp.id, {
+        id: rp.id,
+        username: rp.username,
+        avatar: rp.avatar,
+        role: rp.role,
+        x: rp.x,
+        y: rp.y,
+        targetX: rp.x,
+        targetY: rp.y,
+        vx: pvx,
+        vy: pvy,
+        facing: rp.facing,
+        onGround: rp.onGround ?? true,
+        isDying: rp.isDying,
+        deathStartedAt: rp.deathStartedAt,
+        burnUntil: rp.burnUntil,
+        avgInterval: 24,
+        snapshots: [{ x: rp.x, y: rp.y, vx: pvx, vy: pvy, time: nowPerf }],
+        lastPacketAt: nowWall,
+      });
+    }
+  }
+
+  const ably = useAblyRoom(roomId, ablyEnabled, {
+    onDirectMove: (rp) => {
+      ingestRemotePlayerSnapshot(rp);
+    },
+    onDirectLeave: (uid, kicked) => {
+      if (uid === myIdRef.current) {
+        if (kicked) {
+          alert('Anda dikeluarkan dari ruang oleh guru.');
+          router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+        }
+        return;
+      }
+      playersRef.current.delete(uid);
+      setRoom((prev) => (prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== uid) } : prev));
+    },
+  });
 
   function notifyLeaveRoom() {
     if (hasLeftRef.current || !roomId) return;
@@ -174,6 +305,65 @@ export default function GamePage() {
       setUnreadCount(0);
     }
   }, [chatMinimized]);
+
+  useEffect(() => {
+    setBgmEnabled(soundEngine.bgmEnabled);
+    setBgmVolume(soundEngine.bgmVolume);
+    setSfxEnabled(soundEngine.sfxEnabled);
+    setSfxVolume(soundEngine.sfxVolume);
+
+    try {
+      const raw = window.localStorage.getItem(HUD_CONTROLS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<HudControlsConfig>;
+        setHudControls((prev) => ({
+          size: typeof parsed.size === 'number' ? Math.max(64, Math.min(128, parsed.size)) : prev.size,
+          gap: typeof parsed.gap === 'number' ? Math.max(8, Math.min(44, parsed.gap)) : prev.gap,
+          opacity: typeof parsed.opacity === 'number' ? Math.max(0.35, Math.min(1, parsed.opacity)) : prev.opacity,
+          swapSides: typeof parsed.swapSides === 'boolean' ? parsed.swapSides : prev.swapSides,
+          dpadX: typeof parsed.dpadX === 'number' ? parsed.dpadX : prev.dpadX,
+          dpadY: typeof parsed.dpadY === 'number' ? parsed.dpadY : prev.dpadY,
+          jumpX: typeof parsed.jumpX === 'number' ? parsed.jumpX : prev.jumpX,
+          jumpY: typeof parsed.jumpY === 'number' ? parsed.jumpY : prev.jumpY,
+        }));
+      }
+    } catch {
+      // ignore storage read error
+    }
+
+    const unlockAudio = () => {
+      soundEngine.unlockAndStartBgm();
+    };
+    window.addEventListener('pointerdown', unlockAudio, { passive: true });
+    window.addEventListener('keydown', unlockAudio, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      soundEngine.stopBgm();
+    };
+  }, []);
+
+  function updateHudControls(patch: Partial<HudControlsConfig>) {
+    setHudControls((prev) => {
+      const next = { ...prev, ...patch };
+      try {
+        window.localStorage.setItem(HUD_CONTROLS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore storage error
+      }
+      return next;
+    });
+  }
+
+  function resetHudControls() {
+    soundEngine.playClick();
+    setHudControls(DEFAULT_HUD_CONTROLS);
+    try {
+      window.localStorage.setItem(HUD_CONTROLS_STORAGE_KEY, JSON.stringify(DEFAULT_HUD_CONTROLS));
+    } catch {
+      // ignore
+    }
+  }
 
   function ingestMessages(incoming: ChatMsg[]) {
     if (!incoming || incoming.length === 0) return;
@@ -289,6 +479,22 @@ export default function GamePage() {
           vy: 0,
           facing: (myEntry?.lastFacing as 1 | -1) ?? 1,
           onGround: false,
+        });
+      }
+
+      const meInit = playersRef.current.get(p.id);
+      if (meInit) {
+        ably.publishPosition({
+          id: meInit.id,
+          username: meInit.username,
+          avatar: meInit.avatar,
+          role: p.role,
+          x: meInit.x,
+          y: meInit.y,
+          vx: 0,
+          vy: 0,
+          facing: meInit.facing,
+          onGround: meInit.onGround,
         });
       }
 
@@ -560,7 +766,10 @@ export default function GamePage() {
     let tick = 0;
     let prevSentX = -1;
     let prevSentY = -1;
+    let prevSentVx = 0;
+    let prevSentVy = 0;
     let prevSentFacing = 0;
+    let prevSentDying = false;
     let lastFrameTime = performance.now();
 
     function loop(now = performance.now()) {
@@ -570,7 +779,6 @@ export default function GamePage() {
       // Normalisasi delta-time ke basis 60 FPS (16.6667ms) supaya layar Android 90Hz/120Hz/144Hz
       // punya kecepatan jalan & lompat yang persis sama dengan iOS dan PC 60Hz
       const dtScale = elapsedMs > 0 ? Math.min(2.5, Math.max(0.1, elapsedMs / (1000 / 60))) : 1;
-      const remoteLerp = 1 - Math.pow(1 - 0.22, dtScale);
       const camLerp = 1 - Math.pow(1 - 0.12, dtScale);
       tick += 1;
 
@@ -578,25 +786,59 @@ export default function GamePage() {
 
       for (const p of playersRef.current.values()) {
         if (p.id === myIdRef.current) continue;
-        if (p.targetX !== undefined) {
-          const dx = p.targetX - p.x;
-          if (Math.abs(dx) > 450) {
-            p.x = p.targetX;
-          } else if (Math.abs(dx) < 0.35) {
-            p.x = p.targetX;
+        // Adaptive Mobile Legends Snapshot Buffer Interpolation:
+        // - Untuk peer LAN (WebSocket ~16-25ms): interpDelay super rendah (~20ms) -> instan & 60/120 FPS mulus
+        // - Untuk peer luar LAN (HTTP Single-Flight ~70-130ms): interpDelay otomatis menyesuaikan (~90-150ms) -> tetap mulus tanpa patah-patah
+        let desiredX = p.targetX ?? p.x;
+        let desiredY = p.targetY ?? p.y;
+
+        const snaps = p.snapshots;
+        if (snaps && snaps.length >= 2 && !p.isDying) {
+          const avgInt = p.avgInterval ?? 24;
+          const interpDelay = Math.max(18, Math.min(180, avgInt * 1.18));
+          const renderTime = now - interpDelay;
+
+          while (snaps.length > 2 && snaps[1].time <= renderTime) {
+            snaps.shift();
+          }
+
+          const s0 = snaps[0];
+          const s1 = snaps[1];
+          if (renderTime <= s0.time) {
+            desiredX = s0.x;
+            desiredY = s0.y;
+          } else if (renderTime <= s1.time) {
+            const span = Math.max(1, s1.time - s0.time);
+            const alpha = Math.max(0, Math.min(1, (renderTime - s0.time) / span));
+            desiredX = s0.x + (s1.x - s0.x) * alpha;
+            desiredY = s0.y + (s1.y - s0.y) * alpha;
           } else {
-            p.x += dx * remoteLerp;
+            const latest = snaps[snaps.length - 1];
+            const overMs = Math.min(55, renderTime - latest.time);
+            const overFrames = overMs / (1000 / 60);
+            desiredX = Math.max(0, Math.min(WORLD.width - PLAYER_W, latest.x + latest.vx * overFrames * 0.7));
+            desiredY = Math.min(WORLD.groundY - PLAYER_H, latest.y + latest.vy * overFrames * 0.7);
           }
         }
-        if (p.targetY !== undefined) {
-          const dy = p.targetY - p.y;
-          if (Math.abs(dy) > 450) {
-            p.y = p.targetY;
-          } else if (Math.abs(dy) < 0.35) {
-            p.y = p.targetY;
-          } else {
-            p.y += dy * remoteLerp;
-          }
+
+        const dx = desiredX - p.x;
+        if (Math.abs(dx) > 450) {
+          p.x = desiredX;
+        } else if (Math.abs(dx) <= 0.15) {
+          p.x = desiredX;
+        } else {
+          const smoothX = 1 - Math.pow(1 - 0.45, dtScale);
+          p.x += dx * smoothX;
+        }
+
+        const dy = desiredY - p.y;
+        if (Math.abs(dy) > 450) {
+          p.y = desiredY;
+        } else if (Math.abs(dy) <= 0.15) {
+          p.y = desiredY;
+        } else {
+          const smoothY = 1 - Math.pow(1 - 0.48, dtScale);
+          p.y += dy * smoothY;
         }
         for (const plat of PLATFORMS) {
           if (
@@ -634,6 +876,7 @@ export default function GamePage() {
             }
             const found = levelQuestionsRef.current.find((q) => q.id === qid);
             if (found) {
+              soundEngine.playQuestionOpen();
               questionRef.current = found;
               setQuestion(found);
               setQuestionMinimized(false);
@@ -641,18 +884,55 @@ export default function GamePage() {
             }
           },
           dtScale,
+          (soundEvt) => {
+            if (soundEvt === 'jump') soundEngine.playJump();
+            else if (soundEvt === 'bounce') soundEngine.playBounce();
+            else if (soundEvt === 'burn') soundEngine.playBurn();
+            else if (soundEvt === 'death') soundEngine.playDeath();
+          },
         );
       }
 
-      if (me && ablyEnabled && ably.connected && tick % 3 === 0) {
+      // Jalur 1 (WebSocket Port 3000 /ws-game atau Port 3001):
+      // - Adaptif tick rate: 60Hz (16ms) di LAN, 42Hz (24ms) di luar jaringan agar bebas TCP bufferbloat
+      // - Mengirim 1 paket "berhenti" terakhir saat vx=0 & vy=0 agar interpolasi player lain berhenti presisi
+      if (me && ably.connected) {
         const nowMs = Date.now();
-        const moved = Math.abs(me.x - prevSentX) > 0.5 || Math.abs(me.y - prevSentY) > 0.5 || me.facing !== prevSentFacing;
-        if (moved && nowMs - lastSentRef.current > 60) {
+        const isMovingNow = Math.abs(me.vx) > 0.04 || Math.abs(me.vy) > 0.04;
+        const wasMovingPrev = Math.abs(prevSentVx) > 0.04 || Math.abs(prevSentVy) > 0.04;
+        const justStopped = !isMovingNow && wasMovingPrev;
+        const moved =
+          justStopped ||
+          Math.abs(me.x - prevSentX) > 0.25 ||
+          Math.abs(me.y - prevSentY) > 0.25 ||
+          Math.abs(me.vx - prevSentVx) > 0.08 ||
+          Math.abs(me.vy - prevSentVy) > 0.08 ||
+          me.facing !== prevSentFacing ||
+          Boolean(me.isDying) !== prevSentDying;
+        const minSendInterval = justStopped ? 0 : ably.pingMs > 25 ? 24 : 16;
+        if (moved && nowMs - lastSentRef.current >= minSendInterval) {
           lastSentRef.current = nowMs;
           prevSentX = me.x;
           prevSentY = me.y;
+          prevSentVx = isMovingNow ? me.vx : 0;
+          prevSentVy = isMovingNow ? me.vy : 0;
           prevSentFacing = me.facing;
-          ably.publishPosition({ id: me.id, username: me.username, avatar: me.avatar, role: myRole, x: me.x, y: me.y, facing: me.facing });
+          prevSentDying = Boolean(me.isDying);
+          ably.publishPosition({
+            id: me.id,
+            username: me.username,
+            avatar: me.avatar,
+            role: myRole,
+            x: me.x,
+            y: me.y,
+            vx: isMovingNow ? me.vx : 0,
+            vy: isMovingNow ? me.vy : 0,
+            facing: me.facing,
+            onGround: me.onGround,
+            isDying: me.isDying,
+            deathStartedAt: me.deathStartedAt,
+            burnUntil: me.burnUntil,
+          });
         }
       }
 
@@ -695,132 +975,230 @@ export default function GamePage() {
     };
   }, [room?.status, room?.hostId, roomId, myRole, ablyEnabled, ably.connected, ably.publishPosition]);
 
+  // Jalur 2 (Khusus Pemain Luar LAN / Tunnel Port 3000 yang tidak tembus port WebSocket 3001):
+  // - HANYA aktif jika WebSocket belum terhubung (!ably.connected), sehingga pemain LAN tidak mengirim HTTP sama sekali
+  // - Single-flight: request berikutnya hanya dikirim setelah request sebelumnya selesai (0 antrean / tidak bikin ping pemain lain naik!)
+  // - Server /api/pos otomatis mem-broadcast gerakan pemain luar LAN ke semua pemain WebSocket LAN dalam < 0.2ms
   useEffect(() => {
-    if (!ablyEnabled || !ably.connected) {
-      let active = true;
-      let timer: ReturnType<typeof setTimeout>;
-      async function syncLoop() {
-        if (!active) return;
-        try {
-          const me = playersRef.current.get(myIdRef.current);
-          const payload: Record<string, unknown> = {
-            roomId,
-            chatCursor: chatCursorRef.current,
-          };
-          if (me) {
-            const rx = Math.round(me.x * 10) / 10;
-            const ry = Math.round(me.y * 10) / 10;
-            const prev = lastSyncedPosRef.current;
-            if (Math.abs(rx - prev.x) > 0.5 || Math.abs(ry - prev.y) > 0.5 || me.facing !== prev.facing) {
-              payload.x = rx;
-              payload.y = ry;
-              payload.facing = me.facing;
-              lastSyncedPosRef.current = { x: rx, y: ry, facing: me.facing };
-            }
-          }
-          const res = await fetch('/api/game/room-sync', {
+    if (ably.connected) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+
+    async function posLoop() {
+      if (!active || ably.connected) return;
+      const tStart = performance.now();
+      try {
+        const me = playersRef.current.get(myIdRef.current);
+        if (me && myIdRef.current) {
+          const res = await fetch('/api/pos', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({
+              r: roomId,
+              u: me.id,
+              un: me.username,
+              av: me.avatar,
+              rl: myRole,
+              x: Math.round(me.x * 10) / 10,
+              y: Math.round(me.y * 10) / 10,
+              vx: Math.round(me.vx * 100) / 100,
+              vy: Math.round(me.vy * 100) / 100,
+              f: me.facing,
+              g: me.onGround ? 1 : 0,
+              d: me.isDying ? 1 : 0,
+              ds: me.deathStartedAt,
+              b: me.burnUntil,
+            }),
           });
-          if (res.status === 401) {
-            active = false;
-            handleSessionReplaced();
-            return;
-          }
-          if (!res.ok || !active) return;
-          const data = await res.json();
-          if (typeof data.sessionId === 'string' && data.sessionId) {
-            sessionIdRef.current = data.sessionId;
-          }
-          const serverPlayers: RoomPlayer[] = data.players ?? [];
-          setScores((prev) => {
-            const next = { ...prev };
-            for (const p of serverPlayers) next[p.userId] = p.score ?? 0;
-            return next;
-          });
-          const activeIds = new Set(serverPlayers.map((p) => p.userId));
-          for (const id of Array.from(playersRef.current.keys())) {
-            if (id !== myIdRef.current && !activeIds.has(id)) {
-              playersRef.current.delete(id);
-            }
-          }
-          for (const p of serverPlayers) {
-            if (p.userId === myIdRef.current) continue;
-            const existing = playersRef.current.get(p.userId);
-            if (existing) {
-              if (p.lastX !== undefined) existing.targetX = p.lastX;
-              if (p.lastY !== undefined) existing.targetY = p.lastY;
-              if (p.lastFacing !== undefined) existing.facing = p.lastFacing as 1 | -1;
-              if (p.role) existing.role = p.role;
-            } else {
-              const px = p.lastX ?? 120;
-              const py = p.lastY ?? 600;
-              playersRef.current.set(p.userId, {
-                id: p.userId,
-                username: p.username,
-                avatar: p.avatar,
-                role: p.role,
-                x: px,
-                y: py,
-                targetX: px,
-                targetY: py,
-                vx: 0,
-                vy: 0,
-                facing: (p.lastFacing as 1 | -1) ?? 1,
-                onGround: false,
+          if (res.ok && active) {
+            const rtt = Math.max(1, Math.round(performance.now() - tStart));
+            ably.setPingMs(rtt);
+            const data = await res.json();
+            const peers = Array.isArray(data.p) ? data.p : [];
+            for (const rp of peers) {
+              const uid = typeof rp.u === 'string' ? rp.u : '';
+              if (!uid || uid === myIdRef.current) continue;
+              ingestRemotePlayerSnapshot({
+                id: uid,
+                username: typeof rp.un === 'string' ? rp.un : 'Player',
+                avatar: typeof rp.av === 'string' ? rp.av : 'cat-orange',
+                role: typeof rp.rl === 'string' ? rp.rl : undefined,
+                x: typeof rp.x === 'number' ? rp.x : 120,
+                y: typeof rp.y === 'number' ? rp.y : 600,
+                vx: typeof rp.vx === 'number' ? rp.vx : 0,
+                vy: typeof rp.vy === 'number' ? rp.vy : 0,
+                facing: rp.f === -1 ? -1 : 1,
+                onGround: Boolean(rp.g),
+                isDying: Boolean(rp.d),
+                deathStartedAt: typeof rp.ds === 'number' ? rp.ds : undefined,
+                burnUntil: typeof rp.b === 'number' ? rp.b : undefined,
               });
             }
           }
-          if (data.room?.status === 'completed') {
-            active = false;
-            router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
-            return;
-          }
-          setRoom((prev) => {
-            if (!prev) return prev;
-            const statusChanged = data.room?.status && data.room.status !== prev.status;
-            const playersChanged =
-              prev.players.length !== serverPlayers.length ||
-              prev.players.some((pl, idx) => pl.userId !== serverPlayers[idx]?.userId);
-            if (!statusChanged && !playersChanged) return prev;
-            return {
-              ...prev,
-              status: data.room?.status ?? prev.status,
-              players: serverPlayers,
-            };
-          });
-          if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
-            chatCursorRef.current = data.chatCursor;
-          }
-          if (Array.isArray(data.messages) && data.messages.length > 0) {
-            ingestMessages(data.messages);
-          }
-          if (data.answerResults && typeof data.answerResults === 'object') {
-            for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
-              answerResultsRef.current.set(qid, Boolean(okAns));
-            }
-          }
-          if (Array.isArray(data.answeredQuestionIds)) {
-            for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
-            setAnsweredQuestionIds((prev) => (prev.length === answeredIdsRef.current.size ? prev : Array.from(answeredIdsRef.current)));
-          }
-          if (typeof data.correctCount === 'number') {
-            setCorrectCount(data.correctCount);
-          }
-        } catch {
-          // polling fallback failure is non-fatal
-        } finally {
-          if (active) timer = setTimeout(syncLoop, 150);
+        }
+      } catch {
+        // non-fatal
+      } finally {
+        if (active && !ably.connected) {
+          const elapsed = performance.now() - tStart;
+          const waitMs = Math.max(35, Math.round(55 - elapsed));
+          timer = setTimeout(posLoop, waitMs);
         }
       }
-      syncLoop();
-      return () => {
-        active = false;
-        clearTimeout(timer);
-      };
     }
-  }, [ablyEnabled, ably.connected, roomId, levelQuestions]);
+
+    posLoop();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [ably.connected, roomId, myRole]);
+
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function syncLoop() {
+      if (!active) return;
+      try {
+        const me = playersRef.current.get(myIdRef.current);
+        const payload: Record<string, unknown> = {
+          roomId,
+          chatCursor: chatCursorRef.current,
+        };
+        // Saat WebSocket sudah terhubung, posisi sudah di-stream real-time & disimpan ke DB oleh ws-hub/pos,
+      // sehingga room-sync tidak perlu mengirim duplikat payload koordinat lagi.
+      if (me && !ably.connected) {
+          const rx = Math.round(me.x * 10) / 10;
+          const ry = Math.round(me.y * 10) / 10;
+          const prev = lastSyncedPosRef.current;
+          if (
+            Math.abs(rx - prev.x) > 0.4 ||
+            Math.abs(ry - prev.y) > 0.4 ||
+            me.facing !== prev.facing ||
+            Math.abs(me.vx) > 0.05 ||
+            Boolean(me.isDying)
+          ) {
+            payload.x = rx;
+            payload.y = ry;
+            payload.vx = Math.round(me.vx * 100) / 100;
+            payload.vy = Math.round(me.vy * 100) / 100;
+            payload.onGround = me.onGround;
+            payload.isDying = Boolean(me.isDying);
+            payload.deathStartedAt = me.deathStartedAt;
+            payload.burnUntil = me.burnUntil;
+            payload.facing = me.facing;
+            lastSyncedPosRef.current = { x: rx, y: ry, facing: me.facing };
+          }
+        }
+        const res = await fetch('/api/game/room-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.status === 401) {
+          active = false;
+          handleSessionReplaced();
+          return;
+        }
+        if (!res.ok || !active) return;
+        const data = await res.json();
+        if (typeof data.sessionId === 'string' && data.sessionId) {
+          sessionIdRef.current = data.sessionId;
+        }
+        const serverPlayers: RoomPlayer[] = data.players ?? [];
+        setScores((prev) => {
+          const next = { ...prev };
+          for (const p of serverPlayers) next[p.userId] = p.score ?? 0;
+          return next;
+        });
+        const activeIds = new Set(serverPlayers.map((p) => p.userId));
+        for (const id of Array.from(playersRef.current.keys())) {
+          if (id !== myIdRef.current && !activeIds.has(id)) {
+            playersRef.current.delete(id);
+          }
+        }
+        const nowWall = Date.now();
+        for (const p of serverPlayers) {
+          if (p.userId === myIdRef.current) continue;
+          const existing = playersRef.current.get(p.userId);
+          if (existing) {
+            // Jangan timpa posisi dari posLoop yang lebih segar (< 1500ms)
+            if (nowWall - (existing.lastPacketAt ?? 0) > 1500) {
+              if (p.lastX !== undefined) existing.targetX = p.lastX;
+              if (p.lastY !== undefined) existing.targetY = p.lastY;
+              if (p.lastFacing !== undefined) existing.facing = p.lastFacing as 1 | -1;
+            }
+            if (p.role) existing.role = p.role;
+          } else {
+            const px = p.lastX ?? 120;
+            const py = p.lastY ?? 600;
+            playersRef.current.set(p.userId, {
+              id: p.userId,
+              username: p.username,
+              avatar: p.avatar,
+              role: p.role,
+              x: px,
+              y: py,
+              targetX: px,
+              targetY: py,
+              vx: p.vx ?? 0,
+              vy: p.vy ?? 0,
+              facing: (p.lastFacing as 1 | -1) ?? 1,
+              onGround: p.onGround ?? false,
+            });
+          }
+        }
+        if (data.room?.status === 'completed') {
+          active = false;
+          router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+          return;
+        }
+        setRoom((prev) => {
+          if (!prev) return prev;
+          const statusChanged = data.room?.status && data.room.status !== prev.status;
+          const playersChanged =
+            prev.players.length !== serverPlayers.length ||
+            prev.players.some((pl, idx) => pl.userId !== serverPlayers[idx]?.userId);
+          if (!statusChanged && !playersChanged) return prev;
+          return {
+            ...prev,
+            status: data.room?.status ?? prev.status,
+            players: serverPlayers,
+          };
+        });
+        if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
+          chatCursorRef.current = data.chatCursor;
+        }
+        if (Array.isArray(data.messages) && data.messages.length > 0) {
+          ingestMessages(data.messages);
+        }
+        if (data.answerResults && typeof data.answerResults === 'object') {
+          for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
+            answerResultsRef.current.set(qid, Boolean(okAns));
+          }
+        }
+        if (Array.isArray(data.answeredQuestionIds)) {
+          for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
+          setAnsweredQuestionIds((prev) => (prev.length === answeredIdsRef.current.size ? prev : Array.from(answeredIdsRef.current)));
+        }
+        if (typeof data.correctCount === 'number') {
+          setCorrectCount(data.correctCount);
+        }
+      } catch {
+        // polling fallback failure is non-fatal
+      } finally {
+        // Saat WebSocket aktif, semua posisi/chat/skor/soal sudah real-time lewat WS,
+        // sehingga room-sync cukup jalan setiap 4 detik sebagai heartbeat ringan (hemat bandwidth luar LAN 7x lipat!)
+        const syncInterval = ably.connected ? 4000 : 1500;
+        if (active) timer = setTimeout(syncLoop, syncInterval);
+      }
+    }
+    syncLoop();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [ably.connected, roomId, levelQuestions]);
 
   useEffect(() => {
     if (ably.roomStatusEvent === 'completed') {
@@ -909,7 +1287,50 @@ export default function GamePage() {
   }
 
   function touchControl(dir: 'left' | 'right' | 'jump', down: boolean) {
+    if (editingControlsLayout) {
+      keysRef.current.left = false;
+      keysRef.current.right = false;
+      keysRef.current.jump = false;
+      return;
+    }
     keysRef.current[dir] = down;
+  }
+
+  function startControlGroupDrag(group: 'dpad' | 'jump', e: React.PointerEvent) {
+    if (!editingControlsLayout) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const origX = group === 'dpad' ? hudControls.dpadX : hudControls.jumpX;
+    const origY = group === 'dpad' ? hudControls.dpadY : hudControls.jumpY;
+    controlDragRef.current = {
+      group,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX,
+      origY,
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function moveControlGroupDrag(e: React.PointerEvent) {
+    const d = controlDragRef.current;
+    if (!d || !editingControlsLayout) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const nx = Math.round(Math.max(-360, Math.min(360, d.origX + (e.clientX - d.startX))));
+    const ny = Math.round(Math.max(-420, Math.min(120, d.origY + (e.clientY - d.startY))));
+    if (d.group === 'dpad') {
+      updateHudControls({ dpadX: nx, dpadY: ny });
+    } else {
+      updateHudControls({ jumpX: nx, jumpY: ny });
+    }
+  }
+
+  function endControlGroupDrag(e: React.PointerEvent) {
+    if (!controlDragRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    controlDragRef.current = null;
   }
 
   async function sendChat(e: React.FormEvent) {
@@ -997,6 +1418,7 @@ export default function GamePage() {
         setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
         setSelected('');
         if (result.isCorrect) {
+          soundEngine.playAnswerCorrect();
           setCorrectCount((c) => c + 1);
           if (myIdRef.current) {
             setScores((prev) => ({
@@ -1004,6 +1426,8 @@ export default function GamePage() {
               [myIdRef.current]: (prev[myIdRef.current] ?? 0) + (result.pointsEarned ?? 0),
             }));
           }
+        } else {
+          soundEngine.playAnswerWrong();
         }
         setFeedback(result);
       } else {
@@ -1074,6 +1498,7 @@ export default function GamePage() {
                     aria-label={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
                     title={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
                     onClick={() => {
+                      soundEngine.playClick();
                       setChatMinimized((prev) => !prev);
                       setUnreadCount(0);
                     }}
@@ -1104,6 +1529,14 @@ export default function GamePage() {
 
               <div className="mp-top-right">
                 <div className="mp-timer-row">
+                  <div
+                    className="mp-ping-pill"
+                    title={`Realtime Transport: ${ably.transportMode.toUpperCase()} (${ably.pingMs} ms)`}
+                    aria-label={`Ping ${ably.pingMs} ms`}
+                  >
+                    <span className={`mp-ping-dot ${ably.pingMs <= 20 ? 'fast' : ably.pingMs <= 80 ? 'ok' : 'slow'}`} />
+                    <span>{ably.pingMs} ms</span>
+                  </div>
                   {myRole === 'teacher' && (
                     <div className="mp-teacher-actions">
                       <button
@@ -1125,10 +1558,31 @@ export default function GamePage() {
                   <button
                     type="button"
                     className="pause-btn"
+                    aria-pressed={settingsModalOpen}
+                    aria-label="Pengaturan Suara & Tombol"
+                    title="Pengaturan Suara & Tombol"
+                    onClick={() => {
+                      soundEngine.playClick();
+                      setSettingsModalOpen((v) => !v);
+                    }}
+                  >
+                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
+                        fill="#fff"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className="pause-btn"
                     aria-pressed={panelsHidden}
                     aria-label={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
                     title={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
-                    onClick={() => setPanelsHidden((v) => !v)}
+                    onClick={() => {
+                      soundEngine.playClick();
+                      setPanelsHidden((v) => !v);
+                    }}
                   >
                     {panelsHidden ? (
                       <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
@@ -1173,7 +1627,10 @@ export default function GamePage() {
                         aria-pressed={!leaderboardMinimized}
                         aria-label={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
                         title={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
-                        onClick={() => setLeaderboardMinimized((v) => !v)}
+                        onClick={() => {
+                          soundEngine.playClick();
+                          setLeaderboardMinimized((v) => !v);
+                        }}
                         onContextMenu={(e) => e.preventDefault()}
                       >
                         <span aria-hidden="true">🏆</span>
@@ -1221,7 +1678,10 @@ export default function GamePage() {
                         aria-pressed={!missionMinimized}
                         aria-label={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
                         title={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
-                        onClick={() => setMissionMinimized((v) => !v)}
+                        onClick={() => {
+                          soundEngine.playClick();
+                          setMissionMinimized((v) => !v);
+                        }}
                         onContextMenu={(e) => e.preventDefault()}
                       >
                         <span aria-hidden="true">🎯</span>
@@ -1275,6 +1735,7 @@ export default function GamePage() {
                       title="Perbesar (Zoom In)"
                       onPointerDown={(e) => {
                         e.preventDefault();
+                        soundEngine.playClick();
                         cameraRef.current?.zoomBy(0.12);
                       }}
                       onContextMenu={(e) => e.preventDefault()}
@@ -1294,6 +1755,7 @@ export default function GamePage() {
                       title="Perkecil (Zoom Out)"
                       onPointerDown={(e) => {
                         e.preventDefault();
+                        soundEngine.playClick();
                         cameraRef.current?.zoomBy(-0.12);
                       }}
                       onContextMenu={(e) => e.preventDefault()}
@@ -1309,38 +1771,118 @@ export default function GamePage() {
               </div>
           </div>
 
-          <div className={`onscreen-controls${controlsPosClass}`}>
-            <div className="dpad-group">
-              <button type="button" className="ctrl-circle" aria-label="Gerak ke Kiri"
-                onPointerDown={(e) => { e.preventDefault(); touchControl('left', true); }}
+          {editingControlsLayout && (
+            <div className="hud-edit-banner" role="region" aria-label="Mode atur posisi tombol">
+              <span className="hud-edit-banner-text">Geser tombol Arah &amp; Lompat ke posisi yang nyaman</span>
+              <button
+                type="button"
+                className="btn-green-action hud-edit-done-btn"
+                onClick={() => {
+                  soundEngine.playClick();
+                  setEditingControlsLayout(false);
+                }}
+              >
+                ✔ Selesai
+              </button>
+            </div>
+          )}
+
+          <div
+            className={`onscreen-controls${controlsPosClass}${hudControls.swapSides ? ' is-swapped' : ''}`}
+            style={
+              {
+                '--ctrl-size': `${hudControls.size}px`,
+                '--ctrl-gap': `${hudControls.gap}px`,
+                '--ctrl-opacity': hudControls.opacity,
+              } as React.CSSProperties
+            }
+          >
+            <div
+              className={`dpad-group${editingControlsLayout ? ' is-editing-layout' : ''}`}
+              style={{ transform: `translate(${hudControls.dpadX}px, ${hudControls.dpadY}px)` }}
+              onPointerDown={(e) => startControlGroupDrag('dpad', e)}
+              onPointerMove={moveControlGroupDrag}
+              onPointerUp={endControlGroupDrag}
+              onPointerCancel={endControlGroupDrag}
+            >
+              {editingControlsLayout && <span className="dpad-edit-tag">Geser Arah</span>}
+              <button
+                type="button"
+                className="ctrl-circle"
+                aria-label="Gerak ke Kiri"
+                onPointerDown={(e) => {
+                  if (editingControlsLayout) return;
+                  e.preventDefault();
+                  touchControl('left', true);
+                }}
                 onPointerUp={() => touchControl('left', false)}
                 onPointerCancel={() => touchControl('left', false)}
                 onPointerLeave={() => touchControl('left', false)}
-                onContextMenu={(e) => e.preventDefault()}>
-                <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <svg
+                  width={Math.round(hudControls.size * 0.44)}
+                  height={Math.round(hudControls.size * 0.44)}
+                  viewBox="0 0 32 32"
+                  aria-hidden="true"
+                >
                   <path d="M18 7l-9 9 9 9v-5h8v-8h-8V7z" fill="#fff" />
                 </svg>
               </button>
-              <button type="button" className="ctrl-circle" aria-label="Gerak ke Kanan"
-                onPointerDown={(e) => { e.preventDefault(); touchControl('right', true); }}
+              <button
+                type="button"
+                className="ctrl-circle"
+                aria-label="Gerak ke Kanan"
+                onPointerDown={(e) => {
+                  if (editingControlsLayout) return;
+                  e.preventDefault();
+                  touchControl('right', true);
+                }}
                 onPointerUp={() => touchControl('right', false)}
                 onPointerCancel={() => touchControl('right', false)}
                 onPointerLeave={() => touchControl('right', false)}
-                onContextMenu={(e) => e.preventDefault()}>
-                <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <svg
+                  width={Math.round(hudControls.size * 0.44)}
+                  height={Math.round(hudControls.size * 0.44)}
+                  viewBox="0 0 32 32"
+                  aria-hidden="true"
+                >
                   <path d="M14 7l9 9-9 9v-5H6v-8h8V7z" fill="#fff" />
                 </svg>
               </button>
             </div>
 
-            <div className="dpad-group">
-              <button type="button" className="ctrl-circle" aria-label="Lompat"
-                onPointerDown={(e) => { e.preventDefault(); touchControl('jump', true); }}
+            <div
+              className={`dpad-group${editingControlsLayout ? ' is-editing-layout' : ''}`}
+              style={{ transform: `translate(${hudControls.jumpX}px, ${hudControls.jumpY}px)` }}
+              onPointerDown={(e) => startControlGroupDrag('jump', e)}
+              onPointerMove={moveControlGroupDrag}
+              onPointerUp={endControlGroupDrag}
+              onPointerCancel={endControlGroupDrag}
+            >
+              {editingControlsLayout && <span className="dpad-edit-tag">Geser Lompat</span>}
+              <button
+                type="button"
+                className="ctrl-circle"
+                aria-label="Lompat"
+                onPointerDown={(e) => {
+                  if (editingControlsLayout) return;
+                  e.preventDefault();
+                  touchControl('jump', true);
+                }}
                 onPointerUp={() => touchControl('jump', false)}
                 onPointerCancel={() => touchControl('jump', false)}
                 onPointerLeave={() => touchControl('jump', false)}
-                onContextMenu={(e) => e.preventDefault()}>
-                <svg width="38" height="38" viewBox="0 0 32 32" aria-hidden="true">
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <svg
+                  width={Math.round(hudControls.size * 0.46)}
+                  height={Math.round(hudControls.size * 0.46)}
+                  viewBox="0 0 32 32"
+                  aria-hidden="true"
+                >
                   <path d="M16 6l-9 9h5v11h8V15h5l-9-9z" fill="#fff" />
                 </svg>
               </button>
@@ -1437,7 +1979,10 @@ export default function GamePage() {
                           role="radio"
                           aria-checked={selected === o.label}
                           className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}`}
-                          onClick={() => setSelected(o.label)}
+                          onClick={() => {
+                            soundEngine.playClick();
+                            setSelected(o.label);
+                          }}
                         >
                           <span className="opt-badge">{o.label}</span>
                           {o.content}
@@ -1456,6 +2001,202 @@ export default function GamePage() {
             </div>
           )}
         </div>
+
+        {settingsModalOpen && (
+          <div
+            className="overlay-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Pengaturan Game"
+            onClick={() => setSettingsModalOpen(false)}
+          >
+            <div className="parchment-card feedback-modal-card settings-modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="text-center">
+                <div className="green-arch-ribbon">Pengaturan Game</div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-section-title">Suara &amp; Musik (BGM)</div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Musik Latar (BGM)</span>
+                  <button
+                    type="button"
+                    className={`settings-toggle-btn ${bgmEnabled ? 'on' : 'off'}`}
+                    onClick={() => {
+                      const next = !bgmEnabled;
+                      setBgmEnabled(next);
+                      soundEngine.setBgmEnabled(next);
+                      soundEngine.playClick();
+                    }}
+                  >
+                    {bgmEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+
+                <div className="settings-slider-wrap">
+                  <div className="settings-row">
+                    <span className="settings-label">Volume Musik</span>
+                    <span className="settings-val-badge">{Math.round(bgmVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    className="settings-range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={Math.round(bgmVolume * 100)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) / 100;
+                      setBgmVolume(v);
+                      soundEngine.setBgmVolume(v);
+                    }}
+                  />
+                </div>
+
+                <div className="settings-row" style={{ marginTop: 4 }}>
+                  <span className="settings-label">Efek Suara (Lompat, Api, Mati, Klik)</span>
+                  <button
+                    type="button"
+                    className={`settings-toggle-btn ${sfxEnabled ? 'on' : 'off'}`}
+                    onClick={() => {
+                      const next = !sfxEnabled;
+                      setSfxEnabled(next);
+                      soundEngine.setSfxEnabled(next);
+                      if (next) soundEngine.playClick();
+                    }}
+                  >
+                    {sfxEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+
+                <div className="settings-slider-wrap">
+                  <div className="settings-row">
+                    <span className="settings-label">Volume Efek Suara</span>
+                    <span className="settings-val-badge">{Math.round(sfxVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    className="settings-range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={Math.round(sfxVolume * 100)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) / 100;
+                      setSfxVolume(v);
+                      soundEngine.setSfxVolume(v);
+                    }}
+                    onPointerUp={() => soundEngine.playJump()}
+                  />
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-section-title">Ukuran &amp; Posisi Tombol Layar</div>
+
+                <div className="settings-slider-wrap">
+                  <div className="settings-row">
+                    <span className="settings-label">Ukuran Tombol (Kiri/Kanan/Lompat)</span>
+                    <span className="settings-val-badge">{hudControls.size}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    className="settings-range"
+                    min={64}
+                    max={128}
+                    step={2}
+                    value={hudControls.size}
+                    onChange={(e) => updateHudControls({ size: Number(e.target.value) })}
+                  />
+                </div>
+
+                <div className="settings-slider-wrap">
+                  <div className="settings-row">
+                    <span className="settings-label">Jarak Tombol Kiri &amp; Kanan</span>
+                    <span className="settings-val-badge">{hudControls.gap}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    className="settings-range"
+                    min={8}
+                    max={44}
+                    step={2}
+                    value={hudControls.gap}
+                    onChange={(e) => updateHudControls({ gap: Number(e.target.value) })}
+                  />
+                </div>
+
+                <div className="settings-slider-wrap">
+                  <div className="settings-row">
+                    <span className="settings-label">Transparansi Tombol</span>
+                    <span className="settings-val-badge">{Math.round(hudControls.opacity * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    className="settings-range"
+                    min={35}
+                    max={100}
+                    step={5}
+                    value={Math.round(hudControls.opacity * 100)}
+                    onChange={(e) => updateHudControls({ opacity: Number(e.target.value) / 100 })}
+                  />
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Tukar Sisi Kiri &amp; Kanan</span>
+                  <button
+                    type="button"
+                    className={`settings-toggle-btn ${hudControls.swapSides ? 'on' : 'off'}`}
+                    onClick={() => {
+                      soundEngine.playClick();
+                      updateHudControls({ swapSides: !hudControls.swapSides });
+                    }}
+                  >
+                    {hudControls.swapSides ? 'DITUKAR' : 'NORMAL'}
+                  </button>
+                </div>
+
+                <div className="settings-actions-row">
+                  <button
+                    type="button"
+                    className="btn-blue-action"
+                    style={{ fontSize: 13, padding: '8px 14px', minHeight: 40, flex: 1 }}
+                    onClick={() => {
+                      soundEngine.playClick();
+                      setSettingsModalOpen(false);
+                      setEditingControlsLayout(true);
+                    }}
+                  >
+                    Geser Posisi Tombol di Layar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-orange-action"
+                    style={{ fontSize: 13, padding: '8px 14px', minHeight: 40 }}
+                    onClick={resetHudControls}
+                  >
+                    Reset Tombol
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  className="btn-green-action"
+                  style={{ fontSize: 14, padding: '8px 24px', minHeight: 42 }}
+                  onClick={() => {
+                    soundEngine.playClick();
+                    setSettingsModalOpen(false);
+                  }}
+                >
+                  Selesai
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {kickModalOpen && myRole === 'teacher' && (
           <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Kelola Pemain" onClick={() => setKickModalOpen(false)}>

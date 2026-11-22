@@ -8,7 +8,7 @@ import { getRoom, updateRoomStatus, removePlayer, assertHost, leaveRoom, ensureS
 import { stripCorrectAnswer } from '@/server/services/question-service';
 import { publishToRoom } from '@/server/services/realtime-service';
 import { getEphemeralChatSince } from '@/server/services/chat-store';
-import { removePresence, touchPresence } from '@/server/services/presence-store';
+import { invalidateRoomSyncCache, removePresence, touchPresence } from '@/server/services/presence-store';
 import { generateId } from '@/server/auth/crypto';
 import { ok, fail, handleError } from '@/server/middleware/http';
 
@@ -124,12 +124,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (body.action === 'remove-player') {
       const schema = z.object({ playerId: z.string().min(1) });
       const { playerId } = schema.parse(body);
+      removePresence(id, playerId);
       await removePlayer(id, user.id, playerId);
+      invalidateRoomSyncCache(id);
       return ok({ room: await getRoom(id) });
     }
 
     const { status } = statusSchema.parse(body);
     const room = await updateRoomStatus(id, user.id, status);
+    invalidateRoomSyncCache(id);
     void publishToRoom(id, 'room-status', { status });
     return ok({ room });
   } catch (err) {
