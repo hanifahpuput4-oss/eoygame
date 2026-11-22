@@ -11,6 +11,7 @@ import { ensureWsServer } from '@/server/services/ws-hub';
 import { getEphemeralChatSince } from '@/server/services/chat-store';
 import {
   addRejoinRequest,
+  getLiveRoomPositions,
   getRejoinRequests,
   invalidateRoomSyncCache,
   isPlayerKicked,
@@ -97,6 +98,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         room = await getRoom(id);
       }
     }
+
+    const liveMap = getLiveRoomPositions(id);
+    const enrichedPlayers = (room.players ?? []).map((pl) => {
+      const live = liveMap.get(pl.userId);
+      return {
+        ...pl,
+        stage: live?.stage ?? 1,
+        lastX: live?.x ?? pl.lastX,
+        lastY: live?.y ?? pl.lastY,
+        lastFacing: live?.facing ?? pl.lastFacing,
+      };
+    });
+    room = { ...room, players: enrichedPlayers };
 
     const levelId = room.level?.id;
     const [levelQs, session] = await Promise.all([

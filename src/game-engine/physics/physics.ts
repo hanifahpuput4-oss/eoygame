@@ -1,10 +1,11 @@
-import { PHYSICS, PLATFORMS, WORLD, rectsOverlap, type Platform } from '../maps/world';
+import { DECOR, PHYSICS, PLATFORMS, WORLD, rectsOverlap, type Platform, type StageEnemy } from '../maps/world';
 
 export type Player = {
   id: string;
   username: string;
   avatar: string;
   role?: string;
+  stage?: number;
   x: number;
   y: number;
   targetX?: number;
@@ -15,6 +16,7 @@ export type Player = {
   onGround: boolean;
   ridingPlayerId?: string | null;
   lastCarrierX?: number;
+  ridingPlatform?: Platform | null;
   spawnX?: number;
   spawnY?: number;
   isDying?: boolean;
@@ -47,6 +49,66 @@ function respawnToStart(p: Player) {
   p.onGround = false;
   p.ridingPlayerId = null;
   p.lastCarrierX = undefined;
+  p.ridingPlatform = null;
+}
+
+export function updateStageEntities(
+  basePlatforms: Platform[],
+  enemies: StageEnemy[],
+  dtScale = 1,
+  now = Date.now(),
+) {
+  for (const plat of basePlatforms) {
+    if (plat.type === 'moving') {
+      const bx = plat.baseX ?? plat.x;
+      const by = plat.baseY ?? plat.y;
+      const range = plat.moveRange ?? 90;
+      const speed = plat.moveSpeed ?? 0.0022;
+      const phase = plat.movePhase ?? 0;
+      const offset = Math.sin(now * speed + phase) * range;
+      const prevX = plat.x;
+      const prevY = plat.y;
+      if (plat.moveAxis === 'y') {
+        plat.y = by + offset;
+        plat.dx = 0;
+        plat.dy = plat.y - prevY;
+      } else {
+        plat.x = bx + offset;
+        plat.dx = plat.x - prevX;
+        plat.dy = 0;
+      }
+    } else if (plat.type === 'crumble') {
+      if (plat.crumbleStartedAt) {
+        const elapsed = now - plat.crumbleStartedAt;
+        if (elapsed >= 3550) {
+          plat.brokenUntil = undefined;
+          plat.crumbleStartedAt = undefined;
+        } else if (elapsed >= 1150) {
+          plat.brokenUntil = plat.crumbleStartedAt + 3550;
+        }
+      } else if (plat.brokenUntil && now >= plat.brokenUntil) {
+        plat.brokenUntil = undefined;
+      }
+    }
+  }
+
+  for (const enemy of enemies) {
+    if (enemy.stompedUntil && enemy.stompedUntil > now) continue;
+    const span = (enemy.maxX - enemy.w) - enemy.minX;
+    if (span <= 0) continue;
+    const speedPxPerMs = enemy.speed * 0.06;
+    const halfPeriod = span / speedPxPerMs;
+    const fullPeriod = 2 * halfPeriod;
+    const idOffset = (enemy.id.charCodeAt(0) * 499) + ((enemy.id.charCodeAt(1) || 0) * 137);
+    const t = ((now + idOffset) % fullPeriod + fullPeriod) % fullPeriod;
+    if (t < halfPeriod) {
+      enemy.x = enemy.minX + t * speedPxPerMs;
+      enemy.dir = 1;
+    } else {
+      enemy.x = (enemy.maxX - enemy.w) - (t - halfPeriod) * speedPxPerMs;
+      enemy.dir = -1;
+    }
+  }
 }
 
 export type PhysicsSoundEvent = 'jump' | 'bounce' | 'burn' | 'death';
@@ -59,10 +121,22 @@ export function updatePlayerPhysics(
   onTouchQuestionBlock?: (questionId: string) => void,
   dtScale = 1,
   onSoundEvent?: (event: PhysicsSoundEvent) => void,
+  stageOptions?: {
+    basePlatforms?: Platform[];
+    enemies?: StageEnemy[];
+    isGateUnlocked?: boolean;
+    onEnterGate?: () => void;
+    isStaff?: boolean;
+    onObstacleEvent?: (
+      evt:
+        | { op: 'crumble'; stg: number; idx: number; at: number }
+        | { op: 'stomp'; stg: number; id: string; until: number },
+    ) => void;
+  },
 ) {
   const now = Date.now();
 
-  // Super Mario Bros style death animation sequence when hitting spikes
+  // Super Mario Bros style death animation sequence when hitting spikes or enemies
   if (p.isDying) {
     const elapsed = now - (p.deathStartedAt ?? now);
     // 0-180ms: freeze in shock before flying up & falling through screen
@@ -78,14 +152,26 @@ export function updatePlayerPhysics(
     return;
   }
 
-  const allPlatforms = extraPlatforms.length > 0 ? [...PLATFORMS, ...extraPlatforms] : PLATFORMS;
+  const basePlats = stageOptions?.basePlatforms ?? PLATFORMS;
+  const allPlatforms = extraPlatforms.length > 0 ? [...basePlats, ...extraPlatforms] : basePlats;
   const isBurning = Boolean(p.burnUntil && p.burnUntil > now);
   const activeMoveSpeed = isBurning ? PHYSICS.moveSpeed * 1.2 : PHYSICS.moveSpeed;
+
+  // Carry player when standing on a moving platform
+  if (p.ridingPlatform && p.ridingPlatform.type === 'moving') {
+    p.x += p.ridingPlatform.dx ?? 0;
+    p.y += p.ridingPlatform.dy ?? 0;
+  }
 
   // Carry rider horizontally when standing on another player
   if (p.ridingPlayerId) {
     for (const other of otherPlayers) {
       if (other.id === p.ridingPlayerId) {
+        if ((other.stage ?? 1) !== (p.stage ?? 1)) {
+          p.ridingPlayerId = null;
+          p.lastCarrierX = undefined;
+          break;
+        }
         if (p.lastCarrierX !== undefined) {
           const carrierDx = other.x - p.lastCarrierX;
           if (Math.abs(carrierDx) < 120) {
@@ -114,6 +200,7 @@ export function updatePlayerPhysics(
     p.onGround = false;
     p.ridingPlayerId = null;
     p.lastCarrierX = undefined;
+    p.ridingPlatform = null;
     onSoundEvent?.('jump');
   }
 
@@ -151,9 +238,13 @@ export function updatePlayerPhysics(
   p.onGround = false;
   let newCarrierId: string | null = null;
   let newCarrierX: number | undefined;
+  let newRidingPlatform: Platform | null = null;
 
   const box = { x: p.x, y: p.y, w: PLAYER_W, h: PLAYER_H };
   for (const plat of allPlatforms) {
+    if (plat.type === 'crumble' && plat.brokenUntil && now < plat.brokenUntil) {
+      continue;
+    }
     if (!rectsOverlap(box, plat)) continue;
 
     if (plat.type === 'spike') {
@@ -164,6 +255,7 @@ export function updatePlayerPhysics(
       p.onGround = false;
       p.ridingPlayerId = null;
       p.lastCarrierX = undefined;
+      p.ridingPlatform = null;
       onSoundEvent?.('death');
       return;
     }
@@ -182,7 +274,8 @@ export function updatePlayerPhysics(
     }
 
     // Landing on top of any platform or obstacle
-    if (p.vy >= 0 && prevY + PLAYER_H <= plat.y + 14) {
+    const topThreshold = plat.type === 'moving' ? 18 : 14;
+    if (p.vy >= 0 && prevY + PLAYER_H <= plat.y + topThreshold) {
       p.y = plat.y - PLAYER_H;
       if (plat.type === 'bounce') {
         p.vy = PHYSICS.bounceVelocity;
@@ -191,6 +284,20 @@ export function updatePlayerPhysics(
       } else {
         p.vy = 0;
         p.onGround = true;
+        if (plat.type === 'moving') {
+          newRidingPlatform = plat;
+        } else if (plat.type === 'crumble' && !plat.crumbleStartedAt) {
+          plat.crumbleStartedAt = now;
+          const platIndex = stageOptions?.basePlatforms ? stageOptions.basePlatforms.indexOf(plat) : -1;
+          if (platIndex >= 0) {
+            stageOptions?.onObstacleEvent?.({
+              op: 'crumble',
+              stg: p.stage ?? 1,
+              idx: platIndex,
+              at: now,
+            });
+          }
+        }
       }
       box.y = p.y;
       if (isQuestionBox(plat.type) && plat.questionId && onTouchQuestionBlock) {
@@ -211,9 +318,55 @@ export function updatePlayerPhysics(
     }
   }
 
+  // Stage Enemy collisions (Monster Virus & Walking Fireballs)
+  const enemies = stageOptions?.enemies ?? [];
+  for (const enemy of enemies) {
+    if (enemy.stompedUntil && enemy.stompedUntil > now) continue;
+    const eHitbox = { x: enemy.x + 3, y: enemy.y + 3, w: enemy.w - 6, h: enemy.h - 4 };
+    if (!rectsOverlap(box, eHitbox)) continue;
+
+    // Mario-style Stomp on top of Virus head!
+    if (enemy.kind === 'virus' && p.vy > 0 && prevY + PLAYER_H <= enemy.y + enemy.h * 0.55) {
+      enemy.stompedUntil = now + 6000;
+      p.y = enemy.y - PLAYER_H;
+      p.vy = -12.6;
+      p.onGround = false;
+      onSoundEvent?.('bounce');
+      box.y = p.y;
+      stageOptions?.onObstacleEvent?.({
+        op: 'stomp',
+        stg: p.stage ?? 1,
+        id: enemy.id,
+        until: now + 6000,
+      });
+      continue;
+    }
+
+    // Otherwise touching Virus from side or touching Fireball causes KO!
+    p.isDying = true;
+    p.deathStartedAt = now;
+    p.vx = 0;
+    p.vy = -13.2;
+    p.onGround = false;
+    p.ridingPlayerId = null;
+    p.lastCarrierX = undefined;
+    p.ridingPlatform = null;
+    onSoundEvent?.('death');
+    return;
+  }
+
+  // Exit Gate Portal check (when all questions in current stage are answered)
+  if (stageOptions?.isGateUnlocked && stageOptions.onEnterGate) {
+    const gateBox = { x: DECOR.gate.x + 22, y: DECOR.gate.y + 24, w: 86, h: 136 };
+    if (rectsOverlap(box, gateBox)) {
+      stageOptions.onEnterGate();
+    }
+  }
+
   // Player-on-player stacking (gendong-gendongan)
   for (const other of otherPlayers) {
     if (other.id === p.id) continue;
+    if ((other.stage ?? 1) !== (p.stage ?? 1)) continue;
     const headTop = other.y + 4; // allow feet to rest naturally on top of cat head
     const overlapX = p.x + PLAYER_W > other.x + 4 && p.x < other.x + PLAYER_W - 4;
     if (!overlapX) continue;
@@ -233,6 +386,7 @@ export function updatePlayerPhysics(
 
   p.ridingPlayerId = newCarrierId;
   p.lastCarrierX = newCarrierX;
+  p.ridingPlatform = newRidingPlatform;
 
   if (p.y > WORLD.height + 200) {
     p.x = 120;

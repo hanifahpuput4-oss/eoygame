@@ -7,6 +7,7 @@ export type PresencePlayer = {
   username: string;
   avatar: string;
   role?: string;
+  stage?: number;
   x: number;
   y: number;
   vx?: number;
@@ -33,6 +34,7 @@ export type PositionData = {
   username: string;
   avatar: string;
   role?: string;
+  stage?: number;
   x: number;
   y: number;
   vx?: number;
@@ -60,9 +62,14 @@ export type ActiveQuestion = {
   options: { label: string; content: string }[];
 };
 
+export type ObstacleEvent =
+  | { op: 'crumble'; stg: number; idx: number; at: number }
+  | { op: 'stomp'; stg: number; id: string; until: number };
+
 type RealtimeCallbacks = {
   onDirectMove?: (player: PresencePlayer) => void;
   onDirectLeave?: (userId: string, kicked?: boolean) => void;
+  onObstacleEvent?: (evt: ObstacleEvent) => void;
 };
 
 export function useAblyRoom(
@@ -77,6 +84,7 @@ export function useAblyRoom(
   const wsJoinedUserIdRef = useRef<string>('');
   const myInfoRef = useRef<PositionData | null>(null);
   const lastPacketTsByUserRef = useRef<Map<string, number>>(new Map());
+  const serverTimeOffsetRef = useRef<number>(0);
 
   const [connected, setConnected] = useState(false);
   const [transportMode, setTransportMode] = useState<'ws' | 'http'>('http');
@@ -117,6 +125,9 @@ export function useAblyRoom(
       if (t === 'po' && typeof msg.c === 'number') {
         const rtt = Math.max(1, Math.round((performance.now() - msg.c) * 10) / 10);
         setPingMs(rtt);
+        if (typeof msg.st === 'number') {
+          serverTimeOffsetRef.current = Math.round(msg.st + rtt / 2 - Date.now());
+        }
         if (msg.del === 1 || msg.rs === 'deleted') {
           setRoomStatusEvent('deleted');
         } else if (typeof msg.rs === 'string' && msg.rs) {
@@ -142,6 +153,25 @@ export function useAblyRoom(
       }
 
       if (t === 'snapshot' || t === 'init') {
+        if (typeof msg.st === 'number') {
+          serverTimeOffsetRef.current = Math.round(msg.st - Date.now());
+        }
+        if (msg.obstacles && typeof msg.obstacles === 'object') {
+          const obs = msg.obstacles as {
+            crumbles?: { stage: number; idx: number; startedAt: number }[];
+            stomps?: { stage: number; id: string; until: number }[];
+          };
+          if (Array.isArray(obs.crumbles)) {
+            for (const c of obs.crumbles) {
+              callbacksRef.current?.onObstacleEvent?.({ op: 'crumble', stg: c.stage, idx: c.idx, at: c.startedAt });
+            }
+          }
+          if (Array.isArray(obs.stomps)) {
+            for (const s of obs.stomps) {
+              callbacksRef.current?.onObstacleEvent?.({ op: 'stomp', stg: s.stage, id: s.id, until: s.until });
+            }
+          }
+        }
         const list = Array.isArray(msg.players) ? (msg.players as Record<string, unknown>[]) : [];
         for (const raw of list) {
           const uid = typeof raw.userId === 'string' ? raw.userId : '';
@@ -151,6 +181,7 @@ export function useAblyRoom(
             username: typeof raw.username === 'string' ? raw.username : 'Player',
             avatar: typeof raw.avatar === 'string' ? raw.avatar : 'cat-orange',
             role: typeof raw.role === 'string' ? raw.role : undefined,
+            stage: typeof raw.stage === 'number' ? raw.stage : typeof raw.stg === 'number' ? raw.stg : 1,
             x: typeof raw.x === 'number' ? raw.x : 120,
             y: typeof raw.y === 'number' ? raw.y : 600,
             vx: typeof raw.vx === 'number' ? raw.vx : 0,
@@ -174,6 +205,7 @@ export function useAblyRoom(
           username: typeof msg.un === 'string' ? msg.un : 'Player',
           avatar: typeof msg.av === 'string' ? msg.av : 'cat-orange',
           role: typeof msg.r === 'string' ? msg.r : undefined,
+          stage: typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : 1,
           x: typeof msg.x === 'number' ? msg.x : 120,
           y: typeof msg.y === 'number' ? msg.y : 600,
           vx: 0,
@@ -193,6 +225,7 @@ export function useAblyRoom(
           username: typeof msg.un === 'string' ? msg.un : 'Player',
           avatar: typeof msg.av === 'string' ? msg.av : 'cat-orange',
           role: typeof msg.r === 'string' ? msg.r : undefined,
+          stage: typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : undefined,
           x: typeof msg.x === 'number' ? msg.x : 120,
           y: typeof msg.y === 'number' ? msg.y : 600,
           vx: typeof msg.vx === 'number' ? msg.vx : 0,
@@ -259,6 +292,18 @@ export function useAblyRoom(
         } else if (name === 'game-event' && data) {
           setGameEvents((prev) => [...prev.slice(-49), data as { type: string; payload: unknown }]);
         }
+        return;
+      }
+
+      if (t === 'obstacle') {
+        const op = msg.op;
+        const stg = typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : 1;
+        if (op === 'crumble' && typeof msg.idx === 'number' && typeof msg.at === 'number') {
+          callbacksRef.current?.onObstacleEvent?.({ op: 'crumble', stg, idx: msg.idx, at: msg.at });
+        } else if (op === 'stomp' && typeof msg.id === 'string' && typeof msg.until === 'number') {
+          callbacksRef.current?.onObstacleEvent?.({ op: 'stomp', stg, id: msg.id, until: msg.until });
+        }
+        return;
       }
     },
     [handleIncomingMove],
@@ -346,6 +391,7 @@ export function useAblyRoom(
                 username: me.username,
                 avatar: me.avatar,
                 role: me.role ?? 'student',
+                stg: me.stage ?? 1,
                 x: Math.round(me.x * 10) / 10,
                 y: Math.round(me.y * 10) / 10,
                 vx: Math.round((me.vx ?? 0) * 100) / 100,
@@ -433,6 +479,7 @@ export function useAblyRoom(
               username: me.username,
               avatar: me.avatar,
               role: me.role ?? 'student',
+              stg: me.stage ?? 1,
               x: Math.round(me.x * 10) / 10,
               y: Math.round(me.y * 10) / 10,
               vx: Math.round((me.vx ?? 0) * 100) / 100,
@@ -500,6 +547,7 @@ export function useAblyRoom(
               username: pos.username,
               avatar: pos.avatar,
               role: pos.role ?? 'student',
+              stg: pos.stage ?? 1,
               x: Math.round(pos.x * 10) / 10,
               y: Math.round(pos.y * 10) / 10,
               vx: Math.round((pos.vx ?? 0) * 100) / 100,
@@ -518,6 +566,7 @@ export function useAblyRoom(
         ws.send(
           JSON.stringify({
             t: 'm',
+            stg: pos.stage ?? 1,
             x: Math.round(pos.x * 10) / 10,
             y: Math.round(pos.y * 10) / 10,
             vx: Math.round((pos.vx ?? 0) * 100) / 100,
@@ -536,6 +585,24 @@ export function useAblyRoom(
     },
     [roomId],
   );
+
+  const publishObstacle = useCallback((evt: ObstacleEvent) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ t: 'obstacle', ...evt }));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const getSyncedServerTime = useCallback(() => {
+    return Date.now() + serverTimeOffsetRef.current;
+  }, []);
+
+  const setServerTimeOffset = useCallback((offset: number) => {
+    serverTimeOffsetRef.current = offset;
+  }, []);
 
   const publishChat = useCallback((msg: ChatMessage) => {
     void msg;
@@ -561,6 +628,9 @@ export function useAblyRoom(
     roomStatusEvent,
     rejoinRequestsEvent,
     publishPosition,
+    publishObstacle,
+    getSyncedServerTime,
+    setServerTimeOffset,
     publishChat,
     publishGameEvent,
   };

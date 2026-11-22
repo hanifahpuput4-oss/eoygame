@@ -75,11 +75,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       }
 
       if (typeof body.x === 'number' && typeof body.y === 'number') {
+        const stage = typeof body.stg === 'number' ? body.stg : typeof body.stage === 'number' ? body.stage : 1;
         updateLivePlayerPosition(roomId, {
           userId,
           username: typeof body.un === 'string' ? body.un : 'Player',
           avatar: typeof body.av === 'string' ? body.av : 'cat-orange',
           role: typeof body.rl === 'string' ? body.rl : 'student',
+          stage,
           x: body.x,
           y: body.y,
           vx: typeof body.vx === 'number' ? body.vx : 0,
@@ -113,6 +115,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
           un: p.username,
           av: p.avatar,
           rl: p.role,
+          stg: p.stage ?? 1,
           x: p.x,
           y: p.y,
           vx: p.vx,
@@ -694,6 +697,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
           const live = freshLiveMap.get(p.userId);
           return {
             ...p,
+            stage: live?.stage ?? 1,
             lastX: isMe ? x : (live?.x ?? p.lastX),
             lastY: isMe ? y : (live?.y ?? p.lastY),
             lastFacing: isMe ? (facing ?? 1) : (live?.facing ?? p.lastFacing),

@@ -3,11 +3,14 @@ import crypto from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import {
+  getLiveRoomObstacles,
   getLiveRoomPositions,
   getLiveRoomStatus,
   getRejoinRequests,
   isPlayerKicked,
   isRoomDeleted,
+  recordRoomCrumble,
+  recordRoomStomp,
   removePresence,
   touchPresence,
   updateLivePlayerPosition,
@@ -21,6 +24,7 @@ type WsClient = {
   username: string;
   avatar: string;
   role: string;
+  stage: number;
 };
 
 type SseClient = {
@@ -236,6 +240,7 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
       JSON.stringify({
         t: 'po',
         c: msg.c,
+        st: Date.now(),
         rs: deleted ? 'deleted' : rs,
         del: deleted ? 1 : 0,
         k: kicked ? 1 : 0,
@@ -265,6 +270,7 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
     client.username = typeof msg.username === 'string' ? msg.username : client.username || 'Player';
     client.avatar = typeof msg.avatar === 'string' ? msg.avatar : client.avatar || 'cat-orange';
     client.role = typeof msg.role === 'string' ? msg.role : client.role || 'student';
+    client.stage = typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : client.stage || 1;
 
     addClientToRoom(client);
     if (!client.userId) return;
@@ -276,6 +282,7 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         username: client.username,
         avatar: client.avatar,
         role: client.role,
+        stage: client.stage,
         x: msg.x,
         y: msg.y,
         vx: typeof msg.vx === 'number' ? msg.vx : 0,
@@ -290,6 +297,8 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
       JSON.stringify({
         t: 'snapshot',
         players: snapshot,
+        obstacles: getLiveRoomObstacles(roomId),
+        st: Date.now(),
       }),
     );
     if (!client.socket.destroyed && client.socket.writable) {
@@ -304,6 +313,7 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         un: client.username,
         av: client.avatar,
         r: client.role,
+        stg: client.stage,
         x: typeof msg.x === 'number' ? msg.x : 120,
         y: typeof msg.y === 'number' ? msg.y : 600,
         f: msg.f === -1 ? -1 : 1,
@@ -315,6 +325,43 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
   }
 
   if (!client.roomId || !client.userId) return;
+
+  if (t === 'obstacle') {
+    const op = typeof msg.op === 'string' ? msg.op : '';
+    const stg = typeof msg.stg === 'number' ? msg.stg : 1;
+    if (op === 'crumble' && typeof msg.idx === 'number') {
+      const at = typeof msg.at === 'number' ? msg.at : Date.now();
+      recordRoomCrumble(client.roomId, stg, msg.idx, at);
+      broadcastRoomEvent(
+        client.roomId,
+        {
+          t: 'obstacle',
+          op: 'crumble',
+          stg,
+          idx: msg.idx,
+          at,
+        },
+        client.userId,
+        client.id,
+      );
+    } else if (op === 'stomp' && typeof msg.id === 'string') {
+      const until = typeof msg.until === 'number' ? msg.until : Date.now() + 6000;
+      recordRoomStomp(client.roomId, stg, msg.id, until);
+      broadcastRoomEvent(
+        client.roomId,
+        {
+          t: 'obstacle',
+          op: 'stomp',
+          stg,
+          id: msg.id,
+          until,
+        },
+        client.userId,
+        client.id,
+      );
+    }
+    return;
+  }
 
   // High-frequency kinematics / movement packet (slimmed payload supported)
   if (t === 'm') {
@@ -346,12 +393,15 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
     const isDying = Boolean(msg.d);
     const deathStartedAt = typeof msg.ds === 'number' ? msg.ds : undefined;
     const burnUntil = typeof msg.b === 'number' ? msg.b : undefined;
+    const stage = typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : client.stage;
+    client.stage = stage;
 
     const updated = updateLivePlayerPosition(client.roomId, {
       userId: client.userId,
       username: client.username,
       avatar: client.avatar,
       role: client.role,
+      stage,
       x,
       y,
       vx,
@@ -372,6 +422,7 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         un: client.username,
         av: client.avatar,
         r: client.role,
+        stg: stage,
         x,
         y,
         vx,
@@ -416,6 +467,7 @@ function attachWsConnection(socket: Socket) {
     username: '',
     avatar: '',
     role: 'student',
+    stage: 1,
   };
 
   let buffer: Buffer = Buffer.alloc(0);

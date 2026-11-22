@@ -1,13 +1,23 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Camera } from '@/game-engine/camera/camera';
-import { updatePlayerPhysics, type Player, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
-import { drawWorld, drawPlatforms, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
-import { PHYSICS, PLATFORMS, SPAWN_POINTS, WORLD, generateQuestionBlocks, type Platform } from '@/game-engine/maps/world';
+import { updatePlayerPhysics, updateStageEntities, type Player, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
+import { drawWorld, drawPlatforms, drawEnemies, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
+import {
+  PHYSICS,
+  PLATFORMS,
+  SPAWN_POINTS,
+  WORLD,
+  generateQuestionBlocks,
+  getStageBasePlatforms,
+  createStageEnemies,
+  type Platform,
+  type StageEnemy,
+} from '@/game-engine/maps/world';
 import { soundEngine } from '@/game-engine/audio/sound-engine';
-import { useAblyRoom } from '@/features/multiplayer/use-ably-room';
+import { useAblyRoom, type ObstacleEvent } from '@/features/multiplayer/use-ably-room';
 import { clearCachedData } from '@/lib/client-cache';
 import '../game.css';
 
@@ -40,6 +50,7 @@ type RoomPlayer = {
   username: string;
   avatar: string;
   role?: string;
+  stage?: number;
   lastX?: number;
   lastY?: number;
   lastFacing?: number;
@@ -58,9 +69,25 @@ type RoomData = {
   name: string;
   code: string;
   status: string;
+  settings?: { stageCount?: number };
   players: RoomPlayer[];
   level: { id: string; name: string; subject?: string; mapConfig?: string } | null;
 };
+
+function resolveTotalStages(room: RoomData | null): number {
+  const configured = Number(room?.settings?.stageCount);
+  if (Number.isFinite(configured) && configured >= 1) {
+    return Math.min(2, Math.max(1, Math.round(configured)));
+  }
+  return 2;
+}
+
+function getStageQuestions<T>(allQuestions: T[], stage: number, totalStages: number): T[] {
+  if (totalStages <= 1 || allQuestions.length === 0) return allQuestions;
+  const perStage = Math.ceil(allQuestions.length / totalStages);
+  const startIdx = Math.max(0, (stage - 1) * perStage);
+  return allQuestions.slice(startIdx, startIdx + perStage);
+}
 
 function getRoomSubjectTitle(room: RoomData | null): string {
   if (!room) return 'Arena llysSmart';
@@ -195,6 +222,14 @@ export default function GamePage() {
   const [levelQuestions, setLevelQuestions] = useState<Question[]>([]);
   const levelQuestionsRef = useRef<Question[]>([]);
   const questionBlocksRef = useRef<Platform[]>([]);
+  const [currentStage, setCurrentStage] = useState(1);
+  const currentStageRef = useRef(1);
+  const [totalStages, setTotalStages] = useState(2);
+  const totalStagesRef = useRef(2);
+  const stagePlatformsRef = useRef<Platform[]>(getStageBasePlatforms(1));
+  const stageEnemiesRef = useRef<StageEnemy[]>(createStageEnemies(1));
+  const [stageBanner, setStageBanner] = useState<string | null>(null);
+  const stageBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scores, setScores] = useState<Record<string, number>>({});
   const [question, setQuestion] = useState<Question | null>(null);
   const questionRef = useRef<Question | null>(null);
@@ -219,6 +254,7 @@ export default function GamePage() {
     username: string;
     avatar: string;
     role?: string;
+    stage?: number;
     x: number;
     y: number;
     vx?: number;
@@ -241,6 +277,7 @@ export default function GamePage() {
       existing.vx = pvx;
       existing.vy = pvy;
       existing.facing = rp.facing;
+      if (typeof rp.stage === 'number') existing.stage = rp.stage;
       if (typeof rp.onGround === 'boolean') existing.onGround = rp.onGround;
       if (typeof rp.isDying === 'boolean') existing.isDying = rp.isDying;
       if (rp.deathStartedAt !== undefined) existing.deathStartedAt = rp.deathStartedAt;
@@ -272,6 +309,7 @@ export default function GamePage() {
         username: rp.username,
         avatar: rp.avatar,
         role: rp.role,
+        stage: rp.stage ?? 1,
         x: rp.x,
         y: rp.y,
         targetX: rp.x,
@@ -310,6 +348,100 @@ export default function GamePage() {
     setExitNotice(reason);
   }
 
+  function applyStage(
+    nextStage: number,
+    opts?: {
+      respawnPlayer?: boolean;
+      showToast?: boolean;
+      seedId?: string;
+      allQuestions?: Question[];
+      totalStg?: number;
+      persistCheckpoint?: boolean;
+    },
+  ) {
+    const tStg = opts?.totalStg ?? totalStagesRef.current;
+    const stg = Math.max(1, Math.min(tStg, nextStage));
+
+    // Siswa tidak dapat melompati stage tanpa menyelesaikan soal stage sebelumnya
+    if (!isStaff && stg > currentStageRef.current) {
+      const allQsForCheck = opts?.allQuestions ?? levelQuestionsRef.current;
+      const curStageQs = getStageQuestions(allQsForCheck, currentStageRef.current, tStg);
+      const isCleared = curStageQs.length > 0 && curStageQs.every((q) => answeredIdsRef.current.has(q.id));
+      if (!isCleared) {
+        return;
+      }
+    }
+
+    currentStageRef.current = stg;
+    setCurrentStage(stg);
+    stagePlatformsRef.current = getStageBasePlatforms(stg);
+    stageEnemiesRef.current = createStageEnemies(stg);
+
+    const allQs = opts?.allQuestions ?? levelQuestionsRef.current;
+    const stageQs = getStageQuestions(allQs, stg, tStg);
+    const uid = opts?.seedId || myIdRef.current || 'anon';
+    questionBlocksRef.current = generateQuestionBlocks(
+      stageQs.map((q) => q.id),
+      `${uid}:${roomId}:s${stg}`,
+      stg,
+    );
+
+    if (opts?.persistCheckpoint !== false && uid && roomId) {
+      try {
+        window.localStorage.setItem(`llys_stage_${roomId}_${uid}`, String(stg));
+      } catch {
+        // ignore storage error
+      }
+    }
+
+    const me = playersRef.current.get(myIdRef.current);
+    if (me) {
+      me.stage = stg;
+      if (opts?.respawnPlayer) {
+        me.x = me.spawnX ?? 120;
+        me.y = me.spawnY ?? 600;
+        me.vx = 0;
+        me.vy = 0;
+        me.onGround = false;
+        me.ridingPlatform = null;
+        me.isDying = false;
+        me.deathStartedAt = undefined;
+        me.burnUntil = undefined;
+      }
+      if (ably.connected) {
+        ably.publishPosition({
+          id: me.id,
+          username: me.username,
+          avatar: me.avatar,
+          role: myRole,
+          stage: stg,
+          x: me.x,
+          y: me.y,
+          vx: me.vx,
+          vy: me.vy,
+          facing: me.facing,
+          onGround: me.onGround,
+          isDying: me.isDying,
+          deathStartedAt: me.deathStartedAt,
+          burnUntil: me.burnUntil,
+        });
+      }
+    }
+
+    if (opts?.showToast) {
+      soundEngine.playAnswerCorrect();
+      const label =
+        stg === 2
+          ? `🌅 STAGE 2/${tStg}: Menara Sunset — Awas Pijakan Rapuh, Lift & Patroli Virus! (${stageQs.length} Soal)`
+          : `🏞️ STAGE 1/${tStg}: Lembah Kampus — Jawab Semua Soal untuk Buka Gerbang! (${stageQs.length} Soal)`;
+      setStageBanner(label);
+      if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
+      stageBannerTimerRef.current = setTimeout(() => {
+        setStageBanner(null);
+      }, 4200);
+    }
+  }
+
   function handleRejoinApproved() {
     if (exitNoticeRef.current !== 'kicked') return;
     exitNoticeRef.current = null;
@@ -325,17 +457,16 @@ export default function GamePage() {
     setFeedback(null);
     if (myIdRef.current) {
       setScores((prev) => ({ ...prev, [myIdRef.current]: 0 }));
-      const me = playersRef.current.get(myIdRef.current);
-      if (me) {
-        me.x = me.spawnX ?? 120;
-        me.y = me.spawnY ?? 600;
-        me.vx = 0;
-        me.vy = 0;
-      }
       const shuffleSeed = `${myIdRef.current}:${roomId}:${Date.now()}`;
       setLevelQuestions((prev) => {
         const next = prev.map((q) => shuffleQuestionOptions(q, shuffleSeed));
         levelQuestionsRef.current = next;
+        applyStage(1, {
+          respawnPlayer: true,
+          showToast: true,
+          seedId: myIdRef.current,
+          allQuestions: next,
+        });
         return next;
       });
     }
@@ -375,6 +506,24 @@ export default function GamePage() {
     setRoom((prev) => (prev && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev));
   }
 
+  const pendingObstacleUploadRef = useRef<ObstacleEvent | null>(null);
+
+  const applyObstacleEvent = useCallback((evt: ObstacleEvent) => {
+    const curStg = currentStageRef.current;
+    if (evt.stg !== curStg) return;
+    if (evt.op === 'crumble') {
+      const plat = stagePlatformsRef.current[evt.idx];
+      if (plat && plat.type === 'crumble') {
+        plat.crumbleStartedAt = evt.at;
+      }
+    } else if (evt.op === 'stomp') {
+      const enemy = stageEnemiesRef.current.find((e) => e.id === evt.id);
+      if (enemy) {
+        enemy.stompedUntil = Math.max(enemy.stompedUntil ?? 0, evt.until);
+      }
+    }
+  }, []);
+
   const ably = useAblyRoom(roomId, ablyEnabled, {
     onDirectMove: (rp) => {
       ingestRemotePlayerSnapshot(rp);
@@ -390,6 +539,7 @@ export default function GamePage() {
       playersRef.current.delete(uid);
       setRoom((prev) => (prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== uid) } : prev));
     },
+    onObstacleEvent: applyObstacleEvent,
   });
 
   function notifyLeaveRoom() {
@@ -611,6 +761,7 @@ export default function GamePage() {
             username: pl.username,
             avatar: pl.avatar,
             role: isMe ? p.role : pl.role,
+            stage: pl.stage ?? 1,
             x: px,
             y: py,
             spawnX: spawn.x,
@@ -631,6 +782,7 @@ export default function GamePage() {
           username: p.username,
           avatar: p.avatar,
           role: p.role,
+          stage: myEntry?.stage ?? 1,
           x: myEntry?.lastX ?? spawn.x,
           y: myEntry?.lastY ?? spawn.y,
           spawnX: spawn.x,
@@ -642,13 +794,50 @@ export default function GamePage() {
         });
       }
 
+      const rawQs: Question[] = data.questions ?? [];
+      const shuffleSeed = `${p.id}:${roomId}:${Date.now()}`;
+      const qs: Question[] = rawQs.map((q) => shuffleQuestionOptions(q, shuffleSeed));
+      setLevelQuestions(qs);
+      levelQuestionsRef.current = qs;
+
+      const tStg = resolveTotalStages(r);
+      totalStagesRef.current = tStg;
+      setTotalStages(tStg);
+
+      let initialStage = 1;
+      try {
+        const savedStage = Number(window.localStorage.getItem(`llys_stage_${roomId}_${p.id}`));
+        if (Number.isFinite(savedStage) && savedStage >= 1 && savedStage <= tStg) {
+          initialStage = savedStage;
+        }
+      } catch {
+        // ignore storage read error
+      }
+      if (tStg > 1 && qs.length > 0 && answeredIdsRef.current.size > 0) {
+        const s1Qs = getStageQuestions(qs, 1, tStg);
+        const s1Cleared = s1Qs.length > 0 && s1Qs.every((q) => answeredIdsRef.current.has(q.id));
+        if (s1Cleared && initialStage < 2) {
+          initialStage = 2;
+        }
+      }
+
+      applyStage(initialStage, {
+        respawnPlayer: false,
+        showToast: false,
+        seedId: p.id,
+        allQuestions: qs,
+        totalStg: tStg,
+      });
+
       const meInit = playersRef.current.get(p.id);
       if (meInit && !data.kicked) {
+        meInit.stage = initialStage;
         ably.publishPosition({
           id: meInit.id,
           username: meInit.username,
           avatar: meInit.avatar,
           role: p.role,
+          stage: initialStage,
           x: meInit.x,
           y: meInit.y,
           vx: 0,
@@ -657,16 +846,6 @@ export default function GamePage() {
           onGround: meInit.onGround,
         });
       }
-
-      const rawQs: Question[] = data.questions ?? [];
-      const shuffleSeed = `${p.id}:${roomId}:${Date.now()}`;
-      const qs: Question[] = rawQs.map((q) => shuffleQuestionOptions(q, shuffleSeed));
-      setLevelQuestions(qs);
-      levelQuestionsRef.current = qs;
-      questionBlocksRef.current = generateQuestionBlocks(
-        qs.map((q) => q.id),
-        `${p.id}:${roomId}`,
-      );
 
       if (data.kicked && !isStaffRole(p.role)) {
         triggerForcedExit('kicked');
@@ -854,6 +1033,7 @@ export default function GamePage() {
         existing.targetX = rp.x;
         existing.targetY = rp.y;
         existing.facing = rp.facing;
+        if (typeof rp.stage === 'number') existing.stage = rp.stage;
         if (rp.role) existing.role = rp.role;
       } else {
         playersRef.current.set(rp.id, {
@@ -861,6 +1041,7 @@ export default function GamePage() {
           username: rp.username,
           avatar: rp.avatar,
           role: rp.role,
+          stage: rp.stage ?? 1,
           x: rp.x,
           y: rp.y,
           targetX: rp.x,
@@ -1012,7 +1193,7 @@ export default function GamePage() {
           const smoothY = 1 - Math.pow(1 - 0.48, dtScale);
           p.y += dy * smoothY;
         }
-        for (const plat of PLATFORMS) {
+        for (const plat of stagePlatformsRef.current) {
           if (
             plat.type === 'fire' &&
             p.x + PLAYER_W > plat.x &&
@@ -1025,6 +1206,19 @@ export default function GamePage() {
           }
         }
       }
+
+      const syncedNow = ably.getSyncedServerTime();
+      updateStageEntities(stagePlatformsRef.current, stageEnemiesRef.current, dtScale, syncedNow);
+
+      const curStage = currentStageRef.current;
+      const tStages = totalStagesRef.current;
+      const curStageQs = getStageQuestions(levelQuestionsRef.current, curStage, tStages);
+      const stageTotal = curStageQs.length;
+      let stageAnswered = 0;
+      for (const sq of curStageQs) {
+        if (answeredIdsRef.current.has(sq.id)) stageAnswered += 1;
+      }
+      const isGateUnlocked = isStaff || (stageTotal > 0 && stageAnswered >= stageTotal);
 
       const dynBlocks: Platform[] = questionBlocksRef.current.map((b) => {
         const qid = b.questionId ?? '';
@@ -1079,6 +1273,25 @@ export default function GamePage() {
             else if (soundEvt === 'burn') soundEngine.playBurn();
             else if (soundEvt === 'death') soundEngine.playDeath();
           },
+          {
+            basePlatforms: stagePlatformsRef.current,
+            enemies: stageEnemiesRef.current,
+            isGateUnlocked,
+            isStaff,
+            onObstacleEvent: (evt) => {
+              applyObstacleEvent(evt);
+              ably.publishObstacle(evt);
+              pendingObstacleUploadRef.current = evt;
+            },
+            onEnterGate: () => {
+              if (currentStageRef.current < totalStagesRef.current) {
+                applyStage(currentStageRef.current + 1, {
+                  respawnPlayer: true,
+                  showToast: true,
+                });
+              }
+            },
+          },
         );
       }
 
@@ -1112,6 +1325,7 @@ export default function GamePage() {
             username: me.username,
             avatar: me.avatar,
             role: myRole,
+            stage: curStage,
             x: me.x,
             y: me.y,
             vx: isMovingNow ? me.vx : 0,
@@ -1132,10 +1346,20 @@ export default function GamePage() {
       ctx.save();
       camera.applyTransform(ctx);
 
-      drawWorld(ctx);
-      drawPlatforms(ctx, [...PLATFORMS, ...dynBlocks]);
+      drawWorld(ctx, {
+        stage: curStage,
+        totalStages: tStages,
+        stageAnswered,
+        stageTotal,
+        isGateUnlocked,
+      });
+      drawPlatforms(ctx, [...stagePlatformsRef.current, ...dynBlocks]);
+      drawEnemies(ctx, stageEnemiesRef.current, syncedNow);
 
       for (const p of playersRef.current.values()) {
+        const pStage = p.stage ?? 1;
+        if (pStage !== curStage) continue;
+
         const role = p.id === myIdRef.current ? myRole : (p.role ?? (room?.hostId === p.id ? 'teacher' : 'student'));
         drawCat(
           ctx,
@@ -1200,7 +1424,10 @@ export default function GamePage() {
 
           // Saat diam, gunakan SSE push stream untuk menerima gerakan player lain secara real-time,
           // dan hanya kirim heartbeat /api/pos setiap 1400ms agar bandwidth Cloudflare/4G 100% hemat!
-          if (moved || nowMs - lastHeartbeatAt >= 1400) {
+          const pendingObs = pendingObstacleUploadRef.current;
+          if (pendingObs) pendingObstacleUploadRef.current = null;
+
+          if (moved || pendingObs || nowMs - lastHeartbeatAt >= 1400) {
             didSendMove = moved;
             lastHeartbeatAt = nowMs;
             lastUploadX = me.x;
@@ -1210,37 +1437,60 @@ export default function GamePage() {
             lastUploadFacing = me.facing;
             lastUploadDying = Boolean(me.isDying);
 
+            const postPayload: Record<string, unknown> = moved
+              ? {
+                  r: roomId,
+                  u: me.id,
+                  un: me.username,
+                  av: me.avatar,
+                  rl: myRole,
+                  stg: currentStageRef.current,
+                  x: Math.round(me.x * 10) / 10,
+                  y: Math.round(me.y * 10) / 10,
+                  vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
+                  vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
+                  f: me.facing,
+                  g: me.onGround ? 1 : 0,
+                  d: me.isDying ? 1 : 0,
+                  ds: me.deathStartedAt,
+                  b: me.burnUntil,
+                }
+              : {
+                  r: roomId,
+                  u: me.id,
+                };
+            if (pendingObs) {
+              postPayload.obstacle = pendingObs;
+            }
+
             const res = await fetch('/api/pos', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(
-                moved
-                  ? {
-                      r: roomId,
-                      u: me.id,
-                      un: me.username,
-                      av: me.avatar,
-                      rl: myRole,
-                      x: Math.round(me.x * 10) / 10,
-                      y: Math.round(me.y * 10) / 10,
-                      vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
-                      vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
-                      f: me.facing,
-                      g: me.onGround ? 1 : 0,
-                      d: me.isDying ? 1 : 0,
-                      ds: me.deathStartedAt,
-                      b: me.burnUntil,
-                    }
-                  : {
-                      r: roomId,
-                      u: me.id,
-                    },
-              ),
+              body: JSON.stringify(postPayload),
             });
             if (res.ok && active) {
               const rtt = Math.max(1, Math.round((performance.now() - tStart) * 0.42));
               ably.setPingMs((prev) => (prev <= 5 ? rtt : Math.round(prev * 0.6 + rtt * 0.4)));
               const data = await res.json();
+              if (typeof data.st === 'number') {
+                ably.setServerTimeOffset(Math.round(data.st + rtt / 2 - Date.now()));
+              }
+              if (data.obstacles && typeof data.obstacles === 'object') {
+                const obs = data.obstacles as {
+                  crumbles?: { stage: number; idx: number; startedAt: number }[];
+                  stomps?: { stage: number; id: string; until: number }[];
+                };
+                if (Array.isArray(obs.crumbles)) {
+                  for (const c of obs.crumbles) {
+                    applyObstacleEvent({ op: 'crumble', stg: c.stage, idx: c.idx, at: c.startedAt });
+                  }
+                }
+                if (Array.isArray(obs.stomps)) {
+                  for (const s of obs.stomps) {
+                    applyObstacleEvent({ op: 'stomp', stg: s.stage, id: s.id, until: s.until });
+                  }
+                }
+              }
               if (data.roomDeleted || data.rs === 'deleted') {
                 active = false;
                 applyLiveRoomStatus('deleted');
@@ -1265,6 +1515,7 @@ export default function GamePage() {
                   username: typeof rp.un === 'string' ? rp.un : 'Player',
                   avatar: typeof rp.av === 'string' ? rp.av : 'cat-orange',
                   role: typeof rp.rl === 'string' ? rp.rl : undefined,
+                  stage: typeof rp.stg === 'number' ? rp.stg : typeof rp.stage === 'number' ? rp.stage : 1,
                   x: typeof rp.x === 'number' ? rp.x : 120,
                   y: typeof rp.y === 'number' ? rp.y : 600,
                   vx: typeof rp.vx === 'number' ? rp.vx : 0,
@@ -1389,6 +1640,7 @@ export default function GamePage() {
               if (p.lastFacing !== undefined) existing.facing = p.lastFacing as 1 | -1;
             }
             if (p.role) existing.role = p.role;
+            if (typeof p.stage === 'number') existing.stage = p.stage;
           } else {
             const px = p.lastX ?? 120;
             const py = p.lastY ?? 600;
@@ -1397,6 +1649,7 @@ export default function GamePage() {
               username: p.username,
               avatar: p.avatar,
               role: p.role,
+              stage: p.stage ?? 1,
               x: px,
               y: py,
               targetX: px,
@@ -1779,6 +2032,18 @@ export default function GamePage() {
         setAnsweredQuestionIds(nextAnsweredList);
         // Tambahkan progres misi baik jawaban benar maupun salah
         setCorrectCount(nextAnsweredList.length);
+        const curStg = currentStageRef.current;
+        const totStg = totalStagesRef.current;
+        const curStgQs = getStageQuestions(levelQuestionsRef.current, curStg, totStg);
+        if (curStgQs.length > 0 && curStgQs.every((q) => answeredIdsRef.current.has(q.id))) {
+          const msg =
+            curStg < totStg
+              ? `🔓 GERBANG STAGE ${curStg} TERBUKA! Pergi ke Pintu Ujung Kanan untuk Masuk Stage ${curStg + 1} ➜`
+              : `🏆 SEMUA SOAL STAGE ${curStg} SELESAI! Pergi ke Gerbang Finish di Ujung Kanan!`;
+          setStageBanner(msg);
+          if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
+          stageBannerTimerRef.current = setTimeout(() => setStageBanner(null), 5000);
+        }
         setSelected('');
         if (result.isCorrect) {
           soundEngine.playAnswerCorrect();
@@ -1884,6 +2149,38 @@ export default function GamePage() {
 
               <div className="mp-center-stage-pill">
                 <div className="mp-stage-title">{getRoomSubjectTitle(room)}</div>
+                {totalStages > 1 && (
+                  isStaff ? (
+                    <div className="mp-stage-switch-row" role="group" aria-label="Pilih Stage (Guru/Admin)">
+                      {Array.from({ length: totalStages }, (_, idx) => {
+                        const stgNum = idx + 1;
+                        const stgQs = getStageQuestions(levelQuestions, stgNum, totalStages);
+                        const stgAns = stgQs.filter((q) => answeredQuestionIds.includes(q.id)).length;
+                        const isCleared = stgQs.length > 0 && stgAns >= stgQs.length;
+                        return (
+                          <button
+                            key={stgNum}
+                            type="button"
+                            className={`mp-stage-chip${currentStage === stgNum ? ' is-active' : ''}${isCleared ? ' is-cleared' : ''}`}
+                            title={`Pindah ke Stage ${stgNum} (${stgAns}/${stgQs.length} soal)`}
+                            onClick={() => {
+                              soundEngine.playClick();
+                              applyStage(stgNum, { respawnPlayer: true, showToast: true });
+                            }}
+                          >
+                            Stage {stgNum} ({stgAns}/{stgQs.length})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="mp-stage-switch-row">
+                      <span className="mp-stage-badge-student">
+                        Stage {currentStage} / {totalStages}
+                      </span>
+                    </div>
+                  )
+                )}
               </div>
 
               <div className="mp-top-right">
@@ -2200,6 +2497,12 @@ export default function GamePage() {
                 )}
               </div>
           </div>
+
+          {stageBanner && (
+            <div className="mp-stage-banner-toast" role="status" aria-live="polite">
+              {stageBanner}
+            </div>
+          )}
 
           {editingControlsLayout && (
             <div className="hud-edit-banner" role="region" aria-label="Mode atur posisi tombol">

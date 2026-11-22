@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  getLiveRoomObstacles,
   getLiveRoomPositions,
   getLiveRoomStatus,
   isPlayerKicked,
   isRoomDeleted,
+  recordRoomCrumble,
+  recordRoomStomp,
   touchPresence,
   updateLivePlayerPosition,
 } from '@/server/services/presence-store';
@@ -41,7 +44,7 @@ export async function GET(req: NextRequest) {
 
       // Kirim snapshot awal begitu SSE tersambung (tembus Cloudflare / Nginx / Tunnel HTTPS)
       const snapshot = Array.from(getLiveRoomPositions(roomId).values());
-      sendRaw(JSON.stringify({ t: 'snapshot', players: snapshot }));
+      sendRaw(JSON.stringify({ t: 'snapshot', players: snapshot, obstacles: getLiveRoomObstacles(roomId), st: Date.now() }));
 
       cleanupSse = registerSseClient(roomId, userId, sendRaw);
 
@@ -91,6 +94,7 @@ export async function POST(req: NextRequest) {
       const username = typeof body.un === 'string' ? body.un : 'Player';
       const avatar = typeof body.av === 'string' ? body.av : 'cat-orange';
       const role = typeof body.rl === 'string' ? body.rl : 'student';
+      const stage = typeof body.stg === 'number' ? body.stg : typeof body.stage === 'number' ? body.stage : 1;
       const vx = typeof body.vx === 'number' ? body.vx : 0;
       const vy = typeof body.vy === 'number' ? body.vy : 0;
       const facing: 1 | -1 = body.f === -1 ? -1 : 1;
@@ -104,6 +108,7 @@ export async function POST(req: NextRequest) {
         username,
         avatar,
         role,
+        stage,
         x: body.x,
         y: body.y,
         vx,
@@ -125,6 +130,7 @@ export async function POST(req: NextRequest) {
             un: username,
             av: avatar,
             r: role,
+            stg: stage,
             x: body.x,
             y: body.y,
             vx,
@@ -143,6 +149,21 @@ export async function POST(req: NextRequest) {
       touchPresence(roomId, userId);
     }
 
+    if (body.obstacle && typeof body.obstacle === 'object') {
+      const obs = body.obstacle as Record<string, unknown>;
+      const op = typeof obs.op === 'string' ? obs.op : '';
+      const stg = typeof obs.stg === 'number' ? obs.stg : 1;
+      if (op === 'crumble' && typeof obs.idx === 'number') {
+        const at = typeof obs.at === 'number' ? obs.at : Date.now();
+        recordRoomCrumble(roomId, stg, obs.idx, at);
+        broadcastRoomEvent(roomId, { t: 'obstacle', op: 'crumble', stg, idx: obs.idx, at }, userId);
+      } else if (op === 'stomp' && typeof obs.id === 'string') {
+        const until = typeof obs.until === 'number' ? obs.until : Date.now() + 6000;
+        recordRoomStomp(roomId, stg, obs.id, until);
+        broadcastRoomEvent(roomId, { t: 'obstacle', op: 'stomp', stg, id: obs.id, until }, userId);
+      }
+    }
+
     const liveMap = getLiveRoomPositions(roomId);
     const peers: Record<string, unknown>[] = [];
     const now = Date.now();
@@ -154,6 +175,7 @@ export async function POST(req: NextRequest) {
         un: p.username,
         av: p.avatar,
         rl: p.role,
+        stg: p.stage ?? 1,
         x: p.x,
         y: p.y,
         vx: p.vx,
@@ -166,7 +188,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ wsPort, rs: getLiveRoomStatus(roomId), p: peers });
+    return NextResponse.json({
+      wsPort,
+      st: Date.now(),
+      rs: getLiveRoomStatus(roomId),
+      obstacles: getLiveRoomObstacles(roomId),
+      p: peers,
+    });
   } catch {
     return NextResponse.json({ p: [] }, { status: 200 });
   }

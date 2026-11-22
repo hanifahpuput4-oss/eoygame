@@ -12,6 +12,7 @@ type Room = {
   code: string;
   status: string;
   maxPlayers: number;
+  settings?: { stageCount?: number };
   host?: { id: string; username: string; fullName: string } | null;
   players: { userId: string; username: string; role?: string; ready: boolean }[];
   rejoinRequests?: { userId: string; username: string; requestedAt: number }[];
@@ -95,6 +96,7 @@ export default function RoomsPage() {
   const [levelId, setLevelId] = useState('');
   const [customName, setCustomName] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(40);
+  const [stageCount, setStageCount] = useState(2);
 
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'waiting' | 'completed'>('all');
   const [filterTeacherId, setFilterTeacherId] = useState<string>('');
@@ -261,7 +263,7 @@ export default function RoomsPage() {
           classroomId,
           levelId,
           maxPlayers,
-          settings: {},
+          settings: { stageCount },
         }),
       });
       const data = await res.json();
@@ -516,14 +518,37 @@ export default function RoomsPage() {
               </select>
             </div>
 
-            <div className="sm:col-span-2">
-              <label className="label-field">Judul Sesi Ruang (Opsional — Otomatis jika dikosongkan)</label>
+            <div>
+              <label className="label-field">Judul Sesi Ruang (Opsional)</label>
               <input
                 className="input-field"
                 value={customName}
                 onChange={(e) => setCustomName(e.target.value)}
-                placeholder="Kosongkan agar otomatis mengikuti nama Kelas + Mapel + Tujuan Pembelajaran"
+                placeholder="Kosongkan agar otomatis mengikuti nama Kelas + Mapel"
               />
+            </div>
+
+            <div>
+              <label className="label-field">4. Jumlah Stage Game</label>
+              <select
+                className="input-field"
+                value={stageCount}
+                onChange={(e) => setStageCount(Number(e.target.value))}
+              >
+                <option value={1}>1 Stage (Semua soal di Stage 1)</option>
+                <option value={2}>2 Stage (Stage 1 Sekolah + Stage 2 Sunset &amp; Virus)</option>
+              </select>
+              {levelId && (() => {
+                const selectedLvl = levels.find((l) => l.id === levelId);
+                const qTotal = selectedLvl?.questionIds.length ?? 0;
+                if (qTotal <= 0) return null;
+                const perStage = Math.ceil(qTotal / Math.max(1, stageCount));
+                return (
+                  <p className="mt-1 text-xs font-semibold text-blue-800">
+                    Kalkulasi: {qTotal} soal ÷ {stageCount} stage = <strong>~{perStage} kotak soal / stage</strong>
+                  </p>
+                );
+              })()}
             </div>
 
             <div>
@@ -689,6 +714,9 @@ export default function RoomsPage() {
                       </span>
                       <span>
                         Pemain: <strong>{r.players.length}/{r.maxPlayers}</strong>
+                      </span>
+                      <span>
+                        Stage: <strong>{r.settings?.stageCount ?? 2} Stage</strong>
                       </span>
                     </div>
                   </div>

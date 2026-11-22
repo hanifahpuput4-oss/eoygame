@@ -1,4 +1,12 @@
-import { DECOR, WORLD, type Platform } from '../maps/world';
+import { DECOR, WORLD, type Platform, type StageEnemy } from '../maps/world';
+
+export type StageRenderInfo = {
+  stage: number;
+  totalStages: number;
+  stageAnswered: number;
+  stageTotal: number;
+  isGateUnlocked: boolean;
+};
 
 const AVATAR_COLORS: Record<string, { body: string; belly: string; ear: string }> = {
   'cat-blue': { body: '#3b82f6', belly: '#bfdbfe', ear: '#1d4ed8' },
@@ -249,16 +257,55 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-export function drawWorld(ctx: CanvasRenderingContext2D) {
+export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRenderInfo) {
+  const stage = stageInfo?.stage ?? 1;
+  const totalStages = stageInfo?.totalStages ?? 2;
+  const stageAnswered = stageInfo?.stageAnswered ?? 0;
+  const stageTotal = stageInfo?.stageTotal ?? 0;
+  const isUnlocked = Boolean(stageInfo?.isGateUnlocked);
+  const now = Date.now();
+
   const sky = ctx.createLinearGradient(0, 0, 0, WORLD.height);
-  sky.addColorStop(0, '#4b94e6');
-  sky.addColorStop(0.65, '#8ec8fa');
-  sky.addColorStop(1, '#c3e7ff');
+  if (stage === 2) {
+    sky.addColorStop(0, '#2e1065');
+    sky.addColorStop(0.38, '#7e22ce');
+    sky.addColorStop(0.7, '#db2777');
+    sky.addColorStop(0.9, '#f97316');
+    sky.addColorStop(1, '#fde047');
+  } else {
+    sky.addColorStop(0, '#4b94e6');
+    sky.addColorStop(0.65, '#8ec8fa');
+    sky.addColorStop(1, '#c3e7ff');
+  }
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, WORLD.width, WORLD.height);
 
+  if (stage === 2) {
+    // Sunset giant glowing sun & evening stars
+    ctx.save();
+    for (let sx = 140; sx < WORLD.width; sx += 310) {
+      const sy = 50 + ((sx * 17) % 140);
+      const twinkle = 0.45 + 0.5 * Math.sin(now * 0.004 + sx);
+      ctx.fillStyle = `rgba(254, 240, 138, ${twinkle})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const sunX of [780, 2650, 4520]) {
+      const sunGrad = ctx.createRadialGradient(sunX, 540, 20, sunX, 540, 220);
+      sunGrad.addColorStop(0, 'rgba(254, 240, 138, 0.92)');
+      sunGrad.addColorStop(0.45, 'rgba(249, 115, 22, 0.55)');
+      sunGrad.addColorStop(1, 'rgba(249, 115, 22, 0)');
+      ctx.fillStyle = sunGrad;
+      ctx.beginPath();
+      ctx.arc(sunX, 540, 220, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   // Soft distant rolling hills
-  ctx.fillStyle = 'rgba(116, 198, 122, 0.35)';
+  ctx.fillStyle = stage === 2 ? 'rgba(88, 28, 135, 0.38)' : 'rgba(116, 198, 122, 0.35)';
   for (let hx = 0; hx < WORLD.width; hx += 460) {
     ctx.beginPath();
     ctx.arc(hx + 230, WORLD.groundY + 70, 290, Math.PI, 0);
@@ -266,7 +313,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D) {
   }
 
   // Fluffy clouds
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillStyle = stage === 2 ? 'rgba(253, 186, 116, 0.78)' : 'rgba(255,255,255,0.92)';
   for (const c of DECOR.clouds) {
     ctx.beginPath();
     ctx.arc(c.x, c.y, 26 * c.s, 0, Math.PI * 2);
@@ -275,23 +322,23 @@ export function drawWorld(ctx: CanvasRenderingContext2D) {
     ctx.fill();
   }
 
-  // School building (centerpiece with clock tower & walkable ledges)
+  // Centerpiece building (School in Stage 1, Cyber Sunset Tower in Stage 2)
   const school = DECOR.school;
-  ctx.fillStyle = '#ead7bd';
-  ctx.strokeStyle = '#997d5c';
+  ctx.fillStyle = stage === 2 ? '#1e1b4b' : '#ead7bd';
+  ctx.strokeStyle = stage === 2 ? '#c084fc' : '#997d5c';
   ctx.lineWidth = 3;
   ctx.fillRect(school.x, school.y, school.w, school.h);
   ctx.strokeRect(school.x, school.y, school.w, school.h);
 
-  // Central clock tower section
+  // Central clock / radar tower section
   const towerW = 130;
   const towerX = school.x + school.w / 2 - towerW / 2;
-  ctx.fillStyle = '#f3e5cb';
+  ctx.fillStyle = stage === 2 ? '#312e81' : '#f3e5cb';
   ctx.fillRect(towerX, school.y - 105, towerW, 105);
   ctx.strokeRect(towerX, school.y - 105, towerW, 105);
 
-  // School roof & pediment
-  ctx.fillStyle = '#5a7094';
+  // Roof & pediment
+  ctx.fillStyle = stage === 2 ? '#4c1d95' : '#5a7094';
   ctx.beginPath();
   ctx.moveTo(towerX - 18, school.y - 105);
   ctx.lineTo(school.x + school.w / 2, school.y - 155);
@@ -300,11 +347,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D) {
   ctx.fill();
   ctx.stroke();
 
-  // Clock face
+  // Clock / Cyber core face
   const clockCx = school.x + school.w / 2;
   const clockCy = school.y - 55;
-  ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = '#3b4e6d';
+  ctx.fillStyle = stage === 2 ? '#0f172a' : '#ffffff';
+  ctx.strokeStyle = stage === 2 ? '#38bdf8' : '#3b4e6d';
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.arc(clockCx, clockCy, 26, 0, Math.PI * 2);
@@ -322,8 +369,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D) {
     for (let col = 0; col < 4; col += 1) {
       const wx = school.x + 28 + col * 84;
       const wy = school.y + 42 + row * 120;
-      ctx.fillStyle = '#9fd3f7';
-      ctx.strokeStyle = '#5b7290';
+      ctx.fillStyle = stage === 2 ? '#fbbf24' : '#9fd3f7';
+      ctx.strokeStyle = stage === 2 ? '#f59e0b' : '#5b7290';
       ctx.lineWidth = 3;
       roundRect(ctx, wx, wy, 48, 64, 6);
       ctx.fill();
@@ -337,25 +384,25 @@ export function drawWorld(ctx: CanvasRenderingContext2D) {
     }
   }
 
-  // School double doors
-  ctx.fillStyle = '#6c4223';
+  // Double doors
+  ctx.fillStyle = stage === 2 ? '#3730a3' : '#6c4223';
   roundRect(ctx, school.x + school.w / 2 - 38, school.y + school.h - 105, 76, 105, 8);
   ctx.fill();
-  ctx.strokeStyle = '#3f220c';
+  ctx.strokeStyle = stage === 2 ? '#818cf8' : '#3f220c';
   ctx.stroke();
 
   // Trees
   for (const t of DECOR.trees) {
     const s = t.s ?? 1;
-    ctx.fillStyle = '#6b3e1a';
+    ctx.fillStyle = stage === 2 ? '#4c1d95' : '#6b3e1a';
     ctx.fillRect(t.x - 9 * s, t.y - 46 * s, 18 * s, 46 * s);
-    ctx.fillStyle = '#2d8a34';
+    ctx.fillStyle = stage === 2 ? '#9d174d' : '#2d8a34';
     ctx.beginPath();
     ctx.arc(t.x, t.y - 68 * s, 38 * s, 0, Math.PI * 2);
     ctx.arc(t.x - 28 * s, t.y - 50 * s, 28 * s, 0, Math.PI * 2);
     ctx.arc(t.x + 28 * s, t.y - 50 * s, 28 * s, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#48b04f';
+    ctx.fillStyle = stage === 2 ? '#ec4899' : '#48b04f';
     ctx.beginPath();
     ctx.arc(t.x - 10 * s, t.y - 76 * s, 18 * s, 0, Math.PI * 2);
     ctx.fill();
@@ -366,100 +413,150 @@ export function drawWorld(ctx: CanvasRenderingContext2D) {
   ctx.fillStyle = '#5a3214';
   ctx.fillRect(sign.x + 30, sign.y + 58, 12, 32);
   ctx.fillRect(sign.x + 110, sign.y + 58, 12, 32);
-  ctx.fillStyle = '#d89b56';
+  ctx.fillStyle = stage === 2 ? '#fef08a' : '#d89b56';
   ctx.strokeStyle = '#6c3e18';
   ctx.lineWidth = 3;
-  roundRect(ctx, sign.x, sign.y, 152, 62, 10);
+  roundRect(ctx, sign.x - 10, sign.y, 172, 62, 10);
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = '#4e2709';
   ctx.font = 'bold 11px Nunito, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('Kerja sama tim untuk', sign.x + 76, sign.y + 24);
-  ctx.fillText('menyelesaikan tantangan! ➜', sign.x + 76, sign.y + 42);
+  if (stage === 2) {
+    ctx.fillText('STAGE 2: Awas Pijakan Rapuh', sign.x + 76, sign.y + 24);
+    ctx.fillText('& Monster Virus Patroli! ➜', sign.x + 76, sign.y + 42);
+  } else {
+    ctx.fillText('STAGE 1: Jawab semua soal', sign.x + 76, sign.y + 24);
+    ctx.fillText('untuk buka pintu stage! ➜', sign.x + 76, sign.y + 42);
+  }
 
-  // Stone Arch Finish Gate with heavy iron chains & "COMING SOON" seal
+  // Stone Arch Finish Gate (Locked with chains OR Unlocked glowing portal to next stage)
   const gate = DECOR.gate;
   ctx.save();
-  ctx.fillStyle = '#9ca3af';
-  ctx.strokeStyle = '#374151';
+  ctx.fillStyle = isUnlocked ? '#fde047' : '#9ca3af';
+  ctx.strokeStyle = isUnlocked ? '#ca8a04' : '#374151';
   ctx.lineWidth = 3;
   roundRect(ctx, gate.x, gate.y, 130, 160, 62);
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = '#6b4423';
-  ctx.strokeStyle = '#3e230d';
-  roundRect(ctx, gate.x + 18, gate.y + 22, 94, 138, 46);
-  ctx.fill();
-  ctx.stroke();
-
-  // Vertical wood plank lines on door
-  ctx.strokeStyle = 'rgba(30, 15, 5, 0.45)';
-  ctx.lineWidth = 2;
-  for (let px = gate.x + 36; px < gate.x + 105; px += 18) {
-    ctx.beginPath();
-    ctx.moveTo(px, gate.y + 28);
-    ctx.lineTo(px, gate.y + 158);
+  if (isUnlocked) {
+    // Glowing animated portal inside the open door
+    const portalGrad = ctx.createRadialGradient(
+      gate.x + 65,
+      gate.y + 92,
+      8,
+      gate.x + 65,
+      gate.y + 92,
+      72,
+    );
+    portalGrad.addColorStop(0, '#fef08a');
+    portalGrad.addColorStop(0.5, '#22c55e');
+    portalGrad.addColorStop(1, '#15803d');
+    ctx.fillStyle = portalGrad;
+    ctx.strokeStyle = '#14532d';
+    roundRect(ctx, gate.x + 18, gate.y + 22, 94, 138, 46);
+    ctx.fill();
     ctx.stroke();
+
+    // Animated portal rings
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+    ctx.lineWidth = 2.5;
+    for (let r = 0; r < 3; r += 1) {
+      const pulse = ((now * 0.002 + r * 0.33) % 1);
+      ctx.beginPath();
+      ctx.ellipse(gate.x + 65, gate.y + 88, 12 + pulse * 30, 20 + pulse * 44, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Unlocked plaque
+    ctx.fillStyle = '#16a34a';
+    ctx.strokeStyle = '#052e16';
+    ctx.lineWidth = 2.5;
+    roundRect(ctx, gate.x + 4, gate.y + 118, 122, 26, 7);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px Nunito, sans-serif';
+    ctx.textAlign = 'center';
+    const nextLabel = stage < totalStages ? `MASUK STAGE ${stage + 1} ➜` : 'SELESAI! 🏆';
+    ctx.fillText(nextLabel, gate.x + 65, gate.y + 135);
+  } else {
+    // Closed wooden door
+    ctx.fillStyle = '#6b4423';
+    ctx.strokeStyle = '#3e230d';
+    roundRect(ctx, gate.x + 18, gate.y + 22, 94, 138, 46);
+    ctx.fill();
+    ctx.stroke();
+
+    // Vertical wood plank lines on door
+    ctx.strokeStyle = 'rgba(30, 15, 5, 0.45)';
+    ctx.lineWidth = 2;
+    for (let px = gate.x + 36; px < gate.x + 105; px += 18) {
+      ctx.beginPath();
+      ctx.moveTo(px, gate.y + 28);
+      ctx.lineTo(px, gate.y + 158);
+      ctx.stroke();
+    }
+
+    // Criss-cross iron chains across the door
+    const drawChainLine = (x1: number, y1: number, x2: number, y2: number) => {
+      const steps = 11;
+      for (let i = 0; i <= steps; i += 1) {
+        const t = i / steps;
+        const cx = x1 + (x2 - x1) * t;
+        const cy = y1 + (y2 - y1) * t;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(Math.atan2(y2 - y1, x2 - x1));
+        ctx.fillStyle = i % 2 === 0 ? '#64748b' : '#475569';
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 2;
+        roundRect(ctx, -7, -4, 14, 8, 3);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    };
+    drawChainLine(gate.x + 14, gate.y + 42, gate.x + 116, gate.y + 146);
+    drawChainLine(gate.x + 116, gate.y + 42, gate.x + 14, gate.y + 146);
+    drawChainLine(gate.x + 10, gate.y + 95, gate.x + 120, gate.y + 95);
+
+    // Heavy central padlock over chains
+    ctx.fillStyle = '#334155';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2.5;
+    roundRect(ctx, gate.x + 49, gate.y + 82, 32, 28, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(gate.x + 65, gate.y + 82, 10, Math.PI, 0);
+    ctx.stroke();
+
+    // Live question counter plaque on gate
+    ctx.fillStyle = '#fbbf24';
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 2.5;
+    roundRect(ctx, gate.x + 6, gate.y + 118, 118, 24, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#451a03';
+    ctx.font = 'bold 11px Nunito, sans-serif';
+    ctx.textAlign = 'center';
+    const progressText = stageTotal > 0 ? `🔒 ${stageAnswered} / ${stageTotal} SOAL` : 'TERKUNCI';
+    ctx.fillText(progressText, gate.x + 65, gate.y + 134);
   }
 
-  // Criss-cross iron chains across the door
-  const drawChainLine = (x1: number, y1: number, x2: number, y2: number) => {
-    const steps = 11;
-    for (let i = 0; i <= steps; i += 1) {
-      const t = i / steps;
-      const cx = x1 + (x2 - x1) * t;
-      const cy = y1 + (y2 - y1) * t;
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(Math.atan2(y2 - y1, x2 - x1));
-      ctx.fillStyle = i % 2 === 0 ? '#64748b' : '#475569';
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 2;
-      roundRect(ctx, -7, -4, 14, 8, 3);
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-    }
-  };
-  drawChainLine(gate.x + 14, gate.y + 42, gate.x + 116, gate.y + 146);
-  drawChainLine(gate.x + 116, gate.y + 42, gate.x + 14, gate.y + 146);
-  drawChainLine(gate.x + 10, gate.y + 95, gate.x + 120, gate.y + 95);
-
-  // Heavy central padlock over chains
-  ctx.fillStyle = '#334155';
-  ctx.strokeStyle = '#0f172a';
-  ctx.lineWidth = 2.5;
-  roundRect(ctx, gate.x + 49, gate.y + 82, 32, 28, 6);
-  ctx.fill();
-  ctx.stroke();
-  ctx.strokeStyle = '#94a3b8';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(gate.x + 65, gate.y + 82, 10, Math.PI, 0);
-  ctx.stroke();
-
-  // "COMING SOON" wooden plaque on gate
-  ctx.fillStyle = '#fbbf24';
-  ctx.strokeStyle = '#78350f';
-  ctx.lineWidth = 2.5;
-  roundRect(ctx, gate.x + 10, gate.y + 118, 110, 24, 6);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = '#451a03';
-  ctx.font = 'bold 11px Nunito, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('COMING SOON', gate.x + 65, gate.y + 134);
-
-  // Red flag on top of gate
+  // Flag on top of gate
   ctx.strokeStyle = '#4b2e14';
   ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.moveTo(gate.x + 65, gate.y);
   ctx.lineTo(gate.x + 65, gate.y - 38);
   ctx.stroke();
-  ctx.fillStyle = '#ef4444';
+  ctx.fillStyle = isUnlocked ? '#22c55e' : '#ef4444';
   ctx.beginPath();
   ctx.moveTo(gate.x + 65, gate.y - 38);
   ctx.lineTo(gate.x + 98, gate.y - 28);
@@ -599,6 +696,50 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
         ctx.closePath();
         ctx.fill();
       }
+    } else if (p.type === 'crumble') {
+      const now = Date.now();
+      const isBroken = Boolean(p.brokenUntil && now < p.brokenUntil);
+      if (isBroken) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(253, 224, 71, 0.35)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 6]);
+        roundRect(ctx, p.x, p.y, p.w, p.h, 6);
+        ctx.stroke();
+        ctx.restore();
+        continue;
+      }
+      const isShaking = Boolean(p.crumbleStartedAt);
+      const sx = isShaking ? p.x + Math.sin(now * 0.14) * 3.5 : p.x;
+      ctx.fillStyle = isShaking ? '#f97316' : '#f59e0b';
+      ctx.strokeStyle = isShaking ? '#7f1d1d' : '#78350f';
+      ctx.lineWidth = 2.5;
+      roundRect(ctx, sx, p.y, p.w, p.h, 6);
+      ctx.fill();
+      ctx.stroke();
+      // Fracture crack lines on crumble block
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 2;
+      for (let cx = sx + 28; cx < sx + p.w - 20; cx += 42) {
+        ctx.beginPath();
+        ctx.moveTo(cx, p.y + 2);
+        ctx.lineTo(cx - 6, p.y + p.h * 0.5);
+        ctx.lineTo(cx + 5, p.y + p.h - 2);
+        ctx.stroke();
+      }
+    } else if (p.type === 'moving') {
+      ctx.fillStyle = '#0284c7';
+      ctx.strokeStyle = '#0c4a6e';
+      ctx.lineWidth = 2.5;
+      roundRect(ctx, p.x, p.y, p.w, p.h, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillRect(p.x + 8, p.y + 4, p.w - 16, 5);
+      ctx.fillStyle = '#fef08a';
+      ctx.font = 'bold 11px Nunito, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(p.moveAxis === 'y' ? '▲ LIFT ▼' : '◀ LIFT ▶', p.x + p.w / 2, p.y + p.h - 5);
     } else {
       ctx.fillStyle = '#8b5a2b';
       ctx.strokeStyle = '#4e2e12';
@@ -609,6 +750,97 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
       ctx.fillStyle = '#a9714b';
       ctx.fillRect(p.x + 4, p.y + 3, p.w - 8, 5);
     }
+  }
+}
+
+export function drawEnemies(ctx: CanvasRenderingContext2D, enemies: StageEnemy[], now = Date.now()) {
+  for (const e of enemies) {
+    ctx.save();
+    if (e.kind === 'virus') {
+      const isStomped = Boolean(e.stompedUntil && e.stompedUntil > now);
+      const cx = e.x + e.w / 2;
+      const cy = isStomped ? e.y + e.h - 10 : e.y + e.h / 2 + Math.sin(now * 0.012 + e.x * 0.05) * 2.5;
+      const rx = e.w * 0.44;
+      const ry = isStomped ? 9 : e.h * 0.42;
+
+      // Spiky virus nodes around body
+      if (!isStomped) {
+        ctx.strokeStyle = '#581c87';
+        ctx.lineWidth = 3;
+        for (let a = 0; a < 8; a += 1) {
+          const ang = (a / 8) * Math.PI * 2 + now * 0.003 * e.dir;
+          const x1 = cx + Math.cos(ang) * (rx - 2);
+          const y1 = cy + Math.sin(ang) * (ry - 2);
+          const x2 = cx + Math.cos(ang) * (rx + 6);
+          const y2 = cy + Math.sin(ang) * (ry + 6);
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+          ctx.fillStyle = '#f43f5e';
+          ctx.beginPath();
+          ctx.arc(x2, y2, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Virus body
+      ctx.fillStyle = isStomped ? '#6b21a8' : '#9333ea';
+      ctx.strokeStyle = '#3b0764';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      if (isStomped) {
+        ctx.fillStyle = '#fef08a';
+        ctx.font = 'bold 10px Nunito, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('X _ X', cx, cy + 3);
+      } else {
+        // Angry glowing virus eyes
+        ctx.fillStyle = '#fef08a';
+        ctx.beginPath();
+        ctx.arc(cx - 6, cy - 2, 4, 0, Math.PI * 2);
+        ctx.arc(cx + 6, cy - 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.arc(cx - 6 + e.dir * 1.2, cy - 2, 1.8, 0, Math.PI * 2);
+        ctx.arc(cx + 6 + e.dir * 1.2, cy - 2, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // Walking Fireball monster
+      const cx = e.x + e.w / 2;
+      const cy = e.y + e.h / 2 + Math.abs(Math.sin(now * 0.015 + e.x * 0.04)) * -4;
+      const r = e.w * 0.45;
+
+      // Outer flame aura
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner orange-yellow core
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath();
+      ctx.arc(cx, cy + 2, r * 0.62, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Fierce eyes
+      ctx.fillStyle = '#111827';
+      ctx.beginPath();
+      ctx.arc(cx - 5 + e.dir * 1.5, cy - 1, 2.4, 0, Math.PI * 2);
+      ctx.arc(cx + 5 + e.dir * 1.5, cy - 1, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 }
 

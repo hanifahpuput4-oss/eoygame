@@ -3,6 +3,7 @@ export type LivePlayerState = {
   username: string;
   avatar: string;
   role: string;
+  stage?: number;
   x: number;
   y: number;
   vx: number;
@@ -36,6 +37,11 @@ export type RejoinRequest = {
   requestedAt: number;
 };
 
+export type RoomObstacleState = {
+  crumbles: Map<string, { stage: number; idx: number; startedAt: number }>;
+  stomps: Map<string, { stage: number; id: string; until: number }>;
+};
+
 const globalForPresence = globalThis as unknown as {
   __llysRoomPresence?: Map<string, Map<string, number>>;
   __llysRecentlyLeft?: Map<string, number>;
@@ -47,7 +53,58 @@ const globalForPresence = globalThis as unknown as {
   __llysLiveRoomStatus?: Map<string, string>;
   __llysRejoinRequests?: Map<string, Map<string, RejoinRequest>>;
   __llysRejectedRejoins?: Map<string, number>;
+  __llysRoomObstacles?: Map<string, RoomObstacleState>;
 };
+
+function getRoomObstaclesStore(): Map<string, RoomObstacleState> {
+  if (!globalForPresence.__llysRoomObstacles) {
+    globalForPresence.__llysRoomObstacles = new Map();
+  }
+  return globalForPresence.__llysRoomObstacles;
+}
+
+export function recordRoomCrumble(roomId: string, stage: number, idx: number, startedAt: number) {
+  const store = getRoomObstaclesStore();
+  let state = store.get(roomId);
+  if (!state) {
+    state = { crumbles: new Map(), stomps: new Map() };
+    store.set(roomId, state);
+  }
+  state.crumbles.set(`${stage}:${idx}`, { stage, idx, startedAt });
+}
+
+export function recordRoomStomp(roomId: string, stage: number, id: string, until: number) {
+  const store = getRoomObstaclesStore();
+  let state = store.get(roomId);
+  if (!state) {
+    state = { crumbles: new Map(), stomps: new Map() };
+    store.set(roomId, state);
+  }
+  state.stomps.set(`${stage}:${id}`, { stage, id, until });
+}
+
+export function getLiveRoomObstacles(roomId: string) {
+  const state = getRoomObstaclesStore().get(roomId);
+  if (!state) return { crumbles: [], stomps: [] };
+  const now = Date.now();
+  const crumbles: { stage: number; idx: number; startedAt: number }[] = [];
+  for (const [key, c] of state.crumbles.entries()) {
+    if (now - c.startedAt < 3800) {
+      crumbles.push(c);
+    } else {
+      state.crumbles.delete(key);
+    }
+  }
+  const stomps: { stage: number; id: string; until: number }[] = [];
+  for (const [key, s] of state.stomps.entries()) {
+    if (s.until > now) {
+      stomps.push(s);
+    } else {
+      state.stomps.delete(key);
+    }
+  }
+  return { crumbles, stomps };
+}
 
 function getRejoinRequestsStore(): Map<string, Map<string, RejoinRequest>> {
   if (!globalForPresence.__llysRejoinRequests) {
