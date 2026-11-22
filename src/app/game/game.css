@@ -771,6 +771,10 @@
   gap: 8px;
 }
 
+.mp-options-grid-2x2 > .mp-grid-opt-btn:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .mp-grid-opt-btn {
   min-height: 44px;
   display: flex;

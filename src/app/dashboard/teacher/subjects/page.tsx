@@ -37,10 +37,10 @@ type SubjectGroup = {
   }[];
 };
 
-const DUMMY_CSV_TEMPLATE = `Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Kunci;Poin;Pembahasan
-Manakah fungsi Excel untuk menjumlahkan rentang angka?;VLOOKUP;SUM;AVERAGE;COUNT;B;10;SUM digunakan untuk menjumlahkan seluruh angka pada rentang sel.
-Fungsi untuk mencari nilai rata-rata di Microsoft Excel adalah?;MAX;MIN;AVERAGE;IF;C;10;AVERAGE menghitung rata-rata aritmatika dari argumen.
-Simbol wajib untuk mengawali setiap rumus di Excel adalah?;#;@;=;$;C;10;Semua formula di Excel wajib diawali tanda sama dengan (=).`;
+const DUMMY_CSV_TEMPLATE = `Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Opsi E;Kunci;Poin;Pembahasan
+Manakah fungsi Excel untuk menjumlahkan rentang angka?;VLOOKUP;SUM;AVERAGE;COUNT;MAX;B;10;SUM digunakan untuk menjumlahkan seluruh angka pada rentang sel.
+Fungsi untuk mencari nilai rata-rata di Microsoft Excel adalah?;MAX;MIN;AVERAGE;IF;CONCAT;C;10;AVERAGE menghitung rata-rata aritmatika dari argumen.
+Simbol wajib untuk mengawali setiap rumus di Excel adalah?;#;@;=;$;%;C;10;Semua formula di Excel wajib diawali tanda sama dengan (=).`;
 
 function parseMapMeta(lvl: LevelRow): { subjectName: string; grade: string; objectiveName: string } {
   try {
@@ -91,7 +91,8 @@ export default function SubjectsManagementPage() {
     optionB: '',
     optionC: '',
     optionD: '',
-    correctAnswer: 'A' as 'A' | 'B' | 'C' | 'D',
+    optionE: '',
+    correctAnswer: 'A' as 'A' | 'B' | 'C' | 'D' | 'E',
     points: 10,
     explanation: '',
   });
@@ -276,6 +277,7 @@ export default function SubjectsManagementPage() {
         { label: 'B', content: qForm.optionB.trim() },
         { label: 'C', content: qForm.optionC.trim() },
         { label: 'D', content: qForm.optionD.trim() },
+        { label: 'E', content: qForm.optionE.trim() },
       ],
     };
 
@@ -314,6 +316,7 @@ export default function SubjectsManagementPage() {
       optionB: '',
       optionC: '',
       optionD: '',
+      optionE: '',
       correctAnswer: 'A',
       points: 10,
       explanation: '',
@@ -385,7 +388,8 @@ export default function SubjectsManagementPage() {
       optionB: string;
       optionC: string;
       optionD: string;
-      correctAnswer: 'A' | 'B' | 'C' | 'D';
+      optionE: string;
+      correctAnswer: 'A' | 'B' | 'C' | 'D' | 'E';
       points: number;
       explanation: string;
     }[] = [];
@@ -395,18 +399,18 @@ export default function SubjectsManagementPage() {
       if (i === 0 && /^pertanyaan[;|,\t]/i.test(line)) continue;
       const delimiter = line.includes(';') ? ';' : line.includes('\t') ? '\t' : ',';
       const cols = line.split(delimiter).map((c) => c.trim());
-      if (cols.length < 6) {
+      if (cols.length < 7) {
         setStatusMsg({
           type: 'err',
-          text: `Baris ke-${i + 1} tidak lengkap (minimal 6 kolom: Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Kunci)`,
+          text: `Baris ke-${i + 1} tidak lengkap (minimal 7 kolom: Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Opsi E;Kunci)`,
         });
         return;
       }
-      const key = cols[5].toUpperCase();
-      if (!['A', 'B', 'C', 'D'].includes(key)) {
+      const key = cols[6].toUpperCase();
+      if (!['A', 'B', 'C', 'D', 'E'].includes(key)) {
         setStatusMsg({
           type: 'err',
-          text: `Baris ke-${i + 1}: Kunci jawaban harus A, B, C, atau D (ditemukan "${cols[5]}")`,
+          text: `Baris ke-${i + 1}: Kunci jawaban harus A, B, C, D, atau E (ditemukan "${cols[6]}")`,
         });
         return;
       }
@@ -416,9 +420,10 @@ export default function SubjectsManagementPage() {
         optionB: cols[2],
         optionC: cols[3],
         optionD: cols[4],
-        correctAnswer: key as 'A' | 'B' | 'C' | 'D',
-        points: Number(cols[6]) > 0 ? Number(cols[6]) : 10,
-        explanation: cols[7] ?? '',
+        optionE: cols[5],
+        correctAnswer: key as 'A' | 'B' | 'C' | 'D' | 'E',
+        points: Number(cols[7]) > 0 ? Number(cols[7]) : 10,
+        explanation: cols[8] ?? '',
       });
     }
 
@@ -663,9 +668,9 @@ export default function SubjectsManagementPage() {
             <form onSubmit={onRunImport} className="rounded-2xl border-2 border-dashed border-[var(--navy-panel)]/40 bg-[#f8f3e8] p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h3 className="font-display text-lg font-bold">Import Soal + Kunci Jawaban</h3>
+                  <h3 className="font-display text-lg font-bold">Import Soal + Kunci Jawaban (5 Opsi A-E)</h3>
                   <p className="text-xs text-[var(--wood-text)]/75">
-                    Format tiap baris: <code className="rounded bg-black/10 px-1.5 py-0.5 font-mono">Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Kunci (A/B/C/D);Poin;Pembahasan</code>
+                    Format tiap baris: <code className="rounded bg-black/10 px-1.5 py-0.5 font-mono">Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Opsi E;Kunci (A/B/C/D/E);Poin;Pembahasan</code>
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -720,10 +725,10 @@ export default function SubjectsManagementPage() {
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-              {(['A', 'B', 'C', 'D'] as const).map((lbl) => {
-                const fieldKey = `option${lbl}` as 'optionA' | 'optionB' | 'optionC' | 'optionD';
+              {(['A', 'B', 'C', 'D', 'E'] as const).map((lbl) => {
+                const fieldKey = `option${lbl}` as 'optionA' | 'optionB' | 'optionC' | 'optionD' | 'optionE';
                 return (
-                  <div key={lbl} className="flex items-center gap-2">
+                  <div key={lbl} className={`flex items-center gap-2${lbl === 'E' ? ' md:col-span-2' : ''}`}>
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--navy-panel)] font-display text-sm font-bold text-white">
                       {lbl}
                     </span>
@@ -787,6 +792,7 @@ export default function SubjectsManagementPage() {
                       optionB: '',
                       optionC: '',
                       optionD: '',
+                      optionE: '',
                       correctAnswer: 'A',
                       points: 10,
                       explanation: '',
@@ -852,7 +858,8 @@ export default function SubjectsManagementPage() {
                           optionB: getOpt('B'),
                           optionC: getOpt('C'),
                           optionD: getOpt('D'),
-                          correctAnswer: (q.correctAnswer as 'A' | 'B' | 'C' | 'D') || 'A',
+                          optionE: getOpt('E'),
+                          correctAnswer: (q.correctAnswer as 'A' | 'B' | 'C' | 'D' | 'E') || 'A',
                           points: q.points,
                           explanation: q.explanation,
                         });

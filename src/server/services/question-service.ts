@@ -70,7 +70,7 @@ export async function updateQuestion(id: string, teacherId: string, input: Quest
       throw new QuestionError('Pilihan ganda minimal 2 opsi', 422);
     }
     if (!merged.options.some((o) => o.label === merged.correctAnswer)) {
-      throw new QuestionError('Jawaban benar harus salah satu dari opsi A-D', 422);
+      throw new QuestionError('Jawaban benar harus salah satu dari opsi A-E', 422);
     }
   }
   await db

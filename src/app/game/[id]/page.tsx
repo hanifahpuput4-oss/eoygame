@@ -150,7 +150,7 @@ export default function GamePage() {
   const questionRef = useRef<Question | null>(null);
   const [selected, setSelected] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [feedback, setFeedback] = useState<{ isCorrect: boolean; correctAnswer: string; explanation: string; pointsEarned: number } | null>(null);
+  const [feedback, setFeedback] = useState<{ isCorrect: boolean; correctAnswer?: string; explanation?: string; pointsEarned: number } | null>(null);
   const [error, setError] = useState('');
   const bubblesRef = useRef<Map<string, BubbleEntry>>(new Map());
   const seenMsgIdsRef = useRef<Set<string>>(new Set());
@@ -429,6 +429,17 @@ export default function GamePage() {
       }
       if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
         chatCursorRef.current = data.chatCursor;
+      }
+      if (data.answerResults && typeof data.answerResults === 'object') {
+        for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
+          answerResultsRef.current.set(qid, Boolean(okAns));
+        }
+      }
+      if (Array.isArray(data.answeredQuestionIds)) {
+        for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
+        const list = Array.from(answeredIdsRef.current);
+        setAnsweredQuestionIds(list);
+        setCorrectCount(list.length);
       }
 
       if (r.status === 'completed' || (p.role !== 'teacher' && r.status !== 'in_progress')) {
@@ -1360,7 +1371,8 @@ export default function GamePage() {
   const displayChat = chat;
   const players = room?.players ?? [];
   const totalSteps = Math.max(levelQuestions.length, 1);
-  const doneSteps = Math.min(correctCount, totalSteps);
+  // Hitung semua soal yang sudah dijawab oleh player (baik benar maupun salah) ke dalam progres misi
+  const doneSteps = Math.min(Math.max(answeredQuestionIds.length, correctCount), totalSteps);
   const sortedPlayers = [...players].sort((a, b) => (scores[b.userId] ?? 0) - (scores[a.userId] ?? 0) || a.username.localeCompare(b.username));
   const hasVisibleQuestion = Boolean(question && myRole !== 'teacher' && !answeredQuestionIds.includes(question.id));
   const questionActive = hasVisibleQuestion;
@@ -1415,11 +1427,13 @@ export default function GamePage() {
         const result = data.result ?? data;
         answerResultsRef.current.set(answeredId, Boolean(result.isCorrect));
         answeredIdsRef.current.add(answeredId);
-        setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
+        const nextAnsweredList = Array.from(answeredIdsRef.current);
+        setAnsweredQuestionIds(nextAnsweredList);
+        // Tambahkan progres misi baik jawaban benar maupun salah
+        setCorrectCount(nextAnsweredList.length);
         setSelected('');
         if (result.isCorrect) {
           soundEngine.playAnswerCorrect();
-          setCorrectCount((c) => c + 1);
           if (myIdRef.current) {
             setScores((prev) => ({
               ...prev,
@@ -1433,7 +1447,9 @@ export default function GamePage() {
       } else {
         if (res.status === 409) {
           answeredIdsRef.current.add(answeredId);
-          setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
+          const nextAnsweredList = Array.from(answeredIdsRef.current);
+          setAnsweredQuestionIds(nextAnsweredList);
+          setCorrectCount(nextAnsweredList.length);
           questionRef.current = null;
           setQuestion(null);
           setSelected('');
@@ -2267,9 +2283,10 @@ export default function GamePage() {
 
               <p className="feedback-star-bonus">+{feedback.pointsEarned} Poin</p>
               <p className="feedback-subtext">
-                Jawaban benar: <strong>{feedback.correctAnswer}</strong>
+                {feedback.isCorrect
+                  ? 'Mantap! Soal yang kamu jawab dinyatakan BENAR.'
+                  : 'Jawaban kamu pada soal yang sudah dijawab ini dinyatakan SALAH.'}
               </p>
-              {feedback.explanation && <p className="feedback-subtext">{feedback.explanation}</p>}
 
               <button
                 type="button"

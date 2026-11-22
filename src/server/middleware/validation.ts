@@ -44,11 +44,11 @@ const questionBase = z.object({
   options: z
     .array(
       z.object({
-        label: z.enum(['A', 'B', 'C', 'D']),
+        label: z.enum(['A', 'B', 'C', 'D', 'E']),
         content: z.string().min(1, 'Pilihan tidak boleh kosong').max(200),
       }),
     )
-    .max(4)
+    .max(5)
     .default([]),
 });
 
@@ -61,7 +61,7 @@ export const questionSchema = questionBase
     (q) =>
       q.type !== 'multiple_choice' ||
       q.options.some((o) => o.label === q.correctAnswer),
-    { message: 'Jawaban benar harus salah satu dari opsi A-D', path: ['correctAnswer'] },
+    { message: 'Jawaban benar harus salah satu dari opsi A-E', path: ['correctAnswer'] },
   );
 
 export const questionUpdateSchema = questionBase.partial();

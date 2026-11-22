@@ -24,7 +24,7 @@ type FormState = {
   category: string;
   points: number;
   timeLimit: number;
-  options: { label: 'A' | 'B' | 'C' | 'D'; content: string }[];
+  options: { label: 'A' | 'B' | 'C' | 'D' | 'E'; content: string }[];
 };
 
 const emptyForm: FormState = {
@@ -41,6 +41,7 @@ const emptyForm: FormState = {
     { label: 'B', content: '' },
     { label: 'C', content: '' },
     { label: 'D', content: '' },
+    { label: 'E', content: '' },
   ],
 };
 
@@ -119,7 +120,10 @@ export default function QuestionsPage() {
       timeLimit: q.timeLimit,
       options:
         q.options.length > 0
-          ? q.options.map((o) => ({ label: o.label as 'A' | 'B' | 'C' | 'D', content: o.content }))
+          ? (['A', 'B', 'C', 'D', 'E'] as const).map((lbl) => ({
+              label: lbl,
+              content: q.options.find((o) => o.label === lbl)?.content ?? '',
+            }))
           : emptyForm.options,
     });
   }

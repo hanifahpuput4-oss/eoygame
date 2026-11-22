@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, inArray } from 'drizzle-orm';
 import { db } from '@/db';
 import {
   classrooms,
@@ -96,14 +96,26 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
     const recapRows = await Promise.all(
       Array.from(studentMap.values()).map(async (st) => {
-        const sess = sessions.find((s) => s.userId === st.userId);
-        const answers = sess
-          ? await db.select().from(playerAnswers).where(eq(playerAnswers.sessionId, sess.id))
-          : [];
+        const userSessions = sessions.filter((s) => s.userId === st.userId);
+        const sess = userSessions[0];
+        const rawAnswers =
+          userSessions.length > 0
+            ? await db
+                .select()
+                .from(playerAnswers)
+                .where(inArray(playerAnswers.sessionId, userSessions.map((s) => s.id)))
+            : [];
+        const byQuestion = new Map<string, (typeof rawAnswers)[number]>();
+        for (const ans of rawAnswers) {
+          if (!byQuestion.has(ans.questionId) || ans.isCorrect) {
+            byQuestion.set(ans.questionId, ans);
+          }
+        }
+        const answers = Array.from(byQuestion.values());
         const correctCount = answers.filter((a) => a.isCorrect).length;
         const wrongCount = answers.filter((a) => !a.isCorrect).length;
         const answeredCount = answers.length;
-        const rawScore = sess?.score ?? answers.reduce((acc, a) => acc + (a.pointsEarned ?? 0), 0);
+        const rawScore = answers.reduce((acc, a) => acc + (a.pointsEarned ?? 0), 0);
         const finalGrade =
           totalQuestions > 0
             ? Math.round((correctCount / totalQuestions) * 100)

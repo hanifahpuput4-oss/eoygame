@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { eq, asc, inArray, and } from 'drizzle-orm';
 import { db } from '@/db';
-import { levelQuestions, questionOptions, questions, roomPlayers, rooms } from '@/db/schema';
+import { gameSessions, levelQuestions, playerAnswers, questionOptions, questions, roomPlayers, rooms } from '@/db/schema';
 import { requireUser } from '@/server/auth/session';
 import { getRoom, updateRoomStatus, removePlayer, assertHost, leaveRoom, ensureSession } from '@/server/services/room-service';
 import { stripCorrectAnswer } from '@/server/services/question-service';
@@ -80,6 +80,27 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     const chatSync = getEphemeralChatSince(id, -1);
 
+    const mySessions = await db
+      .select({ id: gameSessions.id })
+      .from(gameSessions)
+      .where(and(eq(gameSessions.roomId, id), eq(gameSessions.userId, user.id)));
+    const sessionIds = mySessions.map((s) => s.id);
+    if (session?.id && !sessionIds.includes(session.id)) {
+      sessionIds.push(session.id);
+    }
+    const myAnswers =
+      sessionIds.length > 0
+        ? await db
+            .select({ questionId: playerAnswers.questionId, isCorrect: playerAnswers.isCorrect })
+            .from(playerAnswers)
+            .where(inArray(playerAnswers.sessionId, sessionIds))
+        : [];
+    const answerResults: Record<string, boolean> = {};
+    for (const a of myAnswers) {
+      answerResults[a.questionId] = Boolean(a.isCorrect);
+    }
+    const answeredQuestionIds = Object.keys(answerResults);
+
     return ok({
       profile: {
         id: user.id,
@@ -94,7 +115,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       room,
       questions: levelQs,
       chatCursor: chatSync.chatCursor,
-      sessionId: session?.id ?? null,
+      sessionId: session?.id ?? mySessions[0]?.id ?? null,
+      answeredQuestionIds,
+      answerResults,
+      correctCount: answeredQuestionIds.length,
     });
   } catch (err) {
     return handleError(err);

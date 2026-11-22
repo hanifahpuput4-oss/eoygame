@@ -125,7 +125,7 @@ export const questionOptions = sqliteTable(
     questionId: text('question_id')
       .notNull()
       .references(() => questions.id, { onDelete: 'cascade' }),
-    label: text('label', { enum: ['A', 'B', 'C', 'D'] }).notNull(),
+    label: text('label', { enum: ['A', 'B', 'C', 'D', 'E'] }).notNull(),
     content: text('content').notNull(),
     position: integer('position').notNull().default(0),
   },

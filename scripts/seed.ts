@@ -20,17 +20,17 @@ const levelsData = [
     questions: [
       {
         q: 'Fungsi dari rumus =VLOOKUP adalah?',
-        options: ['Menghitung jumlah data', 'Mencari data pada tabel', 'Menjumlahkan angka', 'Mengurutkan data'],
+        options: ['Menghitung jumlah data', 'Mencari data pada tabel', 'Menjumlahkan angka', 'Mengurutkan data', 'Menghapus duplikat'],
         answer: 'B',
       },
       {
         q: 'Perpotongan antara baris dan kolom pada lembar kerja Excel disebut?',
-        options: ['Workbook', 'Range', 'Cell', 'Formula Bar'],
+        options: ['Workbook', 'Range', 'Cell', 'Formula Bar', 'Ribbon'],
         answer: 'C',
       },
       {
         q: 'Setiap penulisan rumus atau fungsi di Microsoft Excel wajib diawali tanda?',
-        options: ['= (Sama dengan)', '# (Tagar)', '@ (At)', '$ (Dolar)'],
+        options: ['= (Sama dengan)', '# (Tagar)', '@ (At)', '$ (Dolar)', '% (Persen)'],
         answer: 'A',
       },
     ],
@@ -41,17 +41,17 @@ const levelsData = [
     questions: [
       {
         q: 'Manakah fungsi yang digunakan untuk menjumlahkan data pada Excel?',
-        options: ['VLOOKUP', 'SUM', 'IF', 'COUNT'],
+        options: ['VLOOKUP', 'SUM', 'IF', 'COUNT', 'PROPER'],
         answer: 'B',
       },
       {
         q: 'Rumus yang digunakan untuk menghitung nilai rata-rata dari sekumpulan angka adalah?',
-        options: ['SUM', 'AVERAGE', 'MAX', 'COUNT'],
+        options: ['SUM', 'AVERAGE', 'MAX', 'COUNT', 'MIN'],
         answer: 'B',
       },
       {
         q: 'Fungsi COUNT pada Excel berfungsi untuk menghitung?',
-        options: ['Jumlah total nilai angka', 'Banyaknya sel yang berisi angka', 'Banyaknya sel kosong', 'Nilai tertinggi'],
+        options: ['Jumlah total nilai angka', 'Banyaknya sel yang berisi angka', 'Banyaknya sel kosong', 'Nilai tertinggi', 'Nilai terendah'],
         answer: 'B',
       },
     ],
@@ -62,12 +62,12 @@ const levelsData = [
     questions: [
       {
         q: 'Jika nilai di sel A1 adalah 80, hasil dari =IF(A1>=75;"Lulus";"Remedial") adalah?',
-        options: ['Remedial', 'Lulus', 'TRUE', '#VALUE!'],
+        options: ['Remedial', 'Lulus', 'TRUE', '#VALUE!', 'FALSE'],
         answer: 'B',
       },
       {
         q: 'Fungsi logika yang menghasilkan nilai TRUE hanya jika semua kondisinya benar adalah?',
-        options: ['=OR()', '=NOT()', '=AND()', '=IF()'],
+        options: ['=OR()', '=NOT()', '=AND()', '=IF()', '=XOR()'],
         answer: 'C',
       },
       {
@@ -77,6 +77,7 @@ const levelsData = [
           '=IF(A1>80;"A";ELSE("B"))',
           '=IF(A1>80="A",A1>70="B")',
           '=IF(A1>80;"A") + IF(A1>70;"B")',
+          '=IF(A1>80:"A":IF(A1>70:"B":"C"))',
         ],
         answer: 'A',
       },
@@ -93,17 +94,18 @@ const levelsData = [
           'Mengunci referensi sel agar tidak berubah saat disalin',
           'Menghapus isi sel secara otomatis',
           'Menandai sel yang error',
+          'Menyembunyikan baris dan kolom',
         ],
         answer: 'B',
       },
       {
         q: 'Fitur Excel untuk menampilkan baris data yang memenuhi kriteria tertentu saja disebut?',
-        options: ['Sort', 'Filter', 'Merge & Center', 'Wrap Text'],
+        options: ['Sort', 'Filter', 'Merge & Center', 'Wrap Text', 'Freeze Panes'],
         answer: 'B',
       },
       {
         q: 'Jika ingin mencari data pada tabel yang tersusun secara horizontal, gunakan rumus?',
-        options: ['=VLOOKUP', '=HLOOKUP', '=INDEX', '=CONCATENATE'],
+        options: ['=VLOOKUP', '=HLOOKUP', '=INDEX', '=CONCATENATE', '=COUNTIF'],
         answer: 'B',
       },
     ],
@@ -119,6 +121,7 @@ const levelsData = [
           '=COUNTIF(D2:D30; ">80")',
           '=SUMIF(D2:D30; ">80")',
           '=AVERAGEIF(D2:D30; ">80")',
+          '=MAX(D2:D30; ">80")',
         ],
         answer: 'B',
       },
@@ -129,6 +132,7 @@ const levelsData = [
           'Kolom terlalu sempit',
           'Ada pembagian angka dengan nilai nol atau sel kosong',
           'Referensi sel telah dihapus',
+          'Format tanggal tidak sesuai',
         ],
         answer: 'C',
       },
@@ -139,6 +143,7 @@ const levelsData = [
           '=COUNTIF(B2:B20; "Buku"; C2:C20)',
           '=VLOOKUP("Buku"; B2:C20; 2)',
           '=SUM(B2:B20="Buku"; C2:C20)',
+          '=AVERAGEIF(B2:B20; "Buku"; C2:C20)',
         ],
         answer: 'A',
       },
@@ -223,7 +228,7 @@ async function main() {
         q.options.map((content, k) => ({
           id: generateId('opt'),
           questionId,
-          label: ['A', 'B', 'C', 'D'][k] as 'A' | 'B' | 'C' | 'D',
+          label: ['A', 'B', 'C', 'D', 'E'][k] as 'A' | 'B' | 'C' | 'D' | 'E',
           content,
           position: k,
         })),

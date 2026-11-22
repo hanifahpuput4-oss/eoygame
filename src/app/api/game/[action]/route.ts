@@ -43,6 +43,9 @@ function getUserAnswerCache() {
   return globalForUserGameCache.__llysUserAnswerCache;
 }
 
+// Clear stale cache entries on module reload so updated progress counts take effect immediately
+globalForUserGameCache.__llysUserAnswerCache?.clear();
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
   try {
     const { action } = await ctx.params;
@@ -227,8 +230,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         result: {
           isCorrect,
           pointsEarned,
-          correctAnswer: question.correctAnswer,
-          explanation: question.explanation,
         },
       });
     }
@@ -442,13 +443,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       const ansCache = getUserAnswerCache();
       let userAns = ansCache.get(userCacheKey);
       if (!userAns || Date.now() - userAns.cachedAt > 8000) {
-        const mySession = await db
+        const mySessions = await db
           .select({ id: gameSessions.id })
           .from(gameSessions)
-          .where(and(eq(gameSessions.roomId, roomId), eq(gameSessions.userId, user.id)))
-          .limit(1);
+          .where(and(eq(gameSessions.roomId, roomId), eq(gameSessions.userId, user.id)));
 
-        let activeSessionId = mySession[0]?.id ?? null;
+        let activeSessionId = mySessions[0]?.id ?? null;
+        const sessionIds = mySessions.map((s) => s.id);
         if (!activeSessionId && dbState.room?.levelId) {
           const newSessionId = generateId('gsn');
           await db
@@ -461,26 +462,30 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
             })
             .catch(() => {});
           activeSessionId = newSessionId;
+          sessionIds.push(newSessionId);
         }
 
-        const myAnswers = activeSessionId
-          ? await db
-              .select({ questionId: playerAnswers.questionId, isCorrect: playerAnswers.isCorrect })
-              .from(playerAnswers)
-              .where(eq(playerAnswers.sessionId, activeSessionId))
-          : [];
+        const myAnswers =
+          sessionIds.length > 0
+            ? await db
+                .select({ questionId: playerAnswers.questionId, isCorrect: playerAnswers.isCorrect })
+                .from(playerAnswers)
+                .where(inArray(playerAnswers.sessionId, sessionIds))
+            : [];
 
         const answerResults: Record<string, boolean> = {};
         for (const a of myAnswers) {
           answerResults[a.questionId] = Boolean(a.isCorrect);
         }
+        const uniqueAnsweredIds = Object.keys(answerResults);
 
         userAns = {
           cachedAt: Date.now(),
           sessionId: activeSessionId,
-          answeredQuestionIds: myAnswers.map((a) => a.questionId),
+          answeredQuestionIds: uniqueAnsweredIds,
           answerResults,
-          correctCount: myAnswers.filter((a) => a.isCorrect).length,
+          // Hitung semua soal yang sudah dijawab (baik benar maupun salah) agar progres misi selalu bertambah
+          correctCount: uniqueAnsweredIds.length,
         };
         ansCache.set(userCacheKey, userAns);
       }

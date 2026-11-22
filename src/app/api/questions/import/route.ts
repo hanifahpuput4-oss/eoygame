@@ -11,7 +11,8 @@ const importItemSchema = z.object({
   optionB: z.string().min(1, 'Opsi B wajib diisi').max(200),
   optionC: z.string().min(1, 'Opsi C wajib diisi').max(200),
   optionD: z.string().min(1, 'Opsi D wajib diisi').max(200),
-  correctAnswer: z.enum(['A', 'B', 'C', 'D']),
+  optionE: z.string().min(1, 'Opsi E wajib diisi').max(200),
+  correctAnswer: z.enum(['A', 'B', 'C', 'D', 'E']),
   points: z.number().int().min(1).max(100).default(10),
   explanation: z.string().max(500).default(''),
 });
@@ -45,6 +46,7 @@ export async function POST(req: NextRequest) {
           { label: 'B', content: item.optionB },
           { label: 'C', content: item.optionC },
           { label: 'D', content: item.optionD },
+          { label: 'E', content: item.optionE },
         ],
       });
       createdIds.push(q.id);
