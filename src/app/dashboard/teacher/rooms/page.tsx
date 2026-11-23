@@ -539,6 +539,12 @@ export default function RoomsPage() {
                 <option value={2}>2 Stage (Stage 1 Sekolah + Stage 2 Sunset &amp; Virus)</option>
                 <option value={3}>3 Stage (Stage 1 Sekolah + Stage 2 Sunset + Stage 3 Kastil Magma)</option>
                 <option value={4}>4 Stage (Stage 1-4: Sekolah, Sunset, Magma, Galaksi Cyber &amp; Power-Up Tembakan)</option>
+                <option value={5}>5 Stage (+ Hutan Neon Biolumin)</option>
+                <option value={6}>6 Stage (+ Kota Roda Gigi)</option>
+                <option value={7}>7 Stage (+ Samudra Es)</option>
+                <option value={8}>8 Stage (+ Gurun Reruntuhan)</option>
+                <option value={9}>9 Stage (+ Sarang Virus)</option>
+                <option value={10}>10 Stage Lengkap (Sampai Menara Final Boss)</option>
               </select>
               {levelId && (() => {
                 const selectedLvl = levels.find((l) => l.id === levelId);

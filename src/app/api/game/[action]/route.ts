@@ -40,7 +40,7 @@ const globalForUserGameCache = globalThis as unknown as {
       cachedAt: number;
       sessionId: string | null;
       answeredQuestionIds: string[];
-      answerResults: Record<string, boolean>;
+      answerResults: Record<string, boolean | 'assisted'>;
       correctCount: number;
     }
   >;
@@ -255,6 +255,66 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
           pointsEarned,
         },
       });
+    }
+
+    if (action === 'assist-answer') {
+      if (!isStaff) return fail('Hanya Guru/Admin yang bisa membantu jawab soal', 403);
+      const schema = z.object({
+        roomId: z.string().min(1),
+        targetId: z.string().min(1), // userId atau 'all'
+        questionId: z.string().min(1),
+        answer: z.string().min(1),
+      });
+      const input = schema.parse(body);
+
+      // Kunci jawaban (validasi guru/admin boleh tahu)
+      const qRows = await db.select().from(questions).where(eq(questions.id, input.questionId)).limit(1);
+      const question = qRows[0];
+      if (!question) return fail('Soal tidak ditemukan', 404);
+      if (question.correctAnswer !== input.answer) return fail('Jawaban salah', 400);
+
+      // Cari semua session target dalam room ini (bisa lebih dari 1 kalau rejoin)
+      let targetUserIds: string[];
+      if (input.targetId === 'all') {
+        const rows = await db
+          .select({ userId: roomPlayers.userId })
+          .from(roomPlayers)
+          .where(eq(roomPlayers.roomId, input.roomId));
+        targetUserIds = rows.map((r) => r.userId);
+      } else {
+        targetUserIds = [input.targetId];
+      }
+      if (targetUserIds.length === 0) return ok({ success: true, count: 0 });
+
+      const sessions = await db
+        .select()
+        .from(gameSessions)
+        .where(and(eq(gameSessions.roomId, input.roomId), inArray(gameSessions.userId, targetUserIds)));
+
+      let count = 0;
+      for (const sess of sessions) {
+        const dup = await db
+          .select({ id: playerAnswers.id })
+          .from(playerAnswers)
+          .where(and(eq(playerAnswers.sessionId, sess.id), eq(playerAnswers.questionId, input.questionId)))
+          .limit(1);
+        if (dup.length > 0) continue;
+        await db.insert(playerAnswers).values({
+          id: generateId('ans'),
+          sessionId: sess.id,
+          questionId: input.questionId,
+          answer: input.answer,
+          isCorrect: true,
+          pointsEarned: 0,
+          assisted: true,
+          timeSpent: 0,
+        });
+        count += 1;
+        getUserAnswerCache().delete(`${input.roomId}:${sess.userId}`);
+      }
+
+      invalidateRoomSyncCache(input.roomId);
+      return ok({ success: true, count });
     }
 
     if (action === 'leave') {
@@ -614,8 +674,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         facing: z.number().int().min(-1).max(1).optional(),
         chatCursor: z.number().int().optional(),
         justKicked: z.boolean().optional(),
+        targetId: z.string().min(1).optional(),
       });
-      const { roomId, x, y, vx, vy, onGround, isDying, deathStartedAt, burnUntil, facing, chatCursor, justKicked } =
+      const { roomId, x, y, vx, vy, onGround, isDying, deathStartedAt, burnUntil, facing, chatCursor, justKicked, targetId } =
         schema.parse(body);
 
       if (isRoomDeleted(roomId)) {
@@ -767,18 +828,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       }
 
       // 3. Get user's session & answered questions (cached in RAM for 8s, invalidated immediately on answer)
-      const userCacheKey = `${roomId}:${user.id}`;
+      // Staff yang sedang mirror siswa tertentu bisa minta jawaban siswa tersebut (bukan jawabannya sendiri)
+      const effectiveUserId = isStaff && targetId && targetId !== user.id ? targetId : user.id;
+      const userCacheKey = `${roomId}:${effectiveUserId}`;
       const ansCache = getUserAnswerCache();
       let userAns = ansCache.get(userCacheKey);
       if (!userAns || Date.now() - userAns.cachedAt > 8000) {
         const mySessions = await db
           .select({ id: gameSessions.id })
           .from(gameSessions)
-          .where(and(eq(gameSessions.roomId, roomId), eq(gameSessions.userId, user.id)));
+          .where(and(eq(gameSessions.roomId, roomId), eq(gameSessions.userId, effectiveUserId)));
 
         let activeSessionId = mySessions[0]?.id ?? null;
         const sessionIds = mySessions.map((s) => s.id);
-        if (!activeSessionId && dbState.room?.levelId) {
+        if (!activeSessionId && dbState.room?.levelId && effectiveUserId === user.id) {
           const newSessionId = generateId('gsn');
           await db
             .insert(gameSessions)
@@ -796,14 +859,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
         const myAnswers =
           sessionIds.length > 0
             ? await db
-                .select({ questionId: playerAnswers.questionId, isCorrect: playerAnswers.isCorrect })
+                .select({ questionId: playerAnswers.questionId, isCorrect: playerAnswers.isCorrect, assisted: playerAnswers.assisted })
                 .from(playerAnswers)
                 .where(inArray(playerAnswers.sessionId, sessionIds))
             : [];
 
-        const answerResults: Record<string, boolean> = {};
+        const answerResults: Record<string, boolean | 'assisted'> = {};
         for (const a of myAnswers) {
-          answerResults[a.questionId] = Boolean(a.isCorrect);
+          answerResults[a.questionId] = a.assisted ? 'assisted' : Boolean(a.isCorrect);
         }
         const uniqueAnsweredIds = Object.keys(answerResults);
 

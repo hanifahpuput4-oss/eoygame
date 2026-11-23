@@ -18,6 +18,10 @@ export type PresencePlayer = {
   deathStartedAt?: number;
   burnUntil?: number;
   ts?: number;
+  jailedUntil?: number;
+  gun?: string | null;
+  tag?: string | null;
+  colors?: { body?: string; tag?: string; nick?: string } | null;
 };
 
 export type ChatMessage = {
@@ -44,6 +48,10 @@ export type PositionData = {
   isDying?: boolean;
   deathStartedAt?: number;
   burnUntil?: number;
+  jailedUntil?: number;
+  gun?: string | null;
+  tag?: string | null;
+  colors?: { body?: string; tag?: string; nick?: string } | null;
 };
 
 export type ScoreData = {
@@ -66,13 +74,20 @@ export type ObstacleEvent =
   | { op: 'crumble'; stg: number; idx: number; at: number }
   | { op: 'stomp'; stg: number; id: string; until: number }
   | { op: 'powerup'; stg: number; id: string; until: number }
-  | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number };
+  | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number }
+  | { op: 'boss_hit'; stg: number; bid: string; dmg: number }
+  | { op: 'boss_died'; stg: number }
+  | { op: 'boss_spit'; stg: number; bid: string; pid: string; x: number; y: number; vx: number; vy: number };
 
 export type RoomCommandEvent =
   | { op: 'god'; targetId: string; value: boolean; targetName?: string }
   | { op: 'teleport'; targetId: string; stage?: number; x?: number; y?: number }
   | { op: 'reset'; targetId: string }
-  | { op: 'assist_answer'; targetId: string; qid: string };
+  | { op: 'assist_answer'; targetId: string; qid: string }
+  | { op: 'gun'; targetId: string; value: boolean; weapon?: string }
+  | { op: 'jail'; targetId: string; value: boolean }
+  | { op: 'cosmetics'; targetId: string; tag?: string; colors?: { body?: string; tag?: string; nick?: string } }
+  | { op: 'hit'; targetId: string; by: string; dmg: number };
 
 type RealtimeCallbacks = {
   onDirectMove?: (player: PresencePlayer) => void;
@@ -250,6 +265,10 @@ export function useAblyRoom(
           isDying: Boolean(msg.d),
           deathStartedAt: typeof msg.ds === 'number' ? msg.ds : undefined,
           burnUntil: typeof msg.b === 'number' ? msg.b : undefined,
+          jailedUntil: typeof msg.j === 'number' ? msg.j : undefined,
+          gun: typeof msg.gn === 'string' ? msg.gn : undefined,
+          tag: typeof msg.tg === 'string' ? msg.tg : undefined,
+          colors: (msg.cl && typeof msg.cl === 'object' ? msg.cl : undefined) as PositionData['colors'],
           ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
         });
         return;
@@ -321,6 +340,12 @@ export function useAblyRoom(
           callbacksRef.current?.onObstacleEvent?.({ op: 'powerup', stg, id: msg.id, until: msg.until });
         } else if (op === 'shoot' && typeof msg.pid === 'string' && typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.vx === 'number') {
           callbacksRef.current?.onObstacleEvent?.({ op: 'shoot', stg, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx });
+        } else if (op === 'boss_hit' && typeof msg.bid === 'string' && typeof msg.dmg === 'number') {
+          callbacksRef.current?.onObstacleEvent?.({ op: 'boss_hit', stg, bid: msg.bid, dmg: msg.dmg });
+        } else if (op === 'boss_died') {
+          callbacksRef.current?.onObstacleEvent?.({ op: 'boss_died', stg });
+        } else if (op === 'boss_spit' && typeof msg.bid === 'string' && typeof msg.pid === 'string' && typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.vx === 'number') {
+          callbacksRef.current?.onObstacleEvent?.({ op: 'boss_spit', stg, bid: msg.bid, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx, vy: typeof msg.vy === 'number' ? msg.vy : 0.0025 });
         }
         return;
       }
@@ -603,6 +628,10 @@ export function useAblyRoom(
             d: pos.isDying ? 1 : 0,
             ds: pos.deathStartedAt,
             b: pos.burnUntil,
+            j: pos.jailedUntil,
+            gn: pos.gun ?? undefined,
+            tg: pos.tag ?? undefined,
+            cl: pos.colors ?? undefined,
             ts: Date.now(),
           }),
         );

@@ -1,4 +1,4 @@
-import { DECOR, PHYSICS, PLATFORMS, WORLD, rectsOverlap, type Platform, type StageEnemy, type StagePowerUp } from '../maps/world';
+import { DECOR, PHYSICS, PLATFORMS, WORLD, rectsOverlap, type Platform, type StageBoss, type StageEnemy, type StagePowerUp } from '../maps/world';
 
 export type Player = {
   id: string;
@@ -29,6 +29,10 @@ export type Player = {
   lastPacketAt?: number;
   avgInterval?: number;
   snapshots?: { x: number; y: number; vx: number; vy: number; time: number }[];
+  jailedUntil?: number;
+  gun?: string | null;
+  tag?: string | null;
+  colors?: { body?: string; tag?: string; nick?: string } | null;
 };
 
 export type Projectile = {
@@ -41,8 +45,26 @@ export type Projectile = {
   createdAt: number;
 };
 
+export type BossProjectile = {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  bossId: string;
+  stage: number;
+  createdAt: number;
+};
+
 const PLAYER_W = 36;
 const PLAYER_H = 44;
+
+// Boss ranged attack tuning
+const BOSS_PATROL_SPEED = 0.045; // px per ms
+const BOSS_ATTACK_INTERVAL = 2600; // ms between spits
+const BOSS_ATTACK_WINDUP = 700; // telegraph before the spit launches
+const BOSS_SPIT_SPEED = 0.22; // horizontal px per ms
+const BOSS_SPIT_LIFETIME = 4200;
 
 function isSolidBox(type: string) {
   return type === 'crate' || type === 'qblock' || type === 'qblock-correct' || type === 'qblock-wrong' || type === 'qblock-assisted';
@@ -76,6 +98,12 @@ export function updateStageEntities(
   powerUps: StagePowerUp[] = [],
   projectiles: Projectile[] = [],
   onProjectileHitEnemy?: (projId: string, enemyId: string) => void,
+  bosses?: StageBoss[],
+  onProjectileHitBoss?: (projId: string, bossId: string) => void,
+  bossProjectiles: BossProjectile[] = [],
+  onBossSpit?: (evt: { bid: string; pid: string; x: number; y: number; vx: number; vy: number }) => void,
+  onBossHitPlayer?: (playerId: string, bossId: string) => void,
+  players?: Player[],
 ) {
   for (const plat of basePlatforms) {
     if (plat.type === 'moving') {
@@ -129,6 +157,81 @@ export function updateStageEntities(
     }
   }
 
+  // Boss patrol: deterministic pacing between minX and maxX (mirrors enemy patrol)
+  for (const b of bosses ?? []) {
+    if (!b.alive) continue;
+    const minX = b.minX ?? b.x - 120;
+    const maxX = b.maxX ?? b.x + 120;
+    const span = (maxX - b.w) - minX;
+    if (span <= 0) continue;
+    const halfPeriod = span / BOSS_PATROL_SPEED;
+    const fullPeriod = 2 * halfPeriod;
+    const idOffset = (b.id.charCodeAt(0) * 499) + ((b.id.charCodeAt(1) || 0) * 137);
+    const t = ((now + idOffset) % fullPeriod + fullPeriod) % fullPeriod;
+    if (t < halfPeriod) {
+      b.x = minX + t * BOSS_PATROL_SPEED;
+      b.dir = 1;
+    } else {
+      b.x = (maxX - b.w) - (t - halfPeriod) * BOSS_PATROL_SPEED;
+      b.dir = -1;
+    }
+
+    // Ranged attack: telegraph first, then spit toward the nearest player
+    if (b.nextAttackAt === undefined) b.nextAttackAt = now + 900;
+    if (b.attackUntil && b.attackUntil <= now && b.attackUntil > 0) {
+      // windup finished: launch the spit
+      b.attackUntil = 0;
+      const pid = `bsp_${b.id}_${now}`;
+      const originX = b.x + b.w / 2 + (b.dir ?? 1) * (b.w * 0.45);
+      const originY = b.y + b.h * 0.42;
+      let vx = (b.dir ?? 1) * BOSS_SPIT_SPEED;
+      const nearest = (players ?? []).reduce<Player | null>((best, pl) => {
+        if (!pl || pl.isDying || (pl.stage ?? 1) !== b.stage) return best;
+        return !best || Math.abs(pl.x - b.x) < Math.abs(best.x - b.x) ? pl : best;
+      }, null);
+      if (nearest) {
+        const dx = nearest.x + PLAYER_W / 2 - originX;
+        const travel = BOSS_SPIT_LIFETIME * 0.55;
+        vx = Math.max(-0.34, Math.min(0.34, dx / travel));
+      }
+      bossProjectiles.push({
+        id: pid,
+        x: originX,
+        y: originY,
+        vx,
+        vy: 0.0025,
+        bossId: b.id,
+        stage: b.stage,
+        createdAt: now,
+      });
+      onBossSpit?.({ bid: b.id, pid, x: originX, y: originY, vx, vy: 0.0025 });
+    } else if ((!b.attackUntil || b.attackUntil <= 0) && now >= b.nextAttackAt) {
+      b.attackUntil = now + BOSS_ATTACK_WINDUP;
+      b.nextAttackAt = now + BOSS_ATTACK_INTERVAL;
+    }
+  }
+
+  // Boss projectiles: move, arc, hit players
+  for (let i = bossProjectiles.length - 1; i >= 0; i -= 1) {
+    const bp = bossProjectiles[i];
+    bp.x += bp.vx * dtScale;
+    bp.y += bp.vy * dtScale;
+    const bBox = { x: bp.x - 10, y: bp.y - 10, w: 20, h: 20 };
+    let consumed = false;
+    for (const pl of players ?? []) {
+      if (pl.isDying || (pl.stage ?? 1) !== bp.stage) continue;
+      const plBox = { x: pl.x + 4, y: pl.y + 4, w: PLAYER_W - 8, h: PLAYER_H - 8 };
+      if (rectsOverlap(bBox, plBox)) {
+        if (!pl.isGodMode) onBossHitPlayer?.(pl.id, bp.bossId);
+        consumed = true;
+        break;
+      }
+    }
+    if (consumed || bp.x < -40 || bp.x > WORLD.width + 40 || bp.y > WORLD.height + 60 || now - bp.createdAt > BOSS_SPIT_LIFETIME) {
+      bossProjectiles.splice(i, 1);
+    }
+  }
+
   // Update powerup item respawn timers
   for (const pu of powerUps) {
     if (pu.collectedUntil && now >= pu.collectedUntil) {
@@ -152,13 +255,25 @@ export function updateStageEntities(
         break;
       }
     }
+    for (const b of bosses ?? []) {
+      if (!b.alive) continue;
+      const bHitbox = { x: b.x + 8, y: b.y + 8, w: b.w - 16, h: b.h - 16 };
+      if (rectsOverlap(pBox, bHitbox)) {
+        b.hp = Math.max(0, b.hp - 1);
+        b.hitFlashUntil = now + 120;
+        if (b.hp <= 0) b.alive = false;
+        onProjectileHitBoss?.(pr.id, b.id);
+        hit = true;
+        break;
+      }
+    }
     if (hit || pr.x < 0 || pr.x > WORLD.width || now - pr.createdAt > 3200) {
       projectiles.splice(i, 1);
     }
   }
 }
 
-export type PhysicsSoundEvent = 'jump' | 'bounce' | 'burn' | 'death';
+export type PhysicsSoundEvent = 'jump' | 'bounce' | 'burn' | 'death' | 'bossSpit';
 
 export function updatePlayerPhysics(
   p: Player,
@@ -171,6 +286,7 @@ export function updatePlayerPhysics(
   stageOptions?: {
     basePlatforms?: Platform[];
     enemies?: StageEnemy[];
+    bosses?: StageBoss[];
     powerUps?: StagePowerUp[];
     isGateUnlocked?: boolean;
     onEnterGate?: () => void;
@@ -180,12 +296,24 @@ export function updatePlayerPhysics(
         | { op: 'crumble'; stg: number; idx: number; at: number }
         | { op: 'stomp'; stg: number; id: string; until: number }
         | { op: 'powerup'; stg: number; id: string; until: number }
-        | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number },
+        | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number }
+        | { op: 'boss_hit'; stg: number; bid: string; dmg: number }
+        | { op: 'boss_died'; stg: number },
     ) => void;
     onCollectPowerUp?: (pu: StagePowerUp) => void;
+    bossProjectiles?: BossProjectile[];
+    playerRounds?: { x: number; y: number; shooterId: string; damage?: number }[];
+    onPlayerHitByRound?: (victimId: string, shooterId: string, dmg: number) => void;
   },
 ) {
   const now = Date.now();
+
+  // Jailed: dibekukan admin, tidak bisa gerak & lompat sampai jailedUntil lewat
+  if (p.jailedUntil && p.jailedUntil > now) {
+    p.vx = 0;
+    p.vy = 0;
+    return;
+  }
 
   // Super Mario Bros style death animation sequence when hitting spikes or enemies
   if (p.isDying) {
@@ -376,6 +504,17 @@ export function updatePlayerPhysics(
     }
   }
 
+  // Conveyor belt: platform beroda yang mendorong karakter otomatis
+  for (const plat of allPlatforms) {
+    if (plat.type !== 'conveyor') continue;
+    const standingOn = p.onGround && Math.abs(p.y + PLAYER_H - plat.y) <= 6 && p.x + PLAYER_W > plat.x && p.x < plat.x + plat.w;
+    if (!standingOn) continue;
+    const dir = plat.conveyorDir ?? 1;
+    const spd = plat.conveyorSpeed ?? 1.8;
+    p.x += dir * spd * dtScale;
+    p.x = Math.max(0, Math.min(WORLD.width - PLAYER_W, p.x));
+  }
+
   // Collectible Power-Up Items (Blaster & Stars)
   const powerUps = stageOptions?.powerUps ?? [];
   for (const pu of powerUps) {
@@ -447,6 +586,41 @@ export function updatePlayerPhysics(
     return;
   }
 
+  // Boss collisions: sentuh boss = KO (kecuali god mode / super cat)
+  const bosses = stageOptions?.bosses ?? [];
+  for (const b of bosses) {
+    if (!b.alive) continue;
+    const bHitbox = { x: b.x + 10, y: b.y + 10, w: b.w - 20, h: b.h - 20 };
+    if (!rectsOverlap(box, bHitbox)) continue;
+    if (p.isGodMode) continue;
+    p.isDying = true;
+    p.deathStartedAt = now;
+    p.vx = 0;
+    p.vy = -13.2;
+    p.onGround = false;
+    p.ridingPlayerId = null;
+    p.lastCarrierX = undefined;
+    p.ridingPlatform = null;
+    onSoundEvent?.('death');
+    return;
+  }
+
+  // Boss projectile collisions: kena ludah boss = KO (kecuali god mode)
+  for (const bp of stageOptions?.bossProjectiles ?? []) {
+    if (!rectsOverlap(box, { x: bp.x - 10, y: bp.y - 10, w: 20, h: 20 })) continue;
+    if (p.isGodMode) continue;
+    p.isDying = true;
+    p.deathStartedAt = now;
+    p.vx = 0;
+    p.vy = -13.2;
+    p.onGround = false;
+    p.ridingPlayerId = null;
+    p.lastCarrierX = undefined;
+    p.ridingPlatform = null;
+    onSoundEvent?.('death');
+    return;
+  }
+
   // Exit Gate Portal check (when all questions in current stage are answered)
   if (stageOptions?.isGateUnlocked && stageOptions.onEnterGate) {
     const gateBox = { x: DECOR.gate.x + 22, y: DECOR.gate.y + 24, w: 86, h: 136 };
@@ -459,6 +633,26 @@ export function updatePlayerPhysics(
   for (const other of otherPlayers) {
     if (other.id === p.id) continue;
     if ((other.stage ?? 1) !== (p.stage ?? 1)) continue;
+
+    // Admin weapon rounds (laser/minigun/mega laser): kena player lain = KO (kecuali god mode)
+    for (const pr of stageOptions?.playerRounds ?? []) {
+      if (pr.shooterId === p.id) continue;
+      const rBox = { x: pr.x - 14, y: pr.y - 9, w: 28, h: 18 };
+      if (rectsOverlap(rBox, box) && !p.isGodMode) {
+        p.isDying = true;
+        p.deathStartedAt = now;
+        p.vx = 0;
+        p.vy = -13.2;
+        p.onGround = false;
+        p.ridingPlayerId = null;
+        p.lastCarrierX = undefined;
+        p.ridingPlatform = null;
+        onSoundEvent?.('death');
+        stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1);
+        return;
+      }
+    }
+
     const headTop = other.y + 4; // allow feet to rest naturally on top of cat head
     const overlapX = p.x + PLAYER_W > other.x + 4 && p.x < other.x + PLAYER_W - 4;
     if (!overlapX) continue;

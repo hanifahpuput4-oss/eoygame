@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Camera } from '@/game-engine/camera/camera';
-import { updatePlayerPhysics, updateStageEntities, type Player, type Projectile, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
-import { drawWorld, drawPlatforms, drawEnemies, drawPowerUps, drawProjectiles, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
+import { updatePlayerPhysics, updateStageEntities, type Player, type Projectile, type BossProjectile, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
+import { drawWorld, drawPlatforms, drawEnemies, drawPowerUps, drawProjectiles, drawCat, drawBosses, drawBossProjectiles, type BubbleEntry } from '@/game-engine/entities/render';
 import {
   PHYSICS,
   PLATFORMS,
@@ -14,7 +14,9 @@ import {
   getStageBasePlatforms,
   createStageEnemies,
   createStagePowerUps,
+  createStageBosses,
   type Platform,
+  type StageBoss,
   type StageEnemy,
   type StagePowerUp,
 } from '@/game-engine/maps/world';
@@ -80,7 +82,7 @@ type RoomData = {
 function resolveTotalStages(room: RoomData | null): number {
   const configured = Number(room?.settings?.stageCount);
   if (Number.isFinite(configured) && configured >= 1) {
-    return Math.min(4, Math.max(1, Math.round(configured)));
+    return Math.min(10, Math.max(1, Math.round(configured)));
   }
   return 4;
 }
@@ -194,7 +196,7 @@ export default function GamePage() {
   const playersRef = useRef<Map<string, Player>>(new Map());
   const myIdRef = useRef<string>('');
   const keysRef = useRef({ left: false, right: false, jump: false });
-  const draggingRef = useRef<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
+  const draggingRef = useRef<{ active: boolean; x: number; y: number; moved: boolean }>({ active: false, x: 0, y: 0, moved: false });
   const lastSentRef = useRef(0);
   const chatBoxRef = useRef<HTMLDivElement>(null);
 
@@ -237,18 +239,23 @@ export default function GamePage() {
   const questionBlocksRef = useRef<Platform[]>([]);
   const [currentStage, setCurrentStage] = useState(1);
   const currentStageRef = useRef(1);
-  const [totalStages, setTotalStages] = useState(4);
-  const totalStagesRef = useRef(4);
+  const [totalStages, setTotalStages] = useState(10);
+  const totalStagesRef = useRef(10);
   const stagePlatformsRef = useRef<Platform[]>(getStageBasePlatforms(1));
   const stageEnemiesRef = useRef<StageEnemy[]>(createStageEnemies(1));
   const stagePowerUpsRef = useRef<StagePowerUp[]>(createStagePowerUps(1));
+  const stageBossesRef = useRef<StageBoss[]>(createStageBosses(1));
+  const bossDiedBannerRef = useRef<Set<number>>(new Set());
   const projectilesRef = useRef<Projectile[]>([]);
+  const bossProjectilesRef = useRef<BossProjectile[]>([]);
   const lastShotAtRef = useRef<number>(0);
   const [ammoCount, setAmmoCount] = useState<number>(0);
   const [isGodMode, setIsGodMode] = useState(false);
   const isGodModeRef = useRef(false);
   const [mirrorTarget, setMirrorTarget] = useState<string | null>(null);
   const mirrorTargetRef = useRef<{ userId: string; username: string } | 'all' | null>(null);
+  // Ref ini dipakai sync loop untuk minta status jawaban si target mirror (bukan jawaban staff sendiri)
+  const mirrorFetchTargetRef = useRef<string | null>(null);
   const [stageBanner, setStageBanner] = useState<string | null>(null);
   const stageBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scores, setScores] = useState<Record<string, number>>({});
@@ -403,6 +410,8 @@ export default function GamePage() {
     stagePlatformsRef.current = getStageBasePlatforms(stg);
     stageEnemiesRef.current = createStageEnemies(stg);
     stagePowerUpsRef.current = createStagePowerUps(stg);
+    stageBossesRef.current = createStageBosses(stg);
+    bossDiedBannerRef.current.delete(stg);
     projectilesRef.current = [];
     setAmmoCount(0);
 
@@ -411,7 +420,7 @@ export default function GamePage() {
     const uid = opts?.seedId || myIdRef.current || 'anon';
     
     // Default Guru & Admin: kotak soal bersih/hilang total, kecuali sedang mirror!
-    if (isStaff && !mirrorTargetRef.current) {
+    if (isStaffRole(myRoleRef.current) && !mirrorTargetRef.current) {
       questionBlocksRef.current = [];
     } else {
       const mirror = mirrorTargetRef.current;
@@ -468,14 +477,27 @@ export default function GamePage() {
     if (opts?.showToast) {
       soundEngine.playAnswerCorrect();
       const label =
-        stg === 4
+        stg === 10
+          ? `👑 STAGE 10/${tStg}: Menara Final Boss — Kuasai Void & Jadi Legenda! (${stageQs.length} Soal)`
+          : stg === 9
+          ? `🦠 STAGE 9/${tStg}: Sarang Virus — Hancurkan Sarang & Bertahan Hidup! (${stageQs.length} Soal)`
+          : stg === 8
+          ? `🏜️ STAGE 8/${tStg}: Gurun Reruntuhan — Lolos dari Pasir & Jurang! (${stageQs.length} Soal)`
+          : stg === 7
+          ? `❄️ STAGE 7/${tStg}: Samudra Es — Awas Licin & Retakkan Es! (${stageQs.length} Soal)`
+          : stg === 6
+          ? `⚙️ STAGE 6/${tStg}: Kota Roda Gigi — Hindari Mesin & Gir Berputar! (${stageQs.length} Soal)`
+          : stg === 5
+          ? `🌿 STAGE 5/${tStg}: Hutan Neon Biolumin — Jelajahi Rimba & Kumpulkan Power-Up! (${stageQs.length} Soal)`
+          : stg === 4
           ? `⚡ STAGE 4/${tStg}: Galaksi Cyber — Ambil Power-Up & Tembak Lawan Monster Virus! (${stageQs.length} Soal)`
           : stg === 3
           ? `🔥 STAGE 3/${tStg}: Kastil Magma — Waspada Lahar Panas, Lift Vulkanik & Monster Virus! (${stageQs.length} Soal)`
           : stg === 2
           ? `🌅 STAGE 2/${tStg}: Menara Sunset — Awas Pijakan Rapuh, Lift & Patroli Virus! (${stageQs.length} Soal)`
           : `🏞️ STAGE 1/${tStg}: Lembah Kampus — Jawab Semua Soal untuk Buka Gerbang! (${stageQs.length} Soal)`;
-      setStageBanner(label);
+      const bossLabel = createStageBosses(stg)[0];
+      setStageBanner(bossLabel ? `${label} ⚔️ BOSS: ${bossLabel.name} — Tembak sampai mati untuk dapat kunci!` : label);
       if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
       stageBannerTimerRef.current = setTimeout(() => {
         setStageBanner(null);
@@ -496,6 +518,10 @@ export default function GamePage() {
     questionRef.current = null;
     setQuestion(null);
     setFeedback(null);
+    // Guru/Admin selalu mulai dengan mirror OFF saat rejoin
+    mirrorTargetRef.current = null;
+    setMirrorTarget(null);
+    questionBlocksRef.current = [];
     if (myIdRef.current) {
       setScores((prev) => ({ ...prev, [myIdRef.current]: 0 }));
       const shuffleSeed = `${myIdRef.current}:${roomId}:${Date.now()}`;
@@ -579,6 +605,37 @@ export default function GamePage() {
         createdAt: Date.now(),
       });
       soundEngine.playShoot();
+    } else if (evt.op === 'boss_hit') {
+      const b = stageBossesRef.current.find((x) => x.id === evt.bid);
+      if (b && b.alive) {
+        b.hp = Math.max(0, b.hp - evt.dmg);
+        b.hitFlashUntil = Date.now() + 120;
+        if (b.hp <= 0) b.alive = false;
+      }
+    } else if (evt.op === 'boss_spit') {
+      if (bossProjectilesRef.current.some((bp) => bp.id === evt.pid)) return;
+      bossProjectilesRef.current.push({
+        id: evt.pid,
+        x: evt.x,
+        y: evt.y,
+        vx: evt.vx,
+        vy: evt.vy,
+        bossId: evt.bid,
+        stage: evt.stg,
+        createdAt: Date.now(),
+      });
+      soundEngine.playShoot();
+    } else if (evt.op === 'boss_died') {
+      for (const b of stageBossesRef.current) b.alive = false;
+      if (!bossDiedBannerRef.current.has(evt.stg)) {
+        bossDiedBannerRef.current.add(evt.stg);
+        soundEngine.playPowerUp();
+        setStageBanner('🔑 Boss dikalahkan! Kunci didapat, gerbang terbuka!');
+        if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
+        stageBannerTimerRef.current = setTimeout(() => {
+          setStageBanner(null);
+        }, 4200);
+      }
     }
   }, []);
 
@@ -658,7 +715,7 @@ export default function GamePage() {
         setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
         setCorrectCount(answeredIdsRef.current.size);
         soundEngine.playAnswerCorrect();
-        setStageBanner('🌟 Soal telah dibantu dijawab oleh Guru/Admin! (+0 Poin, Misi Tercatat)');
+        setStageBanner('⭐ Soal sudah dibantu jawab');
       }
     }
   }, [applyStage]);
@@ -916,8 +973,8 @@ export default function GamePage() {
       }
       if (!data.kicked) {
         if (data.answerResults && typeof data.answerResults === 'object') {
-          for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
-            answerResultsRef.current.set(qid, Boolean(okAns));
+          for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean | 'assisted'>)) {
+            answerResultsRef.current.set(qid, okAns === 'assisted' ? 'assisted' : Boolean(okAns));
           }
         }
         if (Array.isArray(data.answeredQuestionIds)) {
@@ -933,6 +990,10 @@ export default function GamePage() {
         return;
       }
 
+      if (isStaffRole(p.role)) {
+        mirrorTargetRef.current = null;
+        setMirrorTarget(null);
+      }
       setRoom(r);
       roomRef.current = r;
       const myEntry = (r.players ?? []).find((pl: RoomPlayer) => pl.userId === p.id);
@@ -1442,6 +1503,62 @@ export default function GamePage() {
           ably.publishObstacle(stompEvt);
           pendingObstacleUploadRef.current = stompEvt;
         },
+        stageBossesRef.current,
+        (projId, bossId) => {
+          soundEngine.playZap();
+          const b = stageBossesRef.current.find((x) => x.id === bossId);
+          const curStg = currentStageRef.current;
+          if (!b) return;
+          const wasAlive = b.alive;
+          const hitEvt = {
+            op: 'boss_hit' as const,
+            stg: curStg,
+            bid: bossId,
+            dmg: 1,
+          };
+          applyObstacleEvent(hitEvt);
+          ably.publishObstacle(hitEvt);
+          pendingObstacleUploadRef.current = hitEvt;
+          if (wasAlive && !b.alive && !bossDiedBannerRef.current.has(curStg)) {
+            const dieEvt = { op: 'boss_died' as const, stg: curStg };
+            applyObstacleEvent(dieEvt);
+            ably.publishObstacle(dieEvt);
+            pendingObstacleUploadRef.current = dieEvt;
+          }
+        },
+        bossProjectilesRef.current,
+        (spit) => {
+          const curStg = currentStageRef.current;
+          const evt = {
+            op: 'boss_spit' as const,
+            stg: curStg,
+            bid: spit.bid,
+            pid: spit.pid,
+            x: spit.x,
+            y: spit.y,
+            vx: spit.vx,
+            vy: spit.vy,
+          };
+          applyObstacleEvent(evt);
+          ably.publishObstacle(evt);
+          soundEngine.playShoot();
+        },
+        (playerId, bossId) => {
+          const victim = playersRef.current.get(playerId);
+          if (!victim) return;
+          const now = Date.now();
+          victim.isDying = true;
+          victim.deathStartedAt = now;
+          victim.vx = 0;
+          victim.vy = -13.2;
+          victim.onGround = false;
+          victim.ridingPlayerId = null;
+          victim.lastCarrierX = undefined;
+          victim.ridingPlatform = null;
+          soundEngine.playDeath();
+          void bossId;
+        },
+        Array.from(playersRef.current.values()),
       );
 
       const curStage = currentStageRef.current;
@@ -1452,7 +1569,8 @@ export default function GamePage() {
       for (const sq of curStageQs) {
         if (answeredIdsRef.current.has(sq.id)) stageAnswered += 1;
       }
-      const isGateUnlocked = isStaff || (stageTotal > 0 && stageAnswered >= stageTotal);
+      const bossAlive = stageBossesRef.current.some((b) => b.alive);
+      const isGateUnlocked = isStaff || (stageTotal > 0 && stageAnswered >= stageTotal && !bossAlive);
 
       const dynBlocks: Platform[] = questionBlocksRef.current.map((b) => {
         const qid = b.questionId ?? '';
@@ -1527,6 +1645,7 @@ export default function GamePage() {
             basePlatforms: stagePlatformsRef.current,
             enemies: stageEnemiesRef.current,
             powerUps: stagePowerUpsRef.current,
+            bosses: stageBossesRef.current,
             isGateUnlocked,
             isStaff,
             onObstacleEvent: (evt) => {
@@ -1607,9 +1726,12 @@ export default function GamePage() {
         stageAnswered,
         stageTotal,
         isGateUnlocked,
+        bossAlive: stageBossesRef.current.some((b) => b.alive),
       });
       drawPlatforms(ctx, [...stagePlatformsRef.current, ...dynBlocks], curStage);
       drawEnemies(ctx, stageEnemiesRef.current, syncedNow);
+      drawBosses(ctx, stageBossesRef.current, syncedNow);
+      drawBossProjectiles(ctx, bossProjectilesRef.current, syncedNow);
       drawPowerUps(ctx, stagePowerUpsRef.current, syncedNow);
       drawProjectiles(ctx, projectilesRef.current, syncedNow);
 
@@ -1833,6 +1955,10 @@ export default function GamePage() {
           chatCursor: chatCursorRef.current,
           justKicked: justKickedInSessionRef.current,
         };
+        // Saat mirror siswa tertentu, minta status jawaban siswa itu agar warna kotak real-time
+        if (mirrorFetchTargetRef.current) {
+          payload.targetId = mirrorFetchTargetRef.current;
+        }
         // Saat WebSocket sudah terhubung, posisi sudah di-stream real-time & disimpan ke DB oleh ws-hub/pos,
       // sehingga room-sync tidak perlu mengirim duplikat payload koordinat lagi.
       if (me && !ably.connected) {
@@ -1969,9 +2095,17 @@ export default function GamePage() {
           if (Array.isArray(data.answeredQuestionIds) && data.answeredQuestionIds.length === 0) {
             answerResultsRef.current.clear();
           } else {
-            for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
-              answerResultsRef.current.set(qid, Boolean(okAns));
+            for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean | 'assisted'>)) {
+              answerResultsRef.current.set(qid, okAns === 'assisted' ? 'assisted' : Boolean(okAns));
             }
+          }
+        }
+        // Saat mirror siswa tertentu, jawaban yg masuk adalah milik siswa itu:
+        // refresh jawaban siswa yang sudah dihapus dari server (misal habis /reset)
+        if (mirrorFetchTargetRef.current && Array.isArray(data.answeredQuestionIds)) {
+          const serverSet = new Set(data.answeredQuestionIds as string[]);
+          for (const qid of Array.from(answerResultsRef.current.keys())) {
+            if (!serverSet.has(qid)) answerResultsRef.current.delete(qid);
           }
         }
         if (Array.isArray(data.answeredQuestionIds)) {
@@ -2057,17 +2191,48 @@ export default function GamePage() {
   }, [ably.chatMessages]);
 
   function onPointerDown(e: React.PointerEvent) {
-    draggingRef.current = { active: true, x: e.clientX, y: e.clientY };
+    draggingRef.current = { active: true, x: e.clientX, y: e.clientY, moved: false };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     setChatMinimized(true);
   }
   function onPointerMove(e: React.PointerEvent) {
     if (!draggingRef.current.active || !cameraRef.current) return;
-    cameraRef.current.panBy(e.clientX - draggingRef.current.x, e.clientY - draggingRef.current.y);
-    draggingRef.current = { active: true, x: e.clientX, y: e.clientY };
+    const dx = e.clientX - draggingRef.current.x;
+    const dy = e.clientY - draggingRef.current.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) draggingRef.current.moved = true;
+    cameraRef.current.panBy(dx, dy);
+    draggingRef.current = { active: true, x: e.clientX, y: e.clientY, moved: draggingRef.current.moved };
   }
-  function onPointerUp() {
+  function onPointerUp(e: React.PointerEvent) {
+    const wasDrag = draggingRef.current.moved;
     draggingRef.current.active = false;
+    // Admin: klik (bukan drag) langsung pada kotak soal untuk membukanya
+    if (
+      wasDrag ||
+      myRoleRef.current !== 'admin' ||
+      questionRef.current ||
+      questionBlocksRef.current.length === 0
+    )
+      return;
+    const canvas = canvasRef.current;
+    const cam = cameraRef.current;
+    if (!canvas || !cam) return;
+    const rect = canvas.getBoundingClientRect();
+    const worldX = (e.clientX - rect.left) / cam.zoom + cam.x;
+    const worldY = (e.clientY - rect.top) / cam.zoom + cam.y;
+    const hit = questionBlocksRef.current.find(
+      (b) => worldX >= b.x && worldX <= b.x + b.w && worldY >= b.y && worldY <= b.y + b.h,
+    );
+    if (!hit || !hit.questionId) return;
+    const res = answerResultsRef.current.get(hit.questionId);
+    if (res === true || res === 'assisted') return;
+    const found = levelQuestionsRef.current.find((q) => q.id === hit.questionId);
+    if (!found) return;
+    soundEngine.playQuestionOpen();
+    questionRef.current = found;
+    setQuestion(found);
+    setQuestionMinimized(false);
+    setSelected('');
   }
   function onWheel(e: React.WheelEvent) {
     e.preventDefault();
@@ -2177,7 +2342,7 @@ export default function GamePage() {
     const isAdmin = myRoleRef.current === 'admin';
 
     if (!isStaff) {
-      addSystemChatMessage('Perintah command (/) hanya dapat digunakan oleh Guru dan Administrator.');
+      // Siswa ketik '/' dianggap chat biasa, tanpa pesan error
       return;
     }
 
@@ -2403,6 +2568,8 @@ export default function GamePage() {
       }
       if (targetQuery === 'all') {
         mirrorTargetRef.current = 'all';
+        mirrorFetchTargetRef.current = null;
+        answerResultsRef.current.clear();
         setMirrorTarget('Seluruh Kelas (Bonus)');
         const curStg = currentStageRef.current;
         const curStageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
@@ -2423,6 +2590,7 @@ export default function GamePage() {
       }
 
       mirrorTargetRef.current = { userId: target.id, username: target.username };
+      mirrorFetchTargetRef.current = target.id;
       setMirrorTarget(target.username);
       const curStg = currentStageRef.current;
       const curStageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
@@ -2431,6 +2599,22 @@ export default function GamePage() {
         `${target.id}:${roomId}:s${curStg}`,
         curStg,
       );
+      // Ambil status jawaban asli siswa ini: hijau = benar, merah = salah, biru = dibantuin, kuning = belum
+      answerResultsRef.current.clear();
+      fetch('/api/game/room-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, targetId: target.id }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d) return;
+          const results = (d.answerResults ?? {}) as Record<string, boolean | 'assisted'>;
+          for (const [qid, okAns] of Object.entries(results)) {
+            answerResultsRef.current.set(qid, okAns === 'assisted' ? 'assisted' : Boolean(okAns));
+          }
+        })
+        .catch(() => {});
       addSystemChatMessage(`🔍 Mode Mirroring '${target.username}' aktif! Kotak soal siswa dimunculkan di map.`);
       soundEngine.playPowerUp();
       return;
@@ -2438,6 +2622,7 @@ export default function GamePage() {
 
     if (cmd === 'unset' && arg1 === 'mirror') {
       mirrorTargetRef.current = null;
+      mirrorFetchTargetRef.current = null;
       setMirrorTarget(null);
       questionBlocksRef.current = [];
       addSystemChatMessage('Mode Mirror dimatikan. Kotak soal disembunyikan kembali dari pandangan.');
@@ -2597,6 +2782,12 @@ export default function GamePage() {
       setCorrectCount(answeredIdsRef.current.size);
 
       ably.publishCommand({ op: 'assist_answer', targetId, qid: answeredId });
+      // Persist ke database supaya centang biru bertahan walau siswa rejoin
+      fetch('/api/game/assist-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, targetId, questionId: answeredId, answer: selected }),
+      }).catch(() => {});
       soundEngine.playAnswerCorrect();
       setStageBanner(`🟦 Berhasil membantu soal untuk ${targetName}! (+0 Poin, Misi Tercatat)`);
       if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
@@ -2798,6 +2989,7 @@ export default function GamePage() {
                     title="Tutup Mode Mirror (/unset mirror)"
                     onClick={() => {
                       mirrorTargetRef.current = null;
+                      mirrorFetchTargetRef.current = null;
                       setMirrorTarget(null);
                       questionBlocksRef.current = [];
                     }}

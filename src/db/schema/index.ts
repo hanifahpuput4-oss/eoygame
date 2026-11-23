@@ -295,6 +295,7 @@ export const playerAnswers = sqliteTable(
     answer: text('answer').notNull(),
     isCorrect: integer('is_correct', { mode: 'boolean' }).notNull(),
     pointsEarned: integer('points_earned').notNull().default(0),
+    assisted: integer('assisted', { mode: 'boolean' }).notNull().default(false),
     timeSpent: integer('time_spent').notNull().default(0),
     answeredAt: integer('answered_at', { mode: 'timestamp' })
       .notNull()

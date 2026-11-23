@@ -1,4 +1,4 @@
-import { DECOR, WORLD, type Platform, type StageEnemy, type StagePowerUp } from '../maps/world';
+import { DECOR, WORLD, type Platform, type StageBoss, type StageEnemy, type StagePowerUp } from '../maps/world';
 import type { Projectile } from '../physics/physics';
 
 export type StageRenderInfo = {
@@ -7,6 +7,7 @@ export type StageRenderInfo = {
   stageAnswered: number;
   stageTotal: number;
   isGateUnlocked: boolean;
+  bossAlive?: boolean;
 };
 
 const AVATAR_COLORS: Record<string, { body: string; belly: string; ear: string }> = {
@@ -344,6 +345,48 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
     sky.addColorStop(0.7, '#db2777');
     sky.addColorStop(0.9, '#f97316');
     sky.addColorStop(1, '#fde047');
+  } else if (stage === 5) {
+    // Hutan Neon Biolumin: deep purple-teal night sky
+    sky.addColorStop(0, '#020617');
+    sky.addColorStop(0.3, '#0f172a');
+    sky.addColorStop(0.55, '#134e4a');
+    sky.addColorStop(0.8, '#0d9488');
+    sky.addColorStop(1, '#2dd4bf');
+  } else if (stage === 6) {
+    // Kota Roda Gigi: smoggy industrial dusk
+    sky.addColorStop(0, '#1c1917');
+    sky.addColorStop(0.35, '#44403c');
+    sky.addColorStop(0.65, '#78716c');
+    sky.addColorStop(0.85, '#b45309');
+    sky.addColorStop(1, '#d97706');
+  } else if (stage === 7) {
+    // Samudra Es: pale glacial blue
+    sky.addColorStop(0, '#0c4a6e');
+    sky.addColorStop(0.35, '#0ea5e9');
+    sky.addColorStop(0.65, '#7dd3fc');
+    sky.addColorStop(0.88, '#bae6fd');
+    sky.addColorStop(1, '#e0f2fe');
+  } else if (stage === 8) {
+    // Gurun Reruntuhan: scorched amber haze
+    sky.addColorStop(0, '#7c2d12');
+    sky.addColorStop(0.35, '#c2410c');
+    sky.addColorStop(0.65, '#ea580c');
+    sky.addColorStop(0.85, '#fbbf24');
+    sky.addColorStop(1, '#fde68a');
+  } else if (stage === 9) {
+    // Sarang Virus: sickly organic green-red
+    sky.addColorStop(0, '#0a0f0a');
+    sky.addColorStop(0.3, '#14532d');
+    sky.addColorStop(0.6, '#166534');
+    sky.addColorStop(0.85, '#4d7c0f');
+    sky.addColorStop(1, '#84cc16');
+  } else if (stage === 10) {
+    // Menara Final Boss: void purple-black with blood red horizon
+    sky.addColorStop(0, '#000000');
+    sky.addColorStop(0.25, '#0b0514');
+    sky.addColorStop(0.5, '#1e1b4b');
+    sky.addColorStop(0.75, '#4c0519');
+    sky.addColorStop(1, '#7f1d1d');
   } else {
     sky.addColorStop(0, '#4b94e6');
     sky.addColorStop(0.65, '#8ec8fa');
@@ -351,27 +394,145 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   }
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, WORLD.width, WORLD.height);
-
-  if (stage === 4) {
-    // Cyber galaxy nebula and orbiting star grid
+  if (stage === 5) {
+    // Biolumin: fireflies & glowing spores drifting
     ctx.save();
-    for (let sx = 70; sx < WORLD.width; sx += 170) {
-      const sy = 40 + ((sx * 29) % 200);
-      const twinkle = 0.5 + 0.5 * Math.sin(now * 0.005 + sx);
-      ctx.fillStyle = `rgba(56, 189, 248, ${twinkle})`;
+    for (let fx = 30; fx < WORLD.width; fx += 90) {
+      const fy = 120 + ((fx * 53) % 420) + Math.sin(now * 0.002 + fx) * 14;
+      const glow = 0.35 + 0.55 * Math.sin(now * 0.004 + fx * 1.7);
+      const col = fx % 180 < 90 ? '163, 230, 53' : '45, 212, 191';
+      ctx.fillStyle = `rgba(${col}, ${Math.max(0, glow)})`;
       ctx.beginPath();
-      ctx.arc(sx, sy, 2.3, 0, Math.PI * 2);
+      ctx.arc(fx, fy, 2.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(${col}, ${Math.max(0, glow) * 0.25})`;
+      ctx.beginPath();
+      ctx.arc(fx, fy, 8, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (const nebX of [1000, 2800, 4600]) {
-      const nebGrad = ctx.createRadialGradient(nebX, 480, 20, nebX, 480, 260);
-      nebGrad.addColorStop(0, 'rgba(192, 132, 252, 0.65)');
-      nebGrad.addColorStop(0.45, 'rgba(56, 189, 248, 0.4)');
-      nebGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
-      ctx.fillStyle = nebGrad;
+    ctx.restore();
+  } else if (stage === 6) {
+    // Kota Roda Gigi: giant rotating gear silhouettes + smoke
+    ctx.save();
+    for (const gx of [700, 2300, 3900, 5100]) {
+      const gy = 200 + (gx % 160);
+      const r = 90 + (gx % 60);
+      ctx.strokeStyle = 'rgba(28, 25, 23, 0.55)';
+      ctx.lineWidth = 14;
       ctx.beginPath();
-      ctx.arc(nebX, 480, 260, 0, Math.PI * 2);
+      ctx.arc(gx, gy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 8;
+      for (let a = 0; a < 8; a += 1) {
+        const ang = now * 0.0006 * (gx % 2 === 0 ? 1 : -1) + (a / 8) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(gx + Math.cos(ang) * r, gy + Math.sin(ang) * r);
+        ctx.lineTo(gx + Math.cos(ang) * (r + 22), gy + Math.sin(ang) * (r + 22));
+        ctx.stroke();
+      }
+    }
+    for (let sx = 200; sx < WORLD.width; sx += 520) {
+      const puff = ((now * 0.03 + sx) % 300);
+      ctx.fillStyle = `rgba(120, 113, 108, ${0.4 - puff / 900})`;
+      ctx.beginPath();
+      ctx.arc(sx + Math.sin(now * 0.001 + sx) * 10, 240 - puff, 16 + puff * 0.12, 0, Math.PI * 2);
       ctx.fill();
+    }
+    ctx.restore();
+  } else if (stage === 7) {
+    // Samudra Es: aurora ribbons + falling snow
+    ctx.save();
+    for (const ax of [800, 2600, 4400]) {
+      ctx.strokeStyle = 'rgba(74, 222, 128, 0.3)';
+      ctx.lineWidth = 26;
+      ctx.beginPath();
+      for (let x = 0; x <= 420; x += 30) {
+        const y = 140 + Math.sin(x * 0.02 + now * 0.001 + ax) * 44;
+        if (x === 0) ctx.moveTo(ax - 210 + x, y);
+        else ctx.lineTo(ax - 210 + x, y);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
+      ctx.lineWidth = 14;
+      ctx.stroke();
+    }
+    for (let sx = 20; sx < WORLD.width; sx += 46) {
+      const sy = (now * 0.06 + sx * 7) % (WORLD.height - 60);
+      ctx.fillStyle = 'rgba(224, 242, 254, 0.85)';
+      ctx.beginPath();
+      ctx.arc(sx + Math.sin(now * 0.002 + sx) * 8, sy, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  } else if (stage === 8) {
+    // Gurun Reruntuhan: heat haze + sandstorm gusts
+    ctx.save();
+    const haze = ctx.createLinearGradient(0, 300, 0, WORLD.groundY);
+    haze.addColorStop(0, 'rgba(253, 230, 138, 0)');
+    haze.addColorStop(1, 'rgba(253, 230, 138, 0.28)');
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, 300, WORLD.width, WORLD.groundY - 300);
+    for (let gx = 0; gx < WORLD.width; gx += 340) {
+      const drift = ((now * 0.12 + gx * 3) % 260);
+      ctx.strokeStyle = 'rgba(254, 243, 199, 0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(gx + drift, 320 + (gx % 200));
+      ctx.quadraticCurveTo(gx + drift + 30, 340 + (gx % 200), gx + drift + 70, 330 + (gx % 200));
+      ctx.stroke();
+    }
+    ctx.restore();
+  } else if (stage === 9) {
+    // Sarang Virus: pulsating organic blobs & drifting spores
+    ctx.save();
+    for (const bx of [600, 1900, 3200, 4600]) {
+      const by = 240 + (bx % 180);
+      const pulse = 1 + 0.12 * Math.sin(now * 0.004 + bx);
+      const blobGrad = ctx.createRadialGradient(bx, by, 8, bx, by, 90 * pulse);
+      blobGrad.addColorStop(0, 'rgba(132, 204, 22, 0.5)');
+      blobGrad.addColorStop(0.6, 'rgba(63, 98, 18, 0.35)');
+      blobGrad.addColorStop(1, 'rgba(63, 98, 18, 0)');
+      ctx.fillStyle = blobGrad;
+      ctx.beginPath();
+      ctx.arc(bx, by, 90 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let sx = 40; sx < WORLD.width; sx += 120) {
+      const sy = (now * 0.04 + sx * 11) % 520;
+      ctx.fillStyle = 'rgba(163, 230, 53, 0.6)';
+      ctx.beginPath();
+      ctx.arc(sx + Math.sin(now * 0.003 + sx) * 12, 560 - sy, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  } else if (stage === 10) {
+    // Menara Final: void stars + red lightning strikes
+    ctx.save();
+    for (let sx = 30; sx < WORLD.width; sx += 110) {
+      const sy = 30 + ((sx * 31) % 300);
+      const twinkle = 0.4 + 0.6 * Math.sin(now * 0.006 + sx);
+      ctx.fillStyle = `rgba(226, 232, 240, ${Math.max(0, twinkle)})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const boltPhase = (now % 3000) / 3000;
+    if (boltPhase < 0.12) {
+      const alpha = 1 - boltPhase / 0.12;
+      for (const bx of [1200, 3000, 4800]) {
+        ctx.strokeStyle = `rgba(239, 68, 68, ${alpha * 0.85})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        let lx = bx;
+        let ly = 0;
+        ctx.moveTo(lx, ly);
+        while (ly < 560) {
+          lx += Math.sin(ly * 0.05 + bx) * 36;
+          ly += 70;
+          ctx.lineTo(lx, ly);
+        }
+        ctx.stroke();
+      }
     }
     ctx.restore();
   } else if (stage === 3) {
@@ -428,7 +589,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   }
 
   // Soft distant rolling hills
-  ctx.fillStyle = stage === 4 ? 'rgba(30, 27, 75, 0.5)' : stage === 3 ? 'rgba(69, 10, 10, 0.5)' : stage === 2 ? 'rgba(88, 28, 135, 0.38)' : 'rgba(116, 198, 122, 0.35)';
+  ctx.fillStyle = stage === 4 ? 'rgba(30, 27, 75, 0.5)' : stage === 3 ? 'rgba(69, 10, 10, 0.5)' : stage === 2 ? 'rgba(88, 28, 135, 0.38)' : stage === 5 ? 'rgba(4, 47, 46, 0.55)' : stage === 6 ? 'rgba(28, 25, 23, 0.6)' : stage === 7 ? 'rgba(12, 74, 110, 0.4)' : stage === 8 ? 'rgba(124, 45, 18, 0.35)' : stage === 9 ? 'rgba(20, 83, 45, 0.5)' : stage === 10 ? 'rgba(11, 5, 20, 0.65)' : 'rgba(116, 198, 122, 0.35)';
   for (let hx = 0; hx < WORLD.width; hx += 460) {
     ctx.beginPath();
     ctx.arc(hx + 230, WORLD.groundY + 70, 290, Math.PI, 0);
@@ -436,7 +597,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   }
 
   // Fluffy clouds
-  ctx.fillStyle = stage === 4 ? 'rgba(30, 41, 59, 0.85)' : stage === 3 ? 'rgba(68, 24, 24, 0.85)' : stage === 2 ? 'rgba(253, 186, 116, 0.78)' : 'rgba(255,255,255,0.92)';
+  ctx.fillStyle = stage === 4 ? 'rgba(30, 41, 59, 0.85)' : stage === 3 ? 'rgba(68, 24, 24, 0.85)' : stage === 2 ? 'rgba(253, 186, 116, 0.78)' : stage === 5 ? 'rgba(13, 148, 136, 0.5)' : stage === 6 ? 'rgba(87, 83, 78, 0.8)' : stage === 7 ? 'rgba(224, 242, 254, 0.9)' : stage === 8 ? 'rgba(254, 215, 170, 0.7)' : stage === 9 ? 'rgba(74, 124, 15, 0.6)' : stage === 10 ? 'rgba(30, 10, 30, 0.85)' : 'rgba(255,255,255,0.92)';
   for (const c of DECOR.clouds) {
     ctx.beginPath();
     ctx.arc(c.x, c.y, 26 * c.s, 0, Math.PI * 2);
@@ -447,8 +608,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
 
   // Centerpiece building (School in Stage 1, Cyber Sunset Tower in Stage 2, Magma Citadel in Stage 3, Orbital Cyber Station in Stage 4)
   const school = DECOR.school;
-  ctx.fillStyle = stage === 4 ? '#090d16' : stage === 3 ? '#1c1917' : stage === 2 ? '#1e1b4b' : '#ead7bd';
-  ctx.strokeStyle = stage === 4 ? '#06b6d4' : stage === 3 ? '#ea580c' : stage === 2 ? '#c084fc' : '#997d5c';
+  ctx.fillStyle = stage === 4 ? '#090d16' : stage === 3 ? '#1c1917' : stage === 2 ? '#1e1b4b' : stage === 5 ? '#042f2e' : stage === 6 ? '#292524' : stage === 7 ? '#0c4a6e' : stage === 8 ? '#78350f' : stage === 9 ? '#14532d' : stage === 10 ? '#0b0514' : '#ead7bd';
+  ctx.strokeStyle = stage === 4 ? '#06b6d4' : stage === 3 ? '#ea580c' : stage === 2 ? '#c084fc' : stage === 5 ? '#2dd4bf' : stage === 6 ? '#f59e0b' : stage === 7 ? '#7dd3fc' : stage === 8 ? '#fbbf24' : stage === 9 ? '#84cc16' : stage === 10 ? '#dc2626' : '#997d5c';
   ctx.lineWidth = 3;
   ctx.fillRect(school.x, school.y, school.w, school.h);
   ctx.strokeRect(school.x, school.y, school.w, school.h);
@@ -456,12 +617,12 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   // Central clock / radar tower section
   const towerW = 130;
   const towerX = school.x + school.w / 2 - towerW / 2;
-  ctx.fillStyle = stage === 4 ? '#0f172a' : stage === 3 ? '#292524' : stage === 2 ? '#312e81' : '#f3e5cb';
+  ctx.fillStyle = stage === 4 ? '#0f172a' : stage === 3 ? '#292524' : stage === 2 ? '#312e81' : stage === 5 ? '#134e4a' : stage === 6 ? '#44403c' : stage === 7 ? '#075985' : stage === 8 ? '#92400e' : stage === 9 ? '#166534' : stage === 10 ? '#1e1b4b' : '#f3e5cb';
   ctx.fillRect(towerX, school.y - 105, towerW, 105);
   ctx.strokeRect(towerX, school.y - 105, towerW, 105);
 
   // Roof & pediment
-  ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#7f1d1d' : stage === 2 ? '#4c1d95' : '#5a7094';
+  ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#7f1d1d' : stage === 2 ? '#4c1d95' : stage === 5 ? '#0f766e' : stage === 6 ? '#78716c' : stage === 7 ? '#0369a1' : stage === 8 ? '#b45309' : stage === 9 ? '#3f6212' : stage === 10 ? '#450a0a' : '#5a7094';
   ctx.beginPath();
   ctx.moveTo(towerX - 18, school.y - 105);
   ctx.lineTo(school.x + school.w / 2, school.y - 155);
@@ -473,8 +634,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   // Clock / Cyber core face
   const clockCx = school.x + school.w / 2;
   const clockCy = school.y - 55;
-  ctx.fillStyle = stage === 4 ? '#083344' : stage === 3 ? '#450a0a' : stage === 2 ? '#0f172a' : '#ffffff';
-  ctx.strokeStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#f97316' : stage === 2 ? '#38bdf8' : '#3b4e6d';
+  ctx.fillStyle = stage === 4 ? '#083344' : stage === 3 ? '#450a0a' : stage === 2 ? '#0f172a' : stage === 5 ? '#042f2e' : stage === 6 ? '#1c1917' : stage === 7 ? '#e0f2fe' : stage === 8 ? '#fef3c7' : stage === 9 ? '#052e16' : stage === 10 ? '#000000' : '#ffffff';
+  ctx.strokeStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#f97316' : stage === 2 ? '#38bdf8' : stage === 5 ? '#5eead4' : stage === 6 ? '#f59e0b' : stage === 7 ? '#0ea5e9' : stage === 8 ? '#d97706' : stage === 9 ? '#a3e635' : stage === 10 ? '#dc2626' : '#3b4e6d';
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.arc(clockCx, clockCy, 26, 0, Math.PI * 2);
@@ -492,8 +653,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
     for (let col = 0; col < 4; col += 1) {
       const wx = school.x + 28 + col * 84;
       const wy = school.y + 42 + row * 120;
-      ctx.fillStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#f97316' : stage === 2 ? '#fbbf24' : '#9fd3f7';
-      ctx.strokeStyle = stage === 4 ? '#06b6d4' : stage === 3 ? '#dc2626' : stage === 2 ? '#f59e0b' : '#5b7290';
+      ctx.fillStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#f97316' : stage === 2 ? '#fbbf24' : stage === 5 ? '#5eead4' : stage === 6 ? '#fbbf24' : stage === 7 ? '#bae6fd' : stage === 8 ? '#fde68a' : stage === 9 ? '#a3e635' : stage === 10 ? '#f87171' : '#9fd3f7';
+      ctx.strokeStyle = stage === 4 ? '#06b6d4' : stage === 3 ? '#dc2626' : stage === 2 ? '#f59e0b' : stage === 5 ? '#0d9488' : stage === 6 ? '#a16207' : stage === 7 ? '#0284c7' : stage === 8 ? '#b45309' : stage === 9 ? '#4d7c0f' : stage === 10 ? '#7f1d1d' : '#5b7290';
       ctx.lineWidth = 3;
       roundRect(ctx, wx, wy, 48, 64, 6);
       ctx.fill();
@@ -508,24 +669,24 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   }
 
   // Double doors
-  ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#450a0a' : stage === 2 ? '#3730a3' : '#6c4223';
+  ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#450a0a' : stage === 2 ? '#3730a3' : stage === 5 ? '#115e59' : stage === 6 ? '#57534e' : stage === 7 ? '#0369a1' : stage === 8 ? '#92400e' : stage === 9 ? '#3f6212' : stage === 10 ? '#450a0a' : '#6c4223';
   roundRect(ctx, school.x + school.w / 2 - 38, school.y + school.h - 105, 76, 105, 8);
   ctx.fill();
-  ctx.strokeStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#ea580c' : stage === 2 ? '#818cf8' : '#3f220c';
+  ctx.strokeStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#ea580c' : stage === 2 ? '#818cf8' : stage === 5 ? '#2dd4bf' : stage === 6 ? '#a16207' : stage === 7 ? '#7dd3fc' : stage === 8 ? '#fbbf24' : stage === 9 ? '#84cc16' : stage === 10 ? '#dc2626' : '#3f220c';
   ctx.stroke();
 
   // Trees
   for (const t of DECOR.trees) {
     const s = t.s ?? 1;
-    ctx.fillStyle = stage === 4 ? '#0f172a' : stage === 3 ? '#1c1917' : stage === 2 ? '#4c1d95' : '#6b3e1a';
+    ctx.fillStyle = stage === 4 ? '#0f172a' : stage === 3 ? '#1c1917' : stage === 2 ? '#4c1d95' : stage === 5 ? '#052e2b' : stage === 6 ? '#292524' : stage === 7 ? '#0c4a6e' : stage === 8 ? '#78350f' : stage === 9 ? '#14532d' : stage === 10 ? '#0b0514' : '#6b3e1a';
     ctx.fillRect(t.x - 9 * s, t.y - 46 * s, 18 * s, 46 * s);
-    ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#7f1d1d' : stage === 2 ? '#9d174d' : '#2d8a34';
+    ctx.fillStyle = stage === 4 ? '#0284c7' : stage === 3 ? '#7f1d1d' : stage === 2 ? '#9d174d' : stage === 5 ? '#10b981' : stage === 6 ? '#78716c' : stage === 7 ? '#bae6fd' : stage === 8 ? '#d97706' : stage === 9 ? '#65a30d' : stage === 10 ? '#4c0519' : '#2d8a34';
     ctx.beginPath();
     ctx.arc(t.x, t.y - 68 * s, 38 * s, 0, Math.PI * 2);
     ctx.arc(t.x - 28 * s, t.y - 50 * s, 28 * s, 0, Math.PI * 2);
     ctx.arc(t.x + 28 * s, t.y - 50 * s, 28 * s, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#ea580c' : stage === 2 ? '#ec4899' : '#48b04f';
+    ctx.fillStyle = stage === 4 ? '#38bdf8' : stage === 3 ? '#ea580c' : stage === 2 ? '#ec4899' : stage === 5 ? '#a3e635' : stage === 6 ? '#fbbf24' : stage === 7 ? '#e0f2fe' : stage === 8 ? '#fef08a' : stage === 9 ? '#a3e635' : stage === 10 ? '#dc2626' : '#48b04f';
     ctx.beginPath();
     ctx.arc(t.x - 10 * s, t.y - 76 * s, 18 * s, 0, Math.PI * 2);
     ctx.fill();
@@ -536,7 +697,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   ctx.fillStyle = '#5a3214';
   ctx.fillRect(sign.x + 30, sign.y + 58, 12, 32);
   ctx.fillRect(sign.x + 110, sign.y + 58, 12, 32);
-  ctx.fillStyle = stage === 4 ? '#bae6fd' : stage === 3 ? '#fed7aa' : stage === 2 ? '#fef08a' : '#d89b56';
+  ctx.fillStyle = stage === 4 ? '#bae6fd' : stage === 3 ? '#fed7aa' : stage === 2 ? '#fef08a' : stage === 5 ? '#99f6e4' : stage === 6 ? '#fed7aa' : stage === 7 ? '#e0f2fe' : stage === 8 ? '#fde68a' : stage === 9 ? '#d9f99d' : stage === 10 ? '#fecaca' : '#d89b56';
   ctx.strokeStyle = '#6c3e18';
   ctx.lineWidth = 3;
   roundRect(ctx, sign.x - 10, sign.y, 172, 62, 10);
@@ -548,6 +709,24 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
   if (stage === 4) {
     ctx.fillText('STAGE 4: Galaksi Cyber & Power-Up!', sign.x + 76, sign.y + 24);
     ctx.fillText('Ambil Bintang ⚡ Tembak Laser! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 5) {
+    ctx.fillText('STAGE 5: Hutan Neon Biolumin!', sign.x + 76, sign.y + 24);
+    ctx.fillText('Awas Toxic Pit & Golem Neon! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 6) {
+    ctx.fillText('STAGE 6: Kota Roda Gigi Metal Slug!', sign.x + 76, sign.y + 24);
+    ctx.fillText('Tembak Boss Penjaga Pintu! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 7) {
+    ctx.fillText('STAGE 7: Samudra Es & Boss!', sign.x + 76, sign.y + 24);
+    ctx.fillText('Hati-hati Conveyor Es! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 8) {
+    ctx.fillText('STAGE 8: Gurun Reruntuhan!', sign.x + 76, sign.y + 24);
+    ctx.fillText('Badai Pasir & Boss Menanti! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 9) {
+    ctx.fillText('STAGE 9: Sarang Virus!', sign.x + 76, sign.y + 24);
+    ctx.fillText('Musuh Makin Banyak! ➜', sign.x + 76, sign.y + 42);
+  } else if (stage === 10) {
+    ctx.fillText('STAGE 10: Menara Final Boss!', sign.x + 76, sign.y + 24);
+    ctx.fillText('PALING SUSAH! Semangat! ➜', sign.x + 76, sign.y + 42);
   } else if (stage === 3) {
     ctx.fillText('STAGE 3: Kastil Magma & Pijakan Lahar!', sign.x + 76, sign.y + 24);
     ctx.fillText('Waspada Api & Monster Virus! ➜', sign.x + 76, sign.y + 42);
@@ -676,6 +855,20 @@ export function drawWorld(ctx: CanvasRenderingContext2D, stageInfo?: StageRender
     ctx.textAlign = 'center';
     const progressText = stageTotal > 0 ? `🔒 ${stageAnswered} / ${stageTotal} SOAL` : 'TERKUNCI';
     ctx.fillText(progressText, gate.x + 65, gate.y + 134);
+
+    // Boss guard plaque when boss is still alive
+    if (stageInfo?.bossAlive) {
+      const pulse = 0.6 + 0.4 * Math.sin(now * 0.008);
+      ctx.fillStyle = `rgba(127, 29, 29, ${0.75 + 0.25 * pulse})`;
+      ctx.strokeStyle = '#fca5a5';
+      ctx.lineWidth = 2.5;
+      roundRect(ctx, gate.x + 6, gate.y - 64, 118, 24, 6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#fecaca';
+      ctx.font = 'bold 10px Nunito, sans-serif';
+      ctx.fillText('⚔ BOSS GUARD!', gate.x + 65, gate.y - 48);
+    }
   }
 
   // Flag on top of gate
@@ -705,6 +898,13 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
         ctx.fillRect(p.x, p.y + 18, p.w, 6);
         ctx.fillStyle = '#083344';
         ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 5) {
+        ctx.fillStyle = '#022c22';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#0d9488';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#0f3d3e';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
       } else if (stage === 3) {
         ctx.fillStyle = '#292524';
         ctx.fillRect(p.x, p.y, p.w, 18);
@@ -718,6 +918,48 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
         ctx.fillStyle = '#4c1d95';
         ctx.fillRect(p.x, p.y + 18, p.w, 6);
         ctx.fillStyle = '#1e1b4b';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 5) {
+        ctx.fillStyle = '#022c22';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#0d9488';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#0f3d3e';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 6) {
+        ctx.fillStyle = '#57534e';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#3f3f46';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 7) {
+        ctx.fillStyle = '#e0f2fe';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#0ea5e9';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#0369a1';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 8) {
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#d97706';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#92400e';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 9) {
+        ctx.fillStyle = '#365314';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#84cc16';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#1a2e05';
+        ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
+      } else if (stage === 10) {
+        ctx.fillStyle = '#1e1b4b';
+        ctx.fillRect(p.x, p.y, p.w, 18);
+        ctx.fillStyle = '#7f1d1d';
+        ctx.fillRect(p.x, p.y + 18, p.w, 6);
+        ctx.fillStyle = '#0b0514';
         ctx.fillRect(p.x, p.y + 24, p.w, p.h - 24);
       } else {
         ctx.fillStyle = '#3ca338';
@@ -880,6 +1122,66 @@ export function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform
         ctx.lineTo(cx + 5, p.y + p.h - 2);
         ctx.stroke();
       }
+    } else if (p.type === 'conveyor') {
+      // Conveyor Belt: sabuk beroda dengan panah arah bergerak
+      const now = Date.now();
+      const dir = p.conveyorDir ?? 1;
+      // Belt body
+      ctx.fillStyle = '#27272a';
+      ctx.strokeStyle = '#09090b';
+      ctx.lineWidth = 2.5;
+      roundRect(ctx, p.x, p.y, p.w, p.h, 8);
+      ctx.fill();
+      ctx.stroke();
+      // Top belt strip
+      ctx.fillStyle = '#3f3f46';
+      ctx.fillRect(p.x + 4, p.y + 3, p.w - 8, 6);
+      // End wheels (roda di kedua ujung)
+      for (const wx of [p.x + 12, p.x + p.w - 12]) {
+        const wy = p.y + p.h - 7;
+        ctx.fillStyle = '#a1a1aa';
+        ctx.strokeStyle = '#27272a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(wx, wy, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Spokes rotating with belt direction
+        ctx.save();
+        ctx.translate(wx, wy);
+        ctx.rotate((now * 0.004 * dir) % (Math.PI * 2));
+        ctx.strokeStyle = '#52525b';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(-5, 0); ctx.lineTo(5, 0);
+        ctx.moveTo(0, -5); ctx.lineTo(0, 5);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // Animated chevrons (>>> atau <<<)
+      const chCount = Math.max(2, Math.floor(p.w / 34));
+      const gap = p.w / chCount;
+      const scroll = ((now * 0.05 * dir) % gap + gap) % gap;
+      ctx.strokeStyle = dir === 1 ? '#4ade80' : '#f87171';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      for (let i = -1; i < chCount; i += 1) {
+        const cx = p.x + i * gap + scroll;
+        const cy = p.y + p.h - 8;
+        if (cx < p.x + 14 || cx > p.x + p.w - 14) continue;
+        ctx.beginPath();
+        if (dir === 1) {
+          ctx.moveTo(cx - 5, cy - 5);
+          ctx.lineTo(cx + 2, cy);
+          ctx.lineTo(cx - 5, cy + 5);
+        } else {
+          ctx.moveTo(cx + 5, cy - 5);
+          ctx.lineTo(cx - 2, cy);
+          ctx.lineTo(cx + 5, cy + 5);
+        }
+        ctx.stroke();
+      }
+      ctx.lineCap = 'butt';
     } else if (p.type === 'moving') {
       ctx.fillStyle = '#0284c7';
       ctx.strokeStyle = '#0c4a6e';
@@ -1062,6 +1364,238 @@ export function drawProjectiles(ctx: CanvasRenderingContext2D, projectiles: Proj
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(pr.x - (dir === 1 ? len - 4 : -4), pr.y - 1.5, len - 8, 3);
     ctx.restore();
+  }
+}
+
+export function drawBosses(ctx: CanvasRenderingContext2D, bosses: StageBoss[], now = Date.now()) {
+  for (const b of bosses) {
+    if (!b.alive) continue;
+    const flash = Boolean(b.hitFlashUntil && b.hitFlashUntil > now);
+    const cx = b.x + b.w / 2;
+    // Walking bob tied to patrol (bigger amplitude when moving)
+    const bob = Math.sin(now * 0.009 + b.x * 0.05) * 5;
+    const by = b.y + bob;
+    const facing = b.dir ?? -1;
+    // Attack telegraph: mouth/core glow before spitting
+    const telegraph = Boolean(b.attackUntil && b.attackUntil > now);
+    const telegraphPulse = telegraph ? 0.5 + 0.5 * Math.sin(now * 0.04) : 0;
+
+    ctx.save();
+    if (flash) {
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 24;
+    }
+
+    const kind = b.kind;
+    // Common body base
+    const bodyColor = flash ? '#ffffff' : kind === 'overlord' ? '#4c0519' : kind === 'queen' ? '#7e22ce' : kind === 'tank' ? '#57534e' : kind === 'crab' ? '#0ea5e9' : kind === 'scorpion' ? '#b45309' : kind === 'golem' ? '#059669' : '#9333ea';
+    const darkColor = flash ? '#e5e5e5' : kind === 'overlord' ? '#450a0a' : kind === 'queen' ? '#581c87' : kind === 'tank' ? '#292524' : kind === 'crab' ? '#0c4a6e' : kind === 'scorpion' ? '#7c2d12' : kind === 'golem' ? '#064e3b' : '#581c87';
+
+    // Legs / treads per kind
+    if (kind === 'tank') {
+      // Treads
+      ctx.fillStyle = darkColor;
+      roundRect(ctx, b.x + 8, by + b.h - 26, b.w - 16, 22, 8);
+      ctx.fill();
+      ctx.fillStyle = '#3f3f46';
+      for (let i = 0; i < 5; i += 1) {
+        const wx = b.x + 18 + i * ((b.w - 44) / 4);
+        ctx.beginPath();
+        ctx.arc(wx, by + b.h - 15, 7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Cannon turret aimed at players
+      ctx.fillStyle = bodyColor;
+      roundRect(ctx, b.x + b.w / 2 - 10, by + 14, 20, b.h - 40, 6);
+      ctx.fill();
+      ctx.fillStyle = darkColor;
+      ctx.fillRect(cx - 4, by - 6, 8, 26);
+    } else if (kind === 'crab') {
+      // Crab legs
+      ctx.strokeStyle = darkColor;
+      ctx.lineWidth = 5;
+      for (const side of [-1, 1]) {
+        for (let i = 0; i < 3; i += 1) {
+          const lx = cx + side * (12 + i * 16);
+          ctx.beginPath();
+          ctx.moveTo(cx + side * 10, by + b.h * 0.6);
+          ctx.lineTo(lx, by + b.h - 4);
+          ctx.stroke();
+        }
+      }
+      // Claws
+      ctx.fillStyle = bodyColor;
+      ctx.beginPath();
+      ctx.arc(b.x - 6, by + b.h * 0.45, 13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(b.x + b.w + 6, by + b.h * 0.45, 13, 0, Math.PI * 2);
+      ctx.fill();
+      // Shell body
+      ctx.fillStyle = bodyColor;
+      ctx.beginPath();
+      ctx.ellipse(cx, by + b.h * 0.5, b.w * 0.44, b.h * 0.36, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = darkColor;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    } else if (kind === 'scorpion') {
+      // Segmented tail with stinger
+      ctx.strokeStyle = darkColor;
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.moveTo(b.x + b.w - 10, by + b.h * 0.55);
+      ctx.quadraticCurveTo(b.x + b.w + 34, by + b.h * 0.2, b.x + b.w + 8, by - 6);
+      ctx.stroke();
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath();
+      ctx.arc(b.x + b.w + 8, by - 6, 6, 0, Math.PI * 2);
+      ctx.fill();
+      // Pincers
+      ctx.fillStyle = bodyColor;
+      ctx.beginPath();
+      ctx.arc(b.x - 4, by + b.h * 0.55, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(b.x + b.w + 4, by + b.h * 0.55, 11, 0, Math.PI * 2);
+      ctx.fill();
+      // Body
+      ctx.fillStyle = bodyColor;
+      ctx.beginPath();
+      ctx.ellipse(cx, by + b.h * 0.6, b.w * 0.4, b.h * 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (kind === 'golem' || kind === 'guardian') {
+      // Stone/metal golem: chunky body + glowing core
+      ctx.fillStyle = bodyColor;
+      roundRect(ctx, b.x + 10, by + 18, b.w - 20, b.h - 34, 12);
+      ctx.fill();
+      ctx.strokeStyle = darkColor;
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+      // Arms swing while patrolling (dir-based phase)
+      const swing = Math.sin(now * 0.009 + b.x * 0.05) * 6;
+      ctx.fillStyle = darkColor;
+      roundRect(ctx, b.x - 4, by + b.h * 0.35 + swing, 18, b.h * 0.5, 8);
+      ctx.fill();
+      roundRect(ctx, b.x + b.w - 14, by + b.h * 0.35 - swing, 18, b.h * 0.5, 8);
+      ctx.fill();
+      // Glowing core (pulses harder during attack telegraph)
+      const corePulse = telegraph ? 0.85 + 0.15 * Math.sin(now * 0.04) : 0.6 + 0.4 * Math.sin(now * 0.01);
+      ctx.fillStyle = telegraph ? `rgba(250, 204, 21, ${corePulse})` : kind === 'golem' ? `rgba(163, 230, 53, ${corePulse})` : `rgba(56, 189, 248, ${corePulse})`;
+      ctx.beginPath();
+      ctx.arc(cx + facing * 6, by + b.h * 0.52, telegraph ? 12 : 9, 0, Math.PI * 2);
+      ctx.fill();
+      if (telegraph) {
+        ctx.strokeStyle = `rgba(250, 204, 21, ${0.4 + 0.4 * telegraphPulse})`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(cx + facing * 6, by + b.h * 0.52, 16 + 4 * telegraphPulse, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    } else {
+      // queen / overlord: floating virus overlord with crown of spikes
+      const haloGrad = ctx.createRadialGradient(cx, by + b.h * 0.5, 8, cx, by + b.h * 0.5, b.w * 0.7);
+      haloGrad.addColorStop(0, kind === 'overlord' ? 'rgba(220, 38, 38, 0.5)' : 'rgba(168, 85, 247, 0.45)');
+      haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = haloGrad;
+      ctx.beginPath();
+      ctx.arc(cx, by + b.h * 0.5, b.w * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+      // Spiky crown nodes
+      ctx.strokeStyle = darkColor;
+      ctx.lineWidth = 4;
+      for (let a = 0; a < 9; a += 1) {
+        const ang = (a / 9) * Math.PI * 2 + now * 0.002;
+        const x1 = cx + Math.cos(ang) * (b.w * 0.38);
+        const y1 = by + b.h * 0.5 + Math.sin(ang) * (b.h * 0.36);
+        const x2 = cx + Math.cos(ang) * (b.w * 0.5);
+        const y2 = by + b.h * 0.5 + Math.sin(ang) * (b.h * 0.47);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.fillStyle = kind === 'overlord' ? '#ef4444' : '#a855f7';
+        ctx.beginPath();
+        ctx.arc(x2, y2, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Body
+      ctx.fillStyle = bodyColor;
+      ctx.beginPath();
+      ctx.ellipse(cx, by + b.h * 0.5, b.w * 0.4, b.h * 0.38, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = darkColor;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      if (kind === 'overlord') {
+        // Crown
+        ctx.fillStyle = '#fbbf24';
+        ctx.beginPath();
+        ctx.moveTo(cx - 22, by + 4);
+        ctx.lineTo(cx - 14, by - 12);
+        ctx.lineTo(cx - 7, by + 2);
+        ctx.lineTo(cx, by - 16);
+        ctx.lineTo(cx + 7, by + 2);
+        ctx.lineTo(cx + 14, by - 12);
+        ctx.lineTo(cx + 22, by + 4);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // Eyes (angry, tracking patrol direction)
+    ctx.fillStyle = telegraph ? '#fca5a5' : '#fef08a';
+    ctx.beginPath();
+    ctx.arc(cx - 10, by + b.h * 0.32, 4.5, 0, Math.PI * 2);
+    ctx.arc(cx + 10, by + b.h * 0.32, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(cx - 10 + facing * 1.5, by + b.h * 0.32, 2, 0, Math.PI * 2);
+    ctx.arc(cx + 10 + facing * 1.5, by + b.h * 0.32, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // HP bar above boss
+    const hpRatio = Math.max(0, b.hp / b.maxHp);
+    const barW = Math.max(70, b.w * 0.9);
+    const barX = cx - barW / 2;
+    const barY = b.y - 22;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    roundRect(ctx, barX - 2, barY - 2, barW + 4, 12, 5);
+    ctx.fill();
+    ctx.fillStyle = hpRatio > 0.5 ? '#22c55e' : hpRatio > 0.25 ? '#fbbf24' : '#ef4444';
+    roundRect(ctx, barX, barY, barW * hpRatio, 8, 3);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 9px Nunito, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${b.name}  ${b.hp}/${b.maxHp}`, cx, barY - 5);
+
+    ctx.restore();
+  }
+}
+
+export function drawBossProjectiles(ctx: CanvasRenderingContext2D, bossProjectiles: { x: number; y: number; vx: number }[], now = Date.now()) {
+  for (const bp of bossProjectiles) {
+    const pulse = 0.7 + 0.3 * Math.sin(now * 0.02);
+    const r = 9 + pulse * 2;
+    // Toxic neon goo ball with trail
+    const grad = ctx.createRadialGradient(bp.x, bp.y, 2, bp.x, bp.y, r + 6);
+    grad.addColorStop(0, 'rgba(250, 204, 21, 0.95)');
+    grad.addColorStop(0.55, 'rgba(163, 230, 53, 0.8)');
+    grad.addColorStop(1, 'rgba(20, 83, 45, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(bp.x, bp.y, r + 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#a3e635';
+    ctx.beginPath();
+    ctx.arc(bp.x, bp.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath();
+    ctx.arc(bp.x - bp.vx * 10, bp.y - 3, r * 0.45, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
