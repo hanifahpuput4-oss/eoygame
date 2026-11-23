@@ -103,7 +103,6 @@ export async function POST(req: NextRequest) {
       const isDying = Boolean(body.d);
       const deathStartedAt = typeof body.ds === 'number' ? body.ds : undefined;
       const burnUntil = typeof body.b === 'number' ? body.b : undefined;
-      const ropedById = body.rp === null || typeof body.rp === 'string' ? (body.rp as string | null) : undefined;
 
       const updated = updateLivePlayerPosition(roomId, {
         userId,
@@ -120,7 +119,6 @@ export async function POST(req: NextRequest) {
         isDying,
         deathStartedAt,
         burnUntil,
-        ropedById,
       });
 
       // Push immediately (< 0.2ms) to all LAN WebSocket AND Cloudflare/Domain SSE clients!
@@ -143,7 +141,6 @@ export async function POST(req: NextRequest) {
             d: isDying ? 1 : 0,
             ds: deathStartedAt,
             b: burnUntil,
-            rp: ropedById,
             ts: Date.now(),
           },
           userId,
@@ -211,7 +208,6 @@ export async function POST(req: NextRequest) {
         d: p.isDying ? 1 : 0,
         ds: p.deathStartedAt,
         b: p.burnUntil,
-        rp: p.ropedById,
       });
     }
 

@@ -259,6 +259,9 @@ export default function GamePage() {
   const [mirrorTarget, setMirrorTarget] = useState<string | null>(null);
   const [cloneNonce, setCloneNonce] = useState(0);
   const mirrorTargetRef = useRef<{ userId: string; username: string } | 'all' | null>(null);
+  // Posisi terakhir admin yang mengikat tali saya (untuk respawn & leash lintas stage)
+  const meAdminAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const meAdminFacingRef = useRef<1 | -1>(1);
   // Ref ini dipakai sync loop untuk minta status jawaban si target mirror (bukan jawaban staff sendiri)
   const mirrorFetchTargetRef = useRef<string | null>(null);
   const [stageBanner, setStageBanner] = useState<string | null>(null);
@@ -337,6 +340,15 @@ export default function GamePage() {
       if (rp.colors !== undefined) existing.colors = rp.colors;
       if (rp.clone !== undefined) existing.clone = rp.clone;
       if (rp.ropedById !== undefined) existing.ropedById = rp.ropedById;
+      else if (rp.ropedById === null) {
+        existing.ropedById = null;
+        existing.adminAnchor = undefined;
+        existing.adminFacing = undefined;
+      }
+      if (existing.ropedById === null) {
+        existing.adminAnchor = undefined;
+        existing.adminFacing = undefined;
+      }
 
       if (!existing.snapshots) existing.snapshots = [];
       const snaps = existing.snapshots;
@@ -419,13 +431,15 @@ export default function GamePage() {
       allQuestions?: Question[];
       totalStg?: number;
       persistCheckpoint?: boolean;
+      force?: boolean;
     },
   ) {
     const tStg = opts?.totalStg ?? totalStagesRef.current;
     const stg = Math.max(1, Math.min(tStg, nextStage));
 
     // Siswa tidak dapat melompati stage tanpa menyelesaikan soal stage sebelumnya
-    if (!isStaff && stg > currentStageRef.current) {
+    // (kecuali force: misalnya ditarik tali admin lintas stage)
+    if (!opts?.force && !isStaff && stg > currentStageRef.current) {
       const allQsForCheck = opts?.allQuestions ?? levelQuestionsRef.current;
       const curStageQs = getStageQuestions(allQsForCheck, currentStageRef.current, tStg);
       const isCleared = curStageQs.length > 0 && curStageQs.every((q) => answeredIdsRef.current.has(q.id));
@@ -487,6 +501,12 @@ export default function GamePage() {
         me.isDying = false;
         me.deathStartedAt = undefined;
         me.burnUntil = undefined;
+      } else if (me.isDying) {
+        // Pindah stage tanpa respawn eksplisit (misalnya ditarik tali admin lintas stage):
+        // pastikan state death di-reset supaya tidak infinite respawn.
+        me.isDying = false;
+        me.deathStartedAt = undefined;
+        me.burnUntil = undefined;
       }
       if (ably.connected) {
         ably.publishPosition({
@@ -507,7 +527,6 @@ export default function GamePage() {
           tag: me.tag,
           colors: me.colors,
           clone: me.clone ?? undefined,
-          ropedById: me.ropedById ?? undefined,
         });
       }
     }
@@ -676,7 +695,7 @@ export default function GamePage() {
   }, []);
 
   const applyIncomingCommand = useCallback((cmd: RoomCommandEvent) => {
-    const isTarget = cmd.targetId === 'all' || cmd.targetId === myIdRef.current;
+    const isTarget = 'targetId' in cmd && (cmd.targetId === 'all' || cmd.targetId === myIdRef.current);
     if (cmd.op === 'god') {
       const targetP = playersRef.current.get(cmd.targetId);
       if (targetP) {
@@ -838,18 +857,66 @@ export default function GamePage() {
         if (cmd.username) soundEngine.playPowerUp();
       }
     } else if (cmd.op === 'rope') {
+      // Selalu update map lokal (walau target belum ada di map, siapkan entry-nya),
+      // supaya /untake rope all benar-benar melepas tali di SEMUA client (bukan hanya admin).
       const targetP = playersRef.current.get(cmd.targetId);
       if (targetP) {
         targetP.ropedById = cmd.value ? (cmd.byId ?? 'admin') : null;
+        if (!cmd.value) {
+          targetP.adminAnchor = undefined;
+          targetP.adminFacing = undefined;
+        }
+      } else if (!cmd.value) {
+        // Target tidak ada di map (misalnya baru rejoin): tetap tandai via presence players
+        for (const p of playersRef.current.values()) {
+          if (p.id === cmd.targetId) {
+            p.ropedById = null;
+            p.adminAnchor = undefined;
+            p.adminFacing = undefined;
+          }
+        }
       }
       if (cmd.targetId === myIdRef.current) {
         const me = playersRef.current.get(myIdRef.current);
-        if (me) me.ropedById = cmd.value ? (cmd.byId ?? 'admin') : null;
+        if (me) {
+          me.ropedById = cmd.value ? (cmd.byId ?? 'admin') : null;
+          if (!cmd.value) {
+            me.adminAnchor = undefined;
+            me.adminFacing = undefined;
+            meAdminAnchorRef.current = null;
+          }
+        }
         if (cmd.value) {
           showBanner(`🪢 Kamu diikat oleh ${cmd.byName || 'Admin'}! Ikuti kemana pun admin pergi.`);
           soundEngine.playPowerUp();
         } else {
           showBanner('🪢 Tali kamu dilepas oleh Admin.');
+        }
+      }
+    } else if (cmd.op === 'rope_all_clear') {
+      // Admin menjalankan /untake rope all: pastikan SEMUA tali di semua player lepas
+      for (const p of playersRef.current.values()) {
+        p.ropedById = null;
+        p.adminAnchor = undefined;
+        p.adminFacing = undefined;
+      }
+      meAdminAnchorRef.current = null;
+      const me = playersRef.current.get(myIdRef.current);
+      if (me) me.ropedById = null;
+      showBanner('🪢 Semua tali dilepas oleh Admin.');
+    } else if (cmd.op === 'change_nick') {
+      // Admin ganti nickname (persist di DB, seperti tag): berlaku lintas rejoin & room lain
+      const newName = (cmd.value || '').trim().slice(0, 20);
+      const targetP = playersRef.current.get(cmd.targetId);
+      if (targetP) targetP.username = newName || targetP.username;
+      if (isTarget) {
+        const me = playersRef.current.get(myIdRef.current);
+        if (me && newName) me.username = newName;
+        if (newName) {
+          myUsernameRef.current = newName;
+          try { window.localStorage.setItem('llys_custom_nick', newName); } catch { }
+          showBanner(`🏷️ Nickname kamu diganti Admin jadi "${newName}".`);
+          soundEngine.playPowerUp();
         }
       }
     } else if (cmd.op === 'skip_stage') {
@@ -1519,6 +1586,10 @@ export default function GamePage() {
         if (rpColors !== undefined) existing.colors = rpColors;
         const rpRoped = (rp as any).ropedById;
         if (rpRoped !== undefined) existing.ropedById = rpRoped ?? null;
+        if (existing.ropedById === null) {
+          existing.adminAnchor = undefined;
+          existing.adminFacing = undefined;
+        }
       } else {
         const resolvedFullName = (rp as any).fullName || roomRef.current?.players?.find((pl) => pl.userId === rp.id)?.fullName || undefined;
         playersRef.current.set(rp.id, {
@@ -1538,6 +1609,8 @@ export default function GamePage() {
           onGround: false,
           clone: (rp as any).clone ?? null,
           ropedById: (rp as any).ropedById ?? null,
+          adminAnchor: undefined,
+          adminFacing: undefined,
           tag: (rp as any).tag,
           colors: (rp as any).colors,
         });
@@ -1719,12 +1792,42 @@ export default function GamePage() {
         if (p.ropedById) p.burnUntil = undefined;
       }
 
-      // Auto-break rope jika admin (pemilik tali) hilang / mati / DC
+      // Auto-break rope HANYA jika admin (pemilik tali) benar-benar sudah pergi / DC.
+      // CATATAN: admin pindah stage TIDAK memutus tali, malah memaksa player terikut.
       for (const p of playersRef.current.values()) {
         if (!p.ropedById) continue;
         const owner = playersRef.current.get(p.ropedById);
         if (!owner || owner.isDying || !ably.connected) {
           p.ropedById = null;
+          if (p.id === myIdRef.current) {
+            showBanner('🪢 Tali kamu terlepas (admin pergi / disconnect).');
+          }
+        } else {
+          // Simpan posisi admin sebagai anchor respawn untuk physics.ts
+          p.adminAnchor = { x: owner.x, y: owner.y };
+          p.adminFacing = owner.facing;
+          if (p.id === myIdRef.current) {
+            meAdminAnchorRef.current = { x: owner.x, y: owner.y };
+            meAdminFacingRef.current = owner.facing;
+          }
+        }
+      }
+
+      // Tali kaku (rigid leash) lintas stage: jika stage admin != stage player diikat,
+      // TELEPORT paksa player ke belakang admin (tali "menarik" lintas stage).
+      if (me && me.ropedById && !me.isDying) {
+        const owner = playersRef.current.get(me.ropedById);
+        if (owner && !owner.isDying && (owner.stage ?? 1) !== (me.stage ?? 1)) {
+          applyStage(owner.stage ?? 1, { respawnPlayer: false, showToast: false, force: true });
+          const side = owner.facing === 1 ? -1 : 1;
+          me.x = owner.x + side * 60;
+          me.y = owner.y;
+          me.vx = 0;
+          me.vy = 0;
+          me.isDying = false;
+          me.deathStartedAt = undefined;
+          me.burnUntil = undefined;
+          soundEngine.playBounce();
         }
       }
 
@@ -1758,8 +1861,12 @@ export default function GamePage() {
       // Leash di sisi player yang diikat: clamp posisi sendiri realtime (biar ga nimbrung di client sendiri)
       if (me && me.ropedById && !me.isDying) {
         const owner = playersRef.current.get(me.ropedById);
+        // Boleh beda stage: leash tetap jalan (cross-stage dipindah paksa di blok atas).
         if (owner && !owner.isDying && (owner.stage ?? 1) === (me.stage ?? 1)) {
           applyLeash(me, owner.x, owner.y, owner.facing);
+        } else if (owner && !owner.isDying && meAdminAnchorRef.current) {
+          // Beda stage: clamp ke anchor admin supaya tidak drift jauh sebelum applyStage memindahkan
+          applyLeash(me, meAdminAnchorRef.current.x, meAdminAnchorRef.current.y, meAdminFacingRef.current ?? owner.facing);
         }
       }
 
@@ -2011,7 +2118,6 @@ export default function GamePage() {
             tag: me.tag,
             colors: me.colors,
             clone: me.clone ?? undefined,
-            ropedById: me.ropedById ?? undefined,
           });
         }
       }
@@ -2173,7 +2279,6 @@ export default function GamePage() {
                 tg: me.tag,
                 cl: me.colors,
                 cn: me.clone ?? undefined,
-                rp: me.ropedById ?? undefined,
               }
               : {
                 r: roomId,
@@ -2257,7 +2362,6 @@ export default function GamePage() {
                   tag: typeof rp.tg === 'string' ? rp.tg : undefined,
                   colors: (rp.cl as PlayerColors | undefined) ?? undefined,
                   clone: (rp.cn && typeof rp.cn === 'object' ? (rp.cn as { username: string; fullName?: string }) : undefined),
-                  ropedById: typeof rp.rp === 'string' ? rp.rp : undefined,
                 });
               }
             }
@@ -2467,7 +2571,7 @@ export default function GamePage() {
       } finally {
         // Saat WebSocket aktif, semua posisi/chat/skor/soal sudah real-time lewat WS,
         // sehingga room-sync cukup jalan setiap 4 detik sebagai heartbeat ringan (hemat bandwidth luar LAN 7x lipat!)
-        const syncInterval = ably.connected ? 4000 : 2500;
+        const syncInterval = ably.connected ? 12000 : 2500;
         if (active) timer = setTimeout(syncLoop, syncInterval);
       }
     }
@@ -2727,12 +2831,13 @@ export default function GamePage() {
         isAdmin ? '• /spawn gun <minigun|laser|megalaser> [user|me] : Beri senjata (bisa menembak player)' : null,
         isAdmin ? '• /jail on|off [user|me] : Bekukan player selama 15 detik' : null,
         isAdmin ? '• /change tag <user|me> <judul> : Ganti title tag di atas kepala' : null,
+        isAdmin ? '• /change nick <user|me> <nama> : Ganti nickname player (tersimpan permanen)' : null,
         isAdmin ? '• /change color <user|me> body|tag|nick <warna> : Ganti warna (hex/nama/rgb/blink/spin)' : null,
         isAdmin ? '• /set clone <user|me> <targetusername> : Clone karakter (nick, avatar, tag, warna)' : null,
         isAdmin ? '• /unset clone : Lepas clone, kembalikan identitas asli' : null,
         isAdmin ? '• /take rope <user|all> : Ikat player dengan tali (ikut admin & kebal rintangan)' : null,
         isAdmin ? '• /untake rope <user|all> : Lepas tali player' : null,
-    isAdmin ? '• /skip stage <username> : Tandai semua soal tersisa di stage siswa sebagai selesai (tanpa poin)' : null,
+    isAdmin ? '• /skip stage <username|all> : Tandai semua soal tersisa di stage siswa sebagai selesai (tanpa poin). all = semua player di stage admin' : null,
       ].filter(Boolean);
       for (const line of helpLines) {
         addSystemChatMessage(line as string);
@@ -2909,7 +3014,7 @@ export default function GamePage() {
           if (p.id === myIdRef.current) continue;
           targets.push({ id: p.id, username: p.username });
         }
-        if (targets.length === 0) {
+        if (wantRope && targets.length === 0) {
           addSystemChatMessage('Tidak ada player untuk diikat.');
           return;
         }
@@ -2924,6 +3029,20 @@ export default function GamePage() {
           return;
         }
         targets.push(target);
+      }
+      if (!wantRope && targetQuery === 'all') {
+        // Paksa lepas SEMUA tali di semua client sekaligus (broadcast rope_all_clear).
+        // Ini menormalkan player yang mungkin sudah pergi / rejoin / pindah stage.
+        ably.publishCommand({ op: 'rope_all_clear' });
+        for (const p of playersRef.current.values()) {
+          p.ropedById = null;
+          p.adminAnchor = undefined;
+          p.adminFacing = undefined;
+        }
+        meAdminAnchorRef.current = null;
+        addSystemChatMessage('🪢 Semua tali dilepas, semua player dinormalkan.');
+        soundEngine.playBounce();
+        return;
       }
       for (const t of targets) {
         const p = playersRef.current.get(t.id);
@@ -2953,7 +3072,95 @@ export default function GamePage() {
       }
       const targetQuery = arg2;
       if (!targetQuery) {
-        addSystemChatMessage('Format salah. Contoh: /skip stage najla');
+        addSystemChatMessage('Format salah. Contoh: /skip stage najla, /skip stage all, atau /skip stage rope');
+        return;
+      }
+      // /skip stage rope: bypass SEMUA player yang sedang diikat tali oleh admin
+      if (targetQuery === 'rope') {
+        const targets: { id: string; username: string; stage: number }[] = [];
+        for (const p of playersRef.current.values()) {
+          if (p.id === myIdRef.current) continue;
+          if (p.ropedById !== myIdRef.current) continue;
+          targets.push({ id: p.id, username: p.username, stage: p.stage ?? 1 });
+        }
+        if (targets.length === 0) {
+          addSystemChatMessage('Tidak ada player yang sedang diikat tali. 🪢');
+          return;
+        }
+        try {
+          let totalMarked = 0;
+          for (const t of targets) {
+            const stageQs = getStageQuestions(levelQuestionsRef.current, t.stage, totalStagesRef.current);
+            if (stageQs.length === 0) continue;
+            const res = await fetch('/api/game/room-sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ roomId, targetId: t.id }),
+            });
+            const data = await res.json();
+            const serverSet = new Set<string>(Array.isArray(data?.answeredQuestionIds) ? data.answeredQuestionIds : []);
+            const unanswered = stageQs.filter((q) => !serverSet.has(q.id));
+            if (unanswered.length === 0) continue;
+            const qids = unanswered.map((q) => q.id);
+            await fetch('/api/game/skip-stage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ roomId, targetId: t.id, stage: t.stage, questionIds: qids }),
+            });
+            ably.publishCommand({ op: 'skip_stage', targetId: t.id, qids, stage: t.stage });
+            totalMarked += qids.length;
+          }
+          addSystemChatMessage(`⏭️ Skip stage rope (${targets.length} player diikat): ${totalMarked} soal ditandai selesai (tanpa poin).`);
+          soundEngine.playPowerUp();
+        } catch {
+          addSystemChatMessage('Gagal skip stage rope, coba lagi.');
+        }
+        return;
+      }
+      // /skip stage all: bypass SEMUA player yang ada di stage yang sama dengan admin
+      if (targetQuery === 'all') {
+        const adminStage = currentStageRef.current;
+        const stageQs = getStageQuestions(levelQuestionsRef.current, adminStage, totalStagesRef.current);
+        if (stageQs.length === 0) {
+          addSystemChatMessage(`Tidak ada soal di stage ${adminStage}.`);
+          return;
+        }
+        const targets: { id: string; username: string }[] = [];
+        for (const p of playersRef.current.values()) {
+          if (p.id === myIdRef.current) continue;
+          if ((p.stage ?? 1) !== adminStage) continue;
+          targets.push({ id: p.id, username: p.username });
+        }
+        if (targets.length === 0) {
+          addSystemChatMessage(`Tidak ada player lain di stage ${adminStage}.`);
+          return;
+        }
+        try {
+          let totalMarked = 0;
+          for (const t of targets) {
+            const res = await fetch('/api/game/room-sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ roomId, targetId: t.id }),
+            });
+            const data = await res.json();
+            const serverSet = new Set<string>(Array.isArray(data?.answeredQuestionIds) ? data.answeredQuestionIds : []);
+            const unanswered = stageQs.filter((q) => !serverSet.has(q.id));
+            if (unanswered.length === 0) continue;
+            const qids = unanswered.map((q) => q.id);
+            await fetch('/api/game/skip-stage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ roomId, targetId: t.id, stage: adminStage, questionIds: qids }),
+            });
+            ably.publishCommand({ op: 'skip_stage', targetId: t.id, qids, stage: adminStage });
+            totalMarked += qids.length;
+          }
+          addSystemChatMessage(`⏭️ Skip stage all (${targets.length} player di stage ${adminStage}): ${totalMarked} soal ditandai selesai (tanpa poin).`);
+          soundEngine.playPowerUp();
+        } catch {
+          addSystemChatMessage('Gagal skip stage all, coba lagi.');
+        }
         return;
       }
       const target = findPlayer(targetQuery);
@@ -3345,6 +3552,35 @@ export default function GamePage() {
       }
       ably.publishCommand({ op: 'cosmetics', targetId: target.id, tag: tagValue });
       addSystemChatMessage(tagValue ? `🏷️ Tag '${target.username}' diubah jadi "${tagValue}".` : `🏷️ Tag '${target.username}' direset.`);
+      soundEngine.playPowerUp();
+      return;
+    }
+
+    if (cmd === 'change' && arg1 === 'nick') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+        return;
+      }
+      const targetQuery = arg2 || 'me';
+      const newName = parts.slice(3).join(' ').trim();
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+      if (!newName) {
+        addSystemChatMessage('Format: /change nick <user|me> <nama baru>');
+        return;
+      }
+      const nickValue = newName.slice(0, 20);
+      // Persist ke DB supaya rejoin / pindah room namanya tetap yang terakhir
+      fetch('/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'admin-set-nick', targetId: target.id, username: nickValue }),
+      }).catch(() => { });
+      ably.publishCommand({ op: 'change_nick', targetId: target.id, value: nickValue });
+      addSystemChatMessage(`🏷️ Nickname '${target.username}' diganti jadi "${nickValue}" (tersimpan permanen).`);
       soundEngine.playPowerUp();
       return;
     }

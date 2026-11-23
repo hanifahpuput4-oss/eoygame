@@ -382,6 +382,19 @@ export function getLiveRoomPositions(roomId: string): Map<string, LivePlayerStat
   return getLivePositionsStore().get(roomId) ?? new Map();
 }
 
+/**
+ * Lepas semua tali di live-state satu room (dipakai /untake rope all).
+ * Penting: tanpa ini, snapshot server masih membawa ropedById lama dan
+ * mengembalikan tali yang sudah dilepas di client.
+ */
+export function clearRoomRopes(roomId: string): void {
+  const roomPos = getLivePositionsStore().get(roomId);
+  if (!roomPos) return;
+  for (const entry of roomPos.values()) {
+    entry.ropedById = null;
+  }
+}
+
 export function removePresence(roomId: string, userId: string): void {
   const store = getPresenceStore();
   store.get(roomId)?.delete(userId);

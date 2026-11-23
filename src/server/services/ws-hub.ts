@@ -15,6 +15,7 @@ import {
   removePresence,
   touchPresence,
   updateLivePlayerPosition,
+  clearRoomRopes,
 } from './presence-store';
 
 type WsClient = {
@@ -279,7 +280,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
     if (msg.tg === null || typeof msg.tg === 'string') client.tag = msg.tg;
     if (msg.cl === null || (msg.cl && typeof msg.cl === 'object')) client.colors = msg.cl as WsClient['colors'];
     if (msg.cn === null || (msg.cn && typeof msg.cn === 'object')) client.clone = msg.cn as WsClient['clone'];
-    if (msg.rp === null || typeof msg.rp === 'string') client.ropedById = msg.rp;
 
     addClientToRoom(client);
     if (!client.userId) return;
@@ -301,7 +301,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         tag: client.tag,
         colors: client.colors,
         clone: client.clone,
-        ropedById: client.ropedById,
       });
     }
 
@@ -330,7 +329,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         tg: client.tag,
         cl: client.colors,
         cn: client.clone,
-        rp: client.ropedById,
         x: typeof msg.x === 'number' ? msg.x : 120,
         y: typeof msg.y === 'number' ? msg.y : 600,
         f: msg.f === -1 ? -1 : 1,
@@ -418,6 +416,37 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
 
   if (t === 'cmd') {
     if (client.role !== 'teacher' && client.role !== 'admin') return;
+    // rope_all_clear: server ikut melepas tali di live-state & connection semua client
+    // supaya snapshot/heartbeat berikutnya tidak mengembalikan tali yang sudah dilepas.
+    if (msg.op === 'rope_all_clear') {
+      clearRoomRopes(client.roomId);
+      client.ropedById = null;
+    }
+    if (msg.op === 'rope' && typeof msg.targetId === 'string') {
+      // Tali sekarang murni command-driven: live-state di-update di sini supaya
+      // snapshot player baru tetap tahu siapa yang sedang diikat tali.
+      const live = getLiveRoomPositions(client.roomId);
+      const entry = live.get(msg.targetId);
+      if (entry) {
+        updateLivePlayerPosition(client.roomId, {
+          userId: entry.userId,
+          username: entry.username ?? '',
+          avatar: entry.avatar ?? 'cat-orange',
+          role: entry.role ?? 'student',
+          stage: entry.stage ?? 1,
+          x: entry.x,
+          y: entry.y,
+          vx: entry.vx ?? 0,
+          vy: entry.vy ?? 0,
+          facing: entry.facing === -1 ? -1 : 1,
+          onGround: entry.onGround ?? true,
+          tag: entry.tag,
+          colors: entry.colors,
+          clone: entry.clone,
+          ropedById: msg.value === false ? null : (typeof msg.byId === 'string' ? msg.byId : 'admin'),
+        });
+      }
+    }
     broadcastRoomEvent(client.roomId, { ...msg }, client.userId, client.id);
     return;
   }
@@ -479,7 +508,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         msg.cn === null || (msg.cn && typeof msg.cn === 'object')
           ? (client.clone = msg.cn as WsClient['clone'])
           : client.clone,
-      ropedById: msg.rp === null || typeof msg.rp === 'string' ? (client.ropedById = msg.rp) : client.ropedById,
     });
     if (!updated) return;
 
@@ -505,7 +533,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         tg: client.tag,
         cl: client.colors,
         cn: client.clone,
-        rp: client.ropedById,
       },
       client.userId,
       client.id,

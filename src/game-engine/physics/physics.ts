@@ -35,6 +35,9 @@ export type Player = {
   colors?: { body?: string; tag?: string; nick?: string } | null;
   clone?: { username: string; fullName?: string } | null;
   ropedById?: string | null;
+  // Posisi terakhir admin yang mengikat tali (untuk safe-respawn di belakang admin)
+  adminAnchor?: { x: number; y: number };
+  adminFacing?: 1 | -1;
 };
 
 export type Projectile = {
@@ -91,6 +94,13 @@ function respawnToStart(p: Player) {
   p.blasterUntil = undefined;
   p.x = p.spawnX ?? 120;
   p.y = p.spawnY ?? WORLD.groundY - PLAYER_H - 20;
+  // Player yang diikat tali admin: respawn di belakang admin (bukan spawn point),
+  // supaya leash langsung narik dia ke stage admin & tidak infinite respawn nembus lantai
+  if (p.ropedById && p.adminAnchor) {
+    const side = p.adminFacing === 1 ? -1 : 1;
+    p.x = p.adminAnchor.x + side * 60;
+    p.y = p.adminAnchor.y;
+  }
   p.vx = 0;
   p.vy = 0;
   p.onGround = false;

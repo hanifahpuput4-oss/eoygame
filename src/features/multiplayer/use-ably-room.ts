@@ -93,7 +93,9 @@ export type RoomCommandEvent =
   | { op: 'cosmetics'; targetId: string; tag?: string; colors?: { body?: string; tag?: string; nick?: string } }
   | { op: 'hit'; targetId: string; by: string; dmg: number }
   | { op: 'clone'; targetId: string; username?: string; fullName?: string }
+  | { op: 'change_nick'; targetId: string; value: string }
   | { op: 'rope'; targetId: string; value: boolean; byId?: string; byName?: string }
+  | { op: 'rope_all_clear' }
 | { op: 'skip_stage'; targetId: string; qids: string[]; stage?: number };
 
 type RealtimeCallbacks = {
@@ -155,7 +157,8 @@ export function useAblyRoom(
 
       if (t === 'po' && typeof msg.c === 'number') {
         const rtt = Math.max(1, Math.round((performance.now() - msg.c) * 10) / 10);
-        setPingMs(rtt);
+        // EMA smoothing: spike tunggal (GC/nginx hiccup) tidak langsung naikkan tampilan ping
+        setPingMs((prev) => (prev <= 5 ? rtt : Math.round((prev * 0.6 + rtt * 0.4) * 10) / 10));
         if (typeof msg.st === 'number') {
           serverTimeOffsetRef.current = Math.round(msg.st + rtt / 2 - Date.now());
         }
@@ -369,7 +372,7 @@ export function useAblyRoom(
 
       if (t === 'cmd') {
         const op = msg.op;
-        if (typeof op === 'string' && typeof msg.targetId === 'string') {
+        if (typeof op === 'string' && (op === 'rope_all_clear' || typeof msg.targetId === 'string')) {
           callbacksRef.current?.onCommandEvent?.(msg as unknown as RoomCommandEvent);
         }
         return;
@@ -568,7 +571,7 @@ export function useAblyRoom(
           }),
         );
       }
-    }, 1000);
+    }, 2000);
 
     return () => {
       cancelled = true;
@@ -650,7 +653,6 @@ export function useAblyRoom(
             tg: pos.tag ?? undefined,
             cl: pos.colors ?? undefined,
             cn: pos.clone ?? undefined,
-            rp: pos.ropedById ?? undefined,
             ts: Date.now(),
           }),
         );

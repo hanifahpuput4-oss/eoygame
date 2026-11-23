@@ -120,6 +120,37 @@ export async function PATCH(req: NextRequest) {
       return ok({ success: true });
     }
 
+    if (body.action === 'admin-set-nick') {
+      // Khusus Admin: ganti nickname user lain (persist, seperti tag)
+      if (user.role !== 'admin') {
+        return fail('Hanya Administrator yang bisa ganti nickname user lain', 403);
+      }
+      const schema = z.object({
+        targetId: z.string().min(1),
+        username: z
+          .string()
+          .trim()
+          .min(1, 'Nickname minimal 1 karakter')
+          .max(20),
+      });
+      const input = schema.parse(body);
+      const nick = input.username;
+      const dup = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(sql`lower(${users.username})`, nick), ne(users.id, input.targetId)))
+        .limit(1);
+      if (dup[0]) {
+        return fail('Nickname sudah digunakan pengguna lain', 409);
+      }
+      await db
+        .update(users)
+        .set({ username: nick, updatedAt: new Date() })
+        .where(eq(users.id, input.targetId));
+      invalidateUserSessionCache(input.targetId);
+      return ok({ username: nick });
+    }
+
     return handleError(new Error('Aksi tidak dikenal'));
   } catch (err) {
     return handleError(err);
