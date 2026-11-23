@@ -22,6 +22,8 @@ export type PresencePlayer = {
   gun?: string | null;
   tag?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
+  clone?: { username: string; fullName?: string } | null;
+  ropedById?: string | null;
 };
 
 export type ChatMessage = {
@@ -52,6 +54,8 @@ export type PositionData = {
   gun?: string | null;
   tag?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
+  clone?: { username: string; fullName?: string } | null;
+  ropedById?: string | null;
 };
 
 export type ScoreData = {
@@ -74,7 +78,7 @@ export type ObstacleEvent =
   | { op: 'crumble'; stg: number; idx: number; at: number }
   | { op: 'stomp'; stg: number; id: string; until: number }
   | { op: 'powerup'; stg: number; id: string; until: number }
-  | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number }
+  | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number; len?: number; thk?: number; color?: string; glow?: string; gun?: string; dmg?: number }
   | { op: 'boss_hit'; stg: number; bid: string; dmg: number }
   | { op: 'boss_died'; stg: number }
   | { op: 'boss_spit'; stg: number; bid: string; pid: string; x: number; y: number; vx: number; vy: number };
@@ -87,7 +91,10 @@ export type RoomCommandEvent =
   | { op: 'gun'; targetId: string; value: boolean; weapon?: string }
   | { op: 'jail'; targetId: string; value: boolean }
   | { op: 'cosmetics'; targetId: string; tag?: string; colors?: { body?: string; tag?: string; nick?: string } }
-  | { op: 'hit'; targetId: string; by: string; dmg: number };
+  | { op: 'hit'; targetId: string; by: string; dmg: number }
+  | { op: 'clone'; targetId: string; username?: string; fullName?: string }
+  | { op: 'rope'; targetId: string; value: boolean; byId?: string; byName?: string }
+| { op: 'skip_stage'; targetId: string; qids: string[]; stage?: number };
 
 type RealtimeCallbacks = {
   onDirectMove?: (player: PresencePlayer) => void;
@@ -221,6 +228,10 @@ export function useAblyRoom(
             isDying: Boolean(raw.isDying),
             deathStartedAt: typeof raw.deathStartedAt === 'number' ? raw.deathStartedAt : undefined,
             burnUntil: typeof raw.burnUntil === 'number' ? raw.burnUntil : undefined,
+            tag: typeof raw.tag === 'string' ? raw.tag : undefined,
+            colors: (raw.colors && typeof raw.colors === 'object' ? raw.colors : undefined) as PositionData['colors'],
+            clone: (raw.clone && typeof raw.clone === 'object' ? (raw.clone as PositionData['clone']) : undefined),
+            ropedById: typeof raw.rp === 'string' ? raw.rp : typeof raw.ropedById === 'string' ? raw.ropedById : undefined,
             ts: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
           });
         }
@@ -242,6 +253,10 @@ export function useAblyRoom(
           vy: 0,
           facing: msg.f === -1 ? -1 : 1,
           onGround: true,
+          tag: typeof msg.tg === 'string' ? msg.tg : undefined,
+          colors: (msg.cl && typeof msg.cl === 'object' ? msg.cl : undefined) as PositionData['colors'],
+          clone: (msg.cn && typeof msg.cn === 'object' ? (msg.cn as PositionData['clone']) : undefined),
+          ropedById: typeof msg.rp === 'string' ? msg.rp : undefined,
           ts: Date.now(),
         });
         return;
@@ -269,6 +284,8 @@ export function useAblyRoom(
           gun: typeof msg.gn === 'string' ? msg.gn : undefined,
           tag: typeof msg.tg === 'string' ? msg.tg : undefined,
           colors: (msg.cl && typeof msg.cl === 'object' ? msg.cl : undefined) as PositionData['colors'],
+          clone: (msg.cn && typeof msg.cn === 'object' ? (msg.cn as PositionData['clone']) : undefined),
+          ropedById: typeof msg.rp === 'string' ? msg.rp : undefined,
           ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
         });
         return;
@@ -339,7 +356,7 @@ export function useAblyRoom(
         } else if (op === 'powerup' && typeof msg.id === 'string' && typeof msg.until === 'number') {
           callbacksRef.current?.onObstacleEvent?.({ op: 'powerup', stg, id: msg.id, until: msg.until });
         } else if (op === 'shoot' && typeof msg.pid === 'string' && typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.vx === 'number') {
-          callbacksRef.current?.onObstacleEvent?.({ op: 'shoot', stg, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx });
+          callbacksRef.current?.onObstacleEvent?.({ op: 'shoot', stg, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx, len: typeof msg.len === 'number' ? msg.len : undefined, thk: typeof msg.thk === 'number' ? msg.thk : undefined, color: typeof msg.color === 'string' ? msg.color : undefined, glow: typeof msg.glow === 'string' ? msg.glow : undefined, gun: typeof msg.gun === 'string' ? msg.gun : undefined, dmg: typeof msg.dmg === 'number' ? msg.dmg : undefined });
         } else if (op === 'boss_hit' && typeof msg.bid === 'string' && typeof msg.dmg === 'number') {
           callbacksRef.current?.onObstacleEvent?.({ op: 'boss_hit', stg, bid: msg.bid, dmg: msg.dmg });
         } else if (op === 'boss_died') {
@@ -632,6 +649,8 @@ export function useAblyRoom(
             gn: pos.gun ?? undefined,
             tg: pos.tag ?? undefined,
             cl: pos.colors ?? undefined,
+            cn: pos.clone ?? undefined,
+            rp: pos.ropedById ?? undefined,
             ts: Date.now(),
           }),
         );

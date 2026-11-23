@@ -50,13 +50,14 @@ export const WEAPONS: Record<WeaponType, WeaponSpec> = {
   megalaser: {
     id: 'megalaser',
     label: 'Mega Laser',
+    // Mega Laser: satu tembakan nge-sweep sepanjang map (WORLD.width = 5600), one-shot semua yang dilewati
     cooldownMs: 650,
-    damage: 3,
-    speed: 20,
+    damage: 99,
+    speed: 40,
     color: '#a855f7',
     glow: '#e9d5ff',
-    length: 56,
-    thickness: 16,
+    length: 5600,
+    thickness: 64,
     ammo: 15,
     lifetimeMs: 30000,
   },

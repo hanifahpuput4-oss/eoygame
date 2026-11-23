@@ -21,7 +21,10 @@ import {
   type StagePowerUp,
 } from '@/game-engine/maps/world';
 import { soundEngine } from '@/game-engine/audio/sound-engine';
+import { WEAPONS, JAIL_FREEZE_MS, parseWeaponType, parseColorArg, type PlayerColors } from '@/game-engine/physics/weapons';
 import { useAblyRoom, type ObstacleEvent, type RoomCommandEvent } from '@/features/multiplayer/use-ably-room';
+import type { useAblyRoom as useAblyRoomType } from '@/features/multiplayer/use-ably-room';
+type AblyRoomApi = ReturnType<typeof useAblyRoom>;
 import { clearCachedData } from '@/lib/client-cache';
 import '../game.css';
 
@@ -121,6 +124,7 @@ type ChatMsg = {
   senderName: string;
   senderFullName?: string;
   role?: string;
+  cloned?: boolean;
   text: string;
   createdAt: string;
 };
@@ -253,11 +257,18 @@ export default function GamePage() {
   const [isGodMode, setIsGodMode] = useState(false);
   const isGodModeRef = useRef(false);
   const [mirrorTarget, setMirrorTarget] = useState<string | null>(null);
+  const [cloneNonce, setCloneNonce] = useState(0);
   const mirrorTargetRef = useRef<{ userId: string; username: string } | 'all' | null>(null);
   // Ref ini dipakai sync loop untuk minta status jawaban si target mirror (bukan jawaban staff sendiri)
   const mirrorFetchTargetRef = useRef<string | null>(null);
   const [stageBanner, setStageBanner] = useState<string | null>(null);
   const stageBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Helper notif dengan auto-close: semua banner otomatis hilang, ga ada yang nyangkut
+  const showBanner = useCallback((msg: string, ms = 4000) => {
+    setStageBanner(msg);
+    if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
+    stageBannerTimerRef.current = setTimeout(() => setStageBanner(null), ms);
+  }, []);
   const [scores, setScores] = useState<Record<string, number>>({});
   const [question, setQuestion] = useState<Question | null>(null);
   const questionRef = useRef<Question | null>(null);
@@ -294,6 +305,12 @@ export default function GamePage() {
     isDying?: boolean;
     deathStartedAt?: number;
     burnUntil?: number;
+    jailedUntil?: number;
+    gun?: string;
+    tag?: string;
+    colors?: PlayerColors;
+    clone?: { username: string; fullName?: string } | null;
+    ropedById?: string | null;
   }) {
     if (!rp.id || rp.id === myIdRef.current) return;
     const nowPerf = performance.now();
@@ -314,6 +331,12 @@ export default function GamePage() {
       if (rp.deathStartedAt !== undefined) existing.deathStartedAt = rp.deathStartedAt;
       if (rp.burnUntil !== undefined) existing.burnUntil = rp.burnUntil;
       if (rp.role) existing.role = rp.role;
+      if (rp.jailedUntil !== undefined) existing.jailedUntil = rp.jailedUntil;
+      if (rp.gun !== undefined) existing.gun = rp.gun;
+      if (rp.tag !== undefined) existing.tag = rp.tag;
+      if (rp.colors !== undefined) existing.colors = rp.colors;
+      if (rp.clone !== undefined) existing.clone = rp.clone;
+      if (rp.ropedById !== undefined) existing.ropedById = rp.ropedById;
 
       if (!existing.snapshots) existing.snapshots = [];
       const snaps = existing.snapshots;
@@ -354,6 +377,12 @@ export default function GamePage() {
         isDying: rp.isDying,
         deathStartedAt: rp.deathStartedAt,
         burnUntil: rp.burnUntil,
+        jailedUntil: rp.jailedUntil,
+        gun: rp.gun,
+        tag: rp.tag,
+        colors: rp.colors,
+        clone: rp.clone,
+        ropedById: rp.ropedById,
         avgInterval: 24,
         snapshots: [{ x: rp.x, y: rp.y, vx: pvx, vy: pvy, time: nowPerf }],
         lastPacketAt: nowWall,
@@ -413,12 +442,17 @@ export default function GamePage() {
     stageBossesRef.current = createStageBosses(stg);
     bossDiedBannerRef.current.delete(stg);
     projectilesRef.current = [];
-    setAmmoCount(0);
+    {
+      const meNow = playersRef.current.get(myIdRef.current);
+      if (!meNow || !meNow.gun) {
+        setAmmoCount(0);
+      }
+    }
 
     const allQs = opts?.allQuestions ?? levelQuestionsRef.current;
     const stageQs = getStageQuestions(allQs, stg, tStg);
     const uid = opts?.seedId || myIdRef.current || 'anon';
-    
+
     // Default Guru & Admin: kotak soal bersih/hilang total, kecuali sedang mirror!
     if (isStaffRole(myRoleRef.current) && !mirrorTargetRef.current) {
       questionBlocksRef.current = [];
@@ -470,6 +504,10 @@ export default function GamePage() {
           isDying: me.isDying,
           deathStartedAt: me.deathStartedAt,
           burnUntil: me.burnUntil,
+          tag: me.tag,
+          colors: me.colors,
+          clone: me.clone ?? undefined,
+          ropedById: me.ropedById ?? undefined,
         });
       }
     }
@@ -480,28 +518,24 @@ export default function GamePage() {
         stg === 10
           ? `👑 STAGE 10/${tStg}: Menara Final Boss — Kuasai Void & Jadi Legenda! (${stageQs.length} Soal)`
           : stg === 9
-          ? `🦠 STAGE 9/${tStg}: Sarang Virus — Hancurkan Sarang & Bertahan Hidup! (${stageQs.length} Soal)`
-          : stg === 8
-          ? `🏜️ STAGE 8/${tStg}: Gurun Reruntuhan — Lolos dari Pasir & Jurang! (${stageQs.length} Soal)`
-          : stg === 7
-          ? `❄️ STAGE 7/${tStg}: Samudra Es — Awas Licin & Retakkan Es! (${stageQs.length} Soal)`
-          : stg === 6
-          ? `⚙️ STAGE 6/${tStg}: Kota Roda Gigi — Hindari Mesin & Gir Berputar! (${stageQs.length} Soal)`
-          : stg === 5
-          ? `🌿 STAGE 5/${tStg}: Hutan Neon Biolumin — Jelajahi Rimba & Kumpulkan Power-Up! (${stageQs.length} Soal)`
-          : stg === 4
-          ? `⚡ STAGE 4/${tStg}: Galaksi Cyber — Ambil Power-Up & Tembak Lawan Monster Virus! (${stageQs.length} Soal)`
-          : stg === 3
-          ? `🔥 STAGE 3/${tStg}: Kastil Magma — Waspada Lahar Panas, Lift Vulkanik & Monster Virus! (${stageQs.length} Soal)`
-          : stg === 2
-          ? `🌅 STAGE 2/${tStg}: Menara Sunset — Awas Pijakan Rapuh, Lift & Patroli Virus! (${stageQs.length} Soal)`
-          : `🏞️ STAGE 1/${tStg}: Lembah Kampus — Jawab Semua Soal untuk Buka Gerbang! (${stageQs.length} Soal)`;
+            ? `🦠 STAGE 9/${tStg}: Sarang Virus — Hancurkan Sarang & Bertahan Hidup! (${stageQs.length} Soal)`
+            : stg === 8
+              ? `🏜️ STAGE 8/${tStg}: Gurun Reruntuhan — Lolos dari Pasir & Jurang! (${stageQs.length} Soal)`
+              : stg === 7
+                ? `❄️ STAGE 7/${tStg}: Samudra Es — Awas Licin & Retakkan Es! (${stageQs.length} Soal)`
+                : stg === 6
+                  ? `⚙️ STAGE 6/${tStg}: Kota Roda Gigi — Hindari Mesin & Gir Berputar! (${stageQs.length} Soal)`
+                  : stg === 5
+                    ? `🌿 STAGE 5/${tStg}: Hutan Neon Biolumin — Jelajahi Rimba & Kumpulkan Power-Up! (${stageQs.length} Soal)`
+                    : stg === 4
+                      ? `⚡ STAGE 4/${tStg}: Galaksi Cyber — Ambil Power-Up & Tembak Lawan Monster Virus! (${stageQs.length} Soal)`
+                      : stg === 3
+                        ? `🔥 STAGE 3/${tStg}: Kastil Magma — Waspada Lahar Panas, Lift Vulkanik & Monster Virus! (${stageQs.length} Soal)`
+                        : stg === 2
+                          ? `🌅 STAGE 2/${tStg}: Menara Sunset — Awas Pijakan Rapuh, Lift & Patroli Virus! (${stageQs.length} Soal)`
+                          : `🏞️ STAGE 1/${tStg}: Lembah Kampus — Jawab Semua Soal untuk Buka Gerbang! (${stageQs.length} Soal)`;
       const bossLabel = createStageBosses(stg)[0];
-      setStageBanner(bossLabel ? `${label} ⚔️ BOSS: ${bossLabel.name} — Tembak sampai mati untuk dapat kunci!` : label);
-      if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
-      stageBannerTimerRef.current = setTimeout(() => {
-        setStageBanner(null);
-      }, 4200);
+      showBanner(bossLabel ? `${label} ⚔️ BOSS: ${bossLabel.name} — Tembak sampai mati untuk dapat kunci!` : label, 4200);
     }
   }
 
@@ -603,6 +637,12 @@ export default function GamePage() {
         shooterId: 'remote',
         stage: evt.stg,
         createdAt: Date.now(),
+        kind: evt.gun ? 'admin-round' : 'blaster',
+        damage: evt.dmg,
+        length: evt.len,
+        thickness: evt.thk,
+        color: evt.color,
+        glow: evt.glow,
       });
       soundEngine.playShoot();
     } else if (evt.op === 'boss_hit') {
@@ -630,11 +670,7 @@ export default function GamePage() {
       if (!bossDiedBannerRef.current.has(evt.stg)) {
         bossDiedBannerRef.current.add(evt.stg);
         soundEngine.playPowerUp();
-        setStageBanner('🔑 Boss dikalahkan! Kunci didapat, gerbang terbuka!');
-        if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
-        stageBannerTimerRef.current = setTimeout(() => {
-          setStageBanner(null);
-        }, 4200);
+        showBanner('🔑 Boss dikalahkan! Kunci didapat, gerbang terbuka!', 4200);
       }
     }
   }, []);
@@ -653,9 +689,9 @@ export default function GamePage() {
         if (me) me.isGodMode = cmd.value;
         if (cmd.value) {
           soundEngine.playPowerUp();
-          setStageBanner('👑 GOD MODE DIAKTIFKAN! Kamu kebal rintangan & infinite power-up.');
+          showBanner('👑 GOD MODE DIAKTIFKAN! Kamu kebal rintangan & infinite power-up.');
         } else {
-          setStageBanner('🛡️ God Mode telah dinonaktifkan.');
+          showBanner('🛡️ God Mode telah dinonaktifkan.');
         }
       }
     } else if (cmd.op === 'teleport') {
@@ -671,7 +707,7 @@ export default function GamePage() {
             me.vy = 0;
           }
           soundEngine.playBounce();
-          setStageBanner('🌀 Kamu diteleportasikan oleh Guru/Admin!');
+          showBanner('🌀 Kamu diteleportasikan oleh Guru/Admin!');
         }
       }
     } else if (cmd.op === 'reset') {
@@ -688,11 +724,11 @@ export default function GamePage() {
           setScores((prev) => ({ ...prev, [myIdRef.current]: 0 }));
           try {
             window.localStorage.setItem(`llys_stage_${roomId}_${myIdRef.current}`, '1');
-          } catch {}
+          } catch { }
         }
         applyStage(1, { respawnPlayer: true, showToast: true });
         soundEngine.playDeath();
-        setStageBanner('🔄 Jawaban & Progres kamu telah di-reset ke Stage 1 oleh Guru/Admin.');
+        showBanner('🔄 Jawaban & Progres kamu telah di-reset ke Stage 1 oleh Guru/Admin.');
       }
       if (isStaff && mirrorTargetRef.current) {
         const curM = mirrorTargetRef.current;
@@ -715,14 +751,137 @@ export default function GamePage() {
         setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
         setCorrectCount(answeredIdsRef.current.size);
         soundEngine.playAnswerCorrect();
-        setStageBanner('⭐ Soal sudah dibantu jawab');
+        showBanner('⭐ Soal sudah dibantu jawab');
+      }
+    } else if (cmd.op === 'gun') {
+      const targetP = playersRef.current.get(cmd.targetId);
+      if (targetP) {
+        if (cmd.value && cmd.weapon) {
+          const spec = WEAPONS[cmd.weapon as keyof typeof WEAPONS];
+          if (spec) {
+            targetP.gun = cmd.weapon;
+            targetP.blasterAmmo = Infinity;
+          }
+        } else {
+          targetP.gun = null;
+          targetP.blasterAmmo = 0;
+          targetP.blasterUntil = 0;
+        }
+      }
+      if (isTarget && cmd.value && cmd.weapon) {
+        const spec = WEAPONS[cmd.weapon as keyof typeof WEAPONS];
+        if (spec) {
+          setAmmoCount(Infinity);
+          showBanner(`🔫 ${spec.label} diberikan! (peluru unlimited)`);
+          soundEngine.playPowerUp();
+        }
+      }
+    } else if (cmd.op === 'jail') {
+      const targetP = playersRef.current.get(cmd.targetId);
+      if (targetP) {
+        targetP.jailedUntil = cmd.value ? Date.now() + JAIL_FREEZE_MS : undefined;
+        if (!cmd.value) targetP.vx = 0;
+      }
+      if (isTarget) {
+        const me = playersRef.current.get(myIdRef.current);
+        if (me) me.jailedUntil = targetP?.jailedUntil;
+        showBanner(cmd.value ? '⛓️ Kamu dibekukan oleh Admin selama 15 detik!' : '⛓️ Bekukanmu dilepas.');
+        if (cmd.value) soundEngine.playBurn();
+      }
+    } else if (cmd.op === 'cosmetics') {
+      const targetP = playersRef.current.get(cmd.targetId);
+      if (targetP) {
+        if (cmd.tag !== undefined) targetP.tag = cmd.tag || undefined;
+        if (cmd.colors) {
+          targetP.colors = { ...(targetP.colors ?? {}) };
+          if (cmd.colors.body !== undefined) targetP.colors.body = cmd.colors.body || undefined;
+          if (cmd.colors.tag !== undefined) targetP.colors.tag = cmd.colors.tag || undefined;
+          if (cmd.colors.nick !== undefined) targetP.colors.nick = cmd.colors.nick || undefined;
+        }
+      }
+      if (isTarget) {
+        const me = playersRef.current.get(myIdRef.current);
+        if (me) {
+          if (cmd.tag !== undefined) me.tag = cmd.tag || undefined;
+          if (cmd.colors) {
+            me.colors = { ...(me.colors ?? {}) };
+            if (cmd.colors.body !== undefined) me.colors.body = cmd.colors.body || undefined;
+            if (cmd.colors.tag !== undefined) me.colors.tag = cmd.colors.tag || undefined;
+            if (cmd.colors.nick !== undefined) me.colors.nick = cmd.colors.nick || undefined;
+          }
+        }
+      }
+    } else if (cmd.op === 'clone') {
+      const targetP = playersRef.current.get(cmd.targetId);
+      if (targetP) {
+        targetP.clone = cmd.username ? { username: cmd.username, fullName: cmd.fullName } : null;
+        if (!cmd.username) {
+          // Lepas clone: kembalikan identitas asli dari room membership
+          const original = roomRef.current?.players?.find((pl) => pl.userId === cmd.targetId);
+          if (original) {
+            targetP.username = original.username;
+            targetP.fullName = original.fullName || undefined;
+            if (original.avatar) targetP.avatar = original.avatar;
+          }
+          targetP.tag = undefined;
+          targetP.colors = null;
+        }
+      }
+      if (isTarget) {
+        const me = playersRef.current.get(myIdRef.current);
+        if (me) me.clone = cmd.username ? { username: cmd.username, fullName: cmd.fullName } : null;
+        try {
+          if (cmd.username) window.localStorage.setItem('llys_custom_clone', JSON.stringify({ username: cmd.username, fullName: cmd.fullName }));
+          else window.localStorage.removeItem('llys_custom_clone');
+        } catch { }
+        showBanner(cmd.username ? `🎭 Karakter kamu di-clone menjadi ${cmd.username}.` : '🎭 Clone karakter dilepas.');
+        if (cmd.username) soundEngine.playPowerUp();
+      }
+    } else if (cmd.op === 'rope') {
+      const targetP = playersRef.current.get(cmd.targetId);
+      if (targetP) {
+        targetP.ropedById = cmd.value ? (cmd.byId ?? 'admin') : null;
+      }
+      if (cmd.targetId === myIdRef.current) {
+        const me = playersRef.current.get(myIdRef.current);
+        if (me) me.ropedById = cmd.value ? (cmd.byId ?? 'admin') : null;
+        if (cmd.value) {
+          showBanner(`🪢 Kamu diikat oleh ${cmd.byName || 'Admin'}! Ikuti kemana pun admin pergi.`);
+          soundEngine.playPowerUp();
+        } else {
+          showBanner('🪢 Tali kamu dilepas oleh Admin.');
+        }
+      }
+    } else if (cmd.op === 'skip_stage') {
+      if (cmd.targetId === myIdRef.current) {
+        for (const qid of cmd.qids) {
+          answeredIdsRef.current.add(qid);
+          answerResultsRef.current.set(qid, 'assisted');
+        }
+        setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
+        setCorrectCount(answeredIdsRef.current.size);
+        soundEngine.playAnswerCorrect();
+        showBanner('⏭️ Soal tersisa di stage ini ditandai selesai oleh Admin! Silakan lanjut ke stage berikutnya.', 5000);
+      }
+    } else if (cmd.op === 'hit') {
+      if (cmd.targetId === myIdRef.current) {
+        const me = playersRef.current.get(myIdRef.current);
+        if (me && !isGodModeRef.current && !me.isDying) {
+          me.isDying = true;
+          me.deathStartedAt = Date.now();
+          me.vx = 0;
+          me.vy = -13.2;
+          soundEngine.playDeath();
+          showBanner(`💥 Kamu ditembak oleh Admin! (-${cmd.dmg})`);
+        }
       }
     }
   }, [applyStage]);
 
+  const ablyRef = useRef<AblyRoomApi | null>(null);
   const ably = useAblyRoom(roomId, ablyEnabled, {
     onDirectMove: (rp) => {
-      ingestRemotePlayerSnapshot(rp);
+      ingestRemotePlayerSnapshot({ ...rp, gun: rp.gun ?? undefined, tag: rp.tag ?? undefined, colors: rp.colors ?? undefined, clone: rp.clone ?? undefined });
     },
     onDirectLeave: (uid, kicked) => {
       if (uid === myIdRef.current || uid === 'me') {
@@ -738,6 +897,7 @@ export default function GamePage() {
     onObstacleEvent: applyObstacleEvent,
     onCommandEvent: applyIncomingCommand,
   });
+  ablyRef.current = ably;
 
   const fireLaser = useCallback(() => {
     const me = playersRef.current.get(myIdRef.current);
@@ -745,14 +905,25 @@ export default function GamePage() {
     const now = Date.now();
     const ammo = me.blasterAmmo ?? 0;
     const until = me.blasterUntil ?? 0;
-    if (ammo <= 0 || until <= now) {
+    if (me.gun && until > 0 && until <= now) {
+      me.gun = null;
+      me.blasterAmmo = 0;
+      setAmmoCount(0);
       return;
     }
-    if (now - lastShotAtRef.current < 160) {
+    if (ammo <= 0) {
+      return;
+    }
+    const gunSpec = me.gun ? WEAPONS[me.gun as keyof typeof WEAPONS] : undefined;
+    const cooldown = gunSpec?.cooldownMs ?? 160;
+    if (now - lastShotAtRef.current < cooldown) {
       return;
     }
     lastShotAtRef.current = now;
     me.blasterAmmo = ammo - 1;
+    if (me.blasterAmmo <= 0 && gunSpec) {
+      me.gun = null;
+    }
     setAmmoCount(me.blasterAmmo);
     soundEngine.playShoot();
 
@@ -760,7 +931,7 @@ export default function GamePage() {
     const projId = `proj_${myIdRef.current}_${now}`;
     const pX = facing === 1 ? me.x + 36 : me.x;
     const pY = me.y + 20;
-    const pVx = facing * 14;
+    const pVx = facing * (gunSpec?.speed ?? 14);
     const curStg = currentStageRef.current;
 
     const proj: Projectile = {
@@ -771,6 +942,12 @@ export default function GamePage() {
       shooterId: myIdRef.current,
       stage: curStg,
       createdAt: now,
+      kind: gunSpec ? 'admin-round' : 'blaster',
+      damage: gunSpec?.damage,
+      color: gunSpec?.color,
+      glow: gunSpec?.glow,
+      length: gunSpec?.length,
+      thickness: gunSpec?.thickness,
     };
     projectilesRef.current.push(proj);
 
@@ -781,6 +958,12 @@ export default function GamePage() {
       x: pX,
       y: pY,
       vx: pVx,
+      len: gunSpec?.length,
+      thk: gunSpec?.thickness,
+      color: gunSpec?.color,
+      glow: gunSpec?.glow,
+      gun: me.gun ?? undefined,
+      dmg: gunSpec?.damage,
     };
     ably.publishObstacle(shootEvt);
     pendingObstacleUploadRef.current = shootEvt;
@@ -803,7 +986,7 @@ export default function GamePage() {
       headers: { 'Content-Type': 'application/json' },
       body: payload,
       keepalive: true,
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   function handleSessionReplaced() {
@@ -1045,6 +1228,43 @@ export default function GamePage() {
         });
       }
 
+      // Muat tag & warna kustom yang tersimpan (persist untuk diri sendiri)
+      try {
+        const meP = playersRef.current.get(p.id);
+        if (meP) {
+          const savedTag = window.localStorage.getItem('llys_custom_tag');
+          if (savedTag) meP.tag = savedTag;
+          const savedColors = window.localStorage.getItem('llys_custom_colors');
+          if (savedColors) {
+            const parsed = JSON.parse(savedColors) as PlayerColors;
+            meP.colors = {
+              body: parsed.body || undefined,
+              tag: parsed.tag || undefined,
+              nick: parsed.nick || undefined,
+            };
+          }
+          const savedClone = window.localStorage.getItem('llys_custom_clone');
+          if (savedClone) {
+            try {
+              const parsedClone = JSON.parse(savedClone) as { username: string; fullName?: string; avatar?: string };
+              if (parsedClone?.username) {
+                meP.clone = { username: parsedClone.username, fullName: parsedClone.fullName };
+                meP.username = parsedClone.username;
+                if (parsedClone.fullName) meP.fullName = parsedClone.fullName;
+                const savedAvatar = window.localStorage.getItem('llys_custom_avatar');
+                if (savedAvatar) meP.avatar = savedAvatar;
+                // Broadcast ulang ke semua client lain supaya mereka juga melihat kita sebagai clone
+                setTimeout(() => {
+                  try {
+                    ablyRef.current?.publishCommand({ op: 'clone', targetId: p.id, username: parsedClone.username, fullName: parsedClone.fullName });
+                  } catch { }
+                }, 2500);
+              }
+            } catch { }
+          }
+        }
+      } catch { }
+
       const rawQs: Question[] = data.questions ?? [];
       const shuffleSeed = `${p.id}:${roomId}:${Date.now()}`;
       const qs: Question[] = rawQs.map((q) => shuffleQuestionOptions(q, shuffleSeed));
@@ -1095,6 +1315,10 @@ export default function GamePage() {
           vy: 0,
           facing: meInit.facing,
           onGround: meInit.onGround,
+          tag: meInit.tag,
+          colors: meInit.colors,
+          clone: meInit.clone ?? undefined,
+          ropedById: meInit.ropedById ?? undefined,
         });
       }
 
@@ -1287,6 +1511,14 @@ export default function GamePage() {
         if ((rp as any).fullName) existing.fullName = (rp as any).fullName;
         if (typeof rp.stage === 'number') existing.stage = rp.stage;
         if (rp.role) existing.role = rp.role;
+        const rpClone = (rp as any).clone;
+        if (rpClone !== undefined) existing.clone = rpClone ?? null;
+        const rpTag = (rp as any).tag;
+        if (rpTag !== undefined) existing.tag = rpTag;
+        const rpColors = (rp as any).colors;
+        if (rpColors !== undefined) existing.colors = rpColors;
+        const rpRoped = (rp as any).ropedById;
+        if (rpRoped !== undefined) existing.ropedById = rpRoped ?? null;
       } else {
         const resolvedFullName = (rp as any).fullName || roomRef.current?.players?.find((pl) => pl.userId === rp.id)?.fullName || undefined;
         playersRef.current.set(rp.id, {
@@ -1304,6 +1536,10 @@ export default function GamePage() {
           vy: 0,
           facing: rp.facing,
           onGround: false,
+          clone: (rp as any).clone ?? null,
+          ropedById: (rp as any).ropedById ?? null,
+          tag: (rp as any).tag,
+          colors: (rp as any).colors,
         });
       }
     }
@@ -1480,6 +1716,51 @@ export default function GamePage() {
             break;
           }
         }
+        if (p.ropedById) p.burnUntil = undefined;
+      }
+
+      // Auto-break rope jika admin (pemilik tali) hilang / mati / DC
+      for (const p of playersRef.current.values()) {
+        if (!p.ropedById) continue;
+        const owner = playersRef.current.get(p.ropedById);
+        if (!owner || owner.isDying || !ably.connected) {
+          p.ropedById = null;
+        }
+      }
+
+      // Rope drag: tali kaku (rigid leash), jarak fixed dari admin, player gabisa kabur
+      const leashLen = 70;
+      const applyLeash = (target: Player, ax: number, ay: number, afacing: number) => {
+        const side = afacing === 1 ? -1 : 1;
+        const tx = ax + side * 60;
+        const ty = ay;
+        const dx = target.x - tx;
+        const dy = target.y - ty;
+        const dist = Math.hypot(dx, dy);
+        if (dist > leashLen) {
+          const s = leashLen / dist;
+          target.x = tx + dx * s;
+          target.y = ty + dy * s;
+        }
+        target.vx = 0;
+        target.vy = 0;
+        target.facing = afacing === 1 ? 1 : -1;
+      };
+      if (me && !me.isDying) {
+        for (const p of playersRef.current.values()) {
+          if (p.id === myIdRef.current) continue;
+          if (p.ropedById !== myIdRef.current) continue;
+          if ((p.stage ?? 1) !== (me.stage ?? 1)) continue;
+          if (p.isDying) continue;
+          applyLeash(p, me.x, me.y, me.facing);
+        }
+      }
+      // Leash di sisi player yang diikat: clamp posisi sendiri realtime (biar ga nimbrung di client sendiri)
+      if (me && me.ropedById && !me.isDying) {
+        const owner = playersRef.current.get(me.ropedById);
+        if (owner && !owner.isDying && (owner.stage ?? 1) === (me.stage ?? 1)) {
+          applyLeash(me, owner.x, owner.y, owner.facing);
+        }
       }
 
       const syncedNow = ably.getSyncedServerTime();
@@ -1541,7 +1822,6 @@ export default function GamePage() {
           };
           applyObstacleEvent(evt);
           ably.publishObstacle(evt);
-          soundEngine.playShoot();
         },
         (playerId, bossId) => {
           const victim = playersRef.current.get(playerId);
@@ -1665,6 +1945,23 @@ export default function GamePage() {
                 });
               }
             },
+            playerRounds: projectilesRef.current
+              .filter((r) => r.kind === 'admin-round')
+              .map((r) => ({ x: r.x, y: r.y, shooterId: r.shooterId, damage: r.damage, len: r.length, w: r.thickness, h: r.thickness })),
+            onPlayerHitByRound: (victimId, shooterId, dmg) => {
+              if (victimId === myIdRef.current) {
+                const me = playersRef.current.get(myIdRef.current);
+                if (me && !isGodModeRef.current && !me.isDying && !me.ropedById) {
+                  me.isDying = true;
+                  me.deathStartedAt = Date.now();
+                  me.vx = 0;
+                  me.vy = -13.2;
+                  soundEngine.playDeath();
+                  showBanner('💥 Kamu ditembak oleh Admin!');
+                }
+              }
+              ably.publishCommand({ op: 'hit', targetId: victimId, by: shooterId, dmg });
+            },
           },
         );
       }
@@ -1709,6 +2006,12 @@ export default function GamePage() {
             isDying: me.isDying,
             deathStartedAt: me.deathStartedAt,
             burnUntil: me.burnUntil,
+            jailedUntil: me.jailedUntil,
+            gun: me.gun ?? undefined,
+            tag: me.tag,
+            colors: me.colors,
+            clone: me.clone ?? undefined,
+            ropedById: me.ropedById ?? undefined,
           });
         }
       }
@@ -1735,12 +2038,30 @@ export default function GamePage() {
       drawPowerUps(ctx, stagePowerUpsRef.current, syncedNow);
       drawProjectiles(ctx, projectilesRef.current, syncedNow);
 
+      // Render tali: garis putus-putus admin <-> player yang diikat (terlihat di semua client)
+      for (const p of playersRef.current.values()) {
+        if (!p.ropedById) continue;
+        const owner = playersRef.current.get(p.ropedById);
+        if (!owner) continue;
+        if ((p.stage ?? 1) !== (owner.stage ?? 1)) continue;
+        if ((p.stage ?? 1) !== curStage) continue;
+        ctx.save();
+        ctx.setLineDash([8, 6]);
+        ctx.strokeStyle = '#a97b4f';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(owner.x + PLAYER_W / 2, owner.y + PLAYER_H / 2);
+        ctx.lineTo(p.x + PLAYER_W / 2, p.y + PLAYER_H / 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
       for (const p of playersRef.current.values()) {
         const pStage = p.stage ?? 1;
         if (pStage !== curStage) continue;
 
         const role = p.id === myIdRef.current ? myRole : (p.role ?? (room?.hostId === p.id ? 'teacher' : 'student'));
-        const displayName = p.fullName?.trim() || p.username;
+        const displayName = p.clone?.username || p.fullName?.trim() || p.username;
         drawCat(
           ctx,
           p.x,
@@ -1758,6 +2079,11 @@ export default function GamePage() {
             burnUntil: p.burnUntil,
             blasterAmmo: p.blasterAmmo,
             blasterUntil: p.blasterUntil,
+            jailedUntil: p.jailedUntil,
+            gun: p.gun,
+            tag: p.tag,
+            colors: p.colors,
+            clone: p.clone,
             isGodMode: p.isGodMode || (p.id === myIdRef.current && isGodModeRef.current),
           },
         );
@@ -1826,27 +2152,33 @@ export default function GamePage() {
 
             const postPayload: Record<string, unknown> = moved
               ? {
-                  r: roomId,
-                  u: me.id,
-                  un: me.username,
-                  fn: myFullNameRef.current || me.fullName || undefined,
-                  av: me.avatar,
-                  rl: myRole,
-                  stg: currentStageRef.current,
-                  x: Math.round(me.x * 10) / 10,
-                  y: Math.round(me.y * 10) / 10,
-                  vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
-                  vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
-                  f: me.facing,
-                  g: me.onGround ? 1 : 0,
-                  d: me.isDying ? 1 : 0,
-                  ds: me.deathStartedAt,
-                  b: me.burnUntil,
-                }
+                r: roomId,
+                u: me.id,
+                un: me.username,
+                fn: myFullNameRef.current || me.fullName || undefined,
+                av: me.avatar,
+                rl: myRole,
+                stg: currentStageRef.current,
+                x: Math.round(me.x * 10) / 10,
+                y: Math.round(me.y * 10) / 10,
+                vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
+                vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
+                f: me.facing,
+                g: me.onGround ? 1 : 0,
+                d: me.isDying ? 1 : 0,
+                ds: me.deathStartedAt,
+                b: me.burnUntil,
+                j: me.jailedUntil,
+                gn: me.gun ?? undefined,
+                tg: me.tag,
+                cl: me.colors,
+                cn: me.clone ?? undefined,
+                rp: me.ropedById ?? undefined,
+              }
               : {
-                  r: roomId,
-                  u: me.id,
-                };
+                r: roomId,
+                u: me.id,
+              };
             if (pendingObs) {
               postPayload.obstacle = pendingObs;
             }
@@ -1920,6 +2252,12 @@ export default function GamePage() {
                   isDying: Boolean(rp.d),
                   deathStartedAt: typeof rp.ds === 'number' ? rp.ds : undefined,
                   burnUntil: typeof rp.b === 'number' ? rp.b : undefined,
+                  jailedUntil: typeof rp.j === 'number' ? rp.j : undefined,
+                  gun: typeof rp.gn === 'string' ? rp.gn : undefined,
+                  tag: typeof rp.tg === 'string' ? rp.tg : undefined,
+                  colors: (rp.cl as PlayerColors | undefined) ?? undefined,
+                  clone: (rp.cn && typeof rp.cn === 'object' ? (rp.cn as { username: string; fullName?: string }) : undefined),
+                  ropedById: typeof rp.rp === 'string' ? rp.rp : undefined,
                 });
               }
             }
@@ -1960,8 +2298,8 @@ export default function GamePage() {
           payload.targetId = mirrorFetchTargetRef.current;
         }
         // Saat WebSocket sudah terhubung, posisi sudah di-stream real-time & disimpan ke DB oleh ws-hub/pos,
-      // sehingga room-sync tidak perlu mengirim duplikat payload koordinat lagi.
-      if (me && !ably.connected) {
+        // sehingga room-sync tidak perlu mengirim duplikat payload koordinat lagi.
+        if (me && !ably.connected) {
           const rx = Math.round(me.x * 10) / 10;
           const ry = Math.round(me.y * 10) / 10;
           const prev = lastSyncedPosRef.current;
@@ -2337,7 +2675,7 @@ export default function GamePage() {
     ingestMessages([sysMsg]);
   }
 
-  function handleChatCommand(rawText: string) {
+  async function handleChatCommand(rawText: string) {
     const isStaff = isStaffRole(myRoleRef.current);
     const isAdmin = myRoleRef.current === 'admin';
 
@@ -2376,7 +2714,8 @@ export default function GamePage() {
         '• /cls : Bersihkan seluruh chat di layar (Clear Screen)',
         '• /set god <user|me> : Aktifkan God Mode (Kebal & Infinite Laser)',
         '• /unset god <user|me> : Nonaktifkan God Mode',
-        '• /teleport <user|me> me : Tarik player ke posisimu',
+        isAdmin ? '• /teleport <username> : Nyamperin player tersebut (pindah ke stage & posisinya)' : null,
+          '• /teleport <user|me> me : Tarik player ke posisimu',
         '• /teleport <user|me> <stage> : Lempar player ke Stage tertentu (1-4)',
         isAdmin ? '• /teleport all me : Tarik SELURUH siswa ke posisimu' : null,
         isAdmin ? '• /teleport all <stage> : Lempar SELURUH siswa ke Stage tertentu' : null,
@@ -2385,6 +2724,15 @@ export default function GamePage() {
         '• /unset mirror : Sembunyikan kembali kotak soal',
         '• /reset <user|me> : Reset jawaban & skor player ke Stage 1',
         isAdmin ? '• /reset all : Reset SEMUA jawaban 1 room ke Stage 1' : null,
+        isAdmin ? '• /spawn gun <minigun|laser|megalaser> [user|me] : Beri senjata (bisa menembak player)' : null,
+        isAdmin ? '• /jail on|off [user|me] : Bekukan player selama 15 detik' : null,
+        isAdmin ? '• /change tag <user|me> <judul> : Ganti title tag di atas kepala' : null,
+        isAdmin ? '• /change color <user|me> body|tag|nick <warna> : Ganti warna (hex/nama/rgb/blink/spin)' : null,
+        isAdmin ? '• /set clone <user|me> <targetusername> : Clone karakter (nick, avatar, tag, warna)' : null,
+        isAdmin ? '• /unset clone : Lepas clone, kembalikan identitas asli' : null,
+        isAdmin ? '• /take rope <user|all> : Ikat player dengan tali (ikut admin & kebal rintangan)' : null,
+        isAdmin ? '• /untake rope <user|all> : Lepas tali player' : null,
+    isAdmin ? '• /skip stage <username> : Tandai semua soal tersisa di stage siswa sebagai selesai (tanpa poin)' : null,
       ].filter(Boolean);
       for (const line of helpLines) {
         addSystemChatMessage(line as string);
@@ -2440,8 +2788,45 @@ export default function GamePage() {
       const targetQuery = arg1;
       const dest = arg2;
 
-      if (!targetQuery || !dest) {
-        addSystemChatMessage('Format salah. Contoh: /teleport bims me atau /teleport bims 2');
+      if (!targetQuery) {
+        addSystemChatMessage('Format salah. Contoh: /teleport bims, /teleport bims me, atau /teleport bims 2');
+        return;
+      }
+
+      // /teleport <username> : admin nyamperin player tersebut (ganti stage + posisi persis)
+      if (!dest) {
+        if (!isAdmin) {
+          addSystemChatMessage('Perintah /teleport hanya dapat digunakan oleh Administrator.');
+          return;
+        }
+        const target = findPlayer(targetQuery);
+        if (!target) {
+          addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+          return;
+        }
+        const me = playersRef.current.get(myIdRef.current);
+        if (!me) {
+          addSystemChatMessage('Karaktermu belum siap, coba lagi.');
+          return;
+        }
+        const targetLive = playersRef.current.get(target.id);
+        const targetStage =
+          typeof targetLive?.stage === 'number' && targetLive.stage >= 1
+            ? targetLive.stage
+            : currentStageRef.current;
+        const targetX = targetLive?.x ?? 120;
+        const targetY = targetLive?.y ?? 600;
+        if (targetStage !== currentStageRef.current) {
+          applyStage(targetStage, { respawnPlayer: true, showToast: true });
+        }
+        me.x = targetX;
+        me.y = targetY;
+        me.vx = 0;
+        me.vy = 0;
+        me.stage = targetStage;
+        soundEngine.playBounce();
+        showBanner(`🌀 Teleport ke '${target.username}' (Stage ${targetStage}).`);
+        addSystemChatMessage(`Berhasil teleport ke '${target.username}' di Stage ${targetStage}.`);
         return;
       }
 
@@ -2502,6 +2887,118 @@ export default function GamePage() {
       return;
     }
 
+    if ((cmd === 'take' || cmd === 'untake') && arg1 === 'rope') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah rope hanya dapat digunakan oleh Administrator.');
+        return;
+      }
+      const wantRope = cmd === 'take';
+      const targetQuery = arg2;
+      if (!targetQuery) {
+        addSystemChatMessage(`Format salah. Contoh: /${cmd} rope bims atau /${cmd} rope all`);
+        return;
+      }
+      const me = playersRef.current.get(myIdRef.current);
+      if (!me) {
+        addSystemChatMessage('Karaktermu belum siap, coba lagi.');
+        return;
+      }
+      const targets: { id: string; username: string }[] = [];
+      if (targetQuery === 'all') {
+        for (const p of playersRef.current.values()) {
+          if (p.id === myIdRef.current) continue;
+          targets.push({ id: p.id, username: p.username });
+        }
+        if (targets.length === 0) {
+          addSystemChatMessage('Tidak ada player untuk diikat.');
+          return;
+        }
+      } else {
+        const target = findPlayer(targetQuery);
+        if (!target) {
+          addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+          return;
+        }
+        if (target.id === myIdRef.current) {
+          addSystemChatMessage('Tidak bisa mengikat diri sendiri. 🪢');
+          return;
+        }
+        targets.push(target);
+      }
+      for (const t of targets) {
+        const p = playersRef.current.get(t.id);
+        if (p) p.ropedById = wantRope ? myIdRef.current : null;
+        ably.publishCommand({
+          op: 'rope',
+          targetId: t.id,
+          value: wantRope,
+          byId: myIdRef.current,
+          byName: myUsernameRef.current || 'Admin',
+        });
+      }
+      const names = targets.map((t) => t.username).join(', ');
+      addSystemChatMessage(
+        wantRope
+          ? `🪢 Mengikat '${names}' dengan tali. Mereka akan mengikutimu & kebal rintangan.`
+          : `🪢 Melepas tali '${names}'.`,
+      );
+      if (wantRope) soundEngine.playPowerUp();
+      return;
+    }
+
+    if (cmd === 'skip' && arg1 === 'stage') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah /skip stage hanya dapat digunakan oleh Administrator.');
+        return;
+      }
+      const targetQuery = arg2;
+      if (!targetQuery) {
+        addSystemChatMessage('Format salah. Contoh: /skip stage najla');
+        return;
+      }
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+      if (target.id === myIdRef.current) {
+        addSystemChatMessage('Tidak bisa skip stage diri sendiri.');
+        return;
+      }
+      const targetStage = playersRef.current.get(target.id)?.stage ?? currentStageRef.current;
+      const stageQs = getStageQuestions(levelQuestionsRef.current, targetStage, totalStagesRef.current);
+      if (stageQs.length === 0) {
+        addSystemChatMessage(`Tidak ada soal di stage ${targetStage}.`);
+        return;
+      }
+      try {
+        const res = await fetch('/api/game/room-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, targetId: target.id }),
+        });
+        const data = await res.json();
+        const serverSet = new Set<string>(Array.isArray(data?.answeredQuestionIds) ? data.answeredQuestionIds : []);
+        const unanswered = stageQs.filter((q) => !serverSet.has(q.id));
+        if (unanswered.length === 0) {
+          addSystemChatMessage(`Semua soal '${target.username}' di stage ${targetStage} sudah terjawab.`);
+          return;
+        }
+        const qids = unanswered.map((q) => q.id);
+        await fetch('/api/game/skip-stage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, targetId: target.id, stage: targetStage, questionIds: qids }),
+        });
+        ably.publishCommand({ op: 'skip_stage', targetId: target.id, qids, stage: targetStage });
+        addSystemChatMessage(`⏭️ Skip stage untuk '${target.username}': ${unanswered.length} soal ditandai selesai (tanpa poin). Gerbang terbuka, lanjut ke stage berikutnya!`);
+        soundEngine.playPowerUp();
+      } catch {
+        addSystemChatMessage('Gagal skip stage, coba lagi.');
+      }
+      return;
+    }
+
     if (cmd === 'reset') {
       const targetQuery = arg1;
       if (!targetQuery) {
@@ -2517,7 +3014,7 @@ export default function GamePage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ roomId, targetId: 'all' }),
-        }).catch(() => {});
+        }).catch(() => { });
         ably.publishCommand({ op: 'reset', targetId: 'all' });
         if (mirrorTargetRef.current) {
           answerResultsRef.current.clear();
@@ -2542,7 +3039,7 @@ export default function GamePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, targetId: target.id }),
-      }).catch(() => {});
+      }).catch(() => { });
       ably.publishCommand({ op: 'reset', targetId: target.id });
       const curMirror = mirrorTargetRef.current;
       if (curMirror && (curMirror === 'all' || curMirror.userId === target.id)) {
@@ -2614,7 +3111,7 @@ export default function GamePage() {
             answerResultsRef.current.set(qid, okAns === 'assisted' ? 'assisted' : Boolean(okAns));
           }
         })
-        .catch(() => {});
+        .catch(() => { });
       addSystemChatMessage(`🔍 Mode Mirroring '${target.username}' aktif! Kotak soal siswa dimunculkan di map.`);
       soundEngine.playPowerUp();
       return;
@@ -2627,6 +3124,278 @@ export default function GamePage() {
       questionBlocksRef.current = [];
       addSystemChatMessage('Mode Mirror dimatikan. Kotak soal disembunyikan kembali dari pandangan.');
       soundEngine.playBounce();
+      return;
+    }
+
+    if (cmd === 'set' && arg1 === 'clone') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+        return;
+      }
+      // Format baru: /set clone <user|me> <targetusername>
+      // scope 'me' = clone diri sendiri jadi target, scope 'user' = clone player lain jadi target
+      const scope = arg2 || '';
+      const targetQuery = parts[3]?.toLowerCase() || '';
+      if (!targetQuery) {
+        addSystemChatMessage('Format: /set clone <user|me> <targetusername>');
+        return;
+      }
+      if (scope === 'user') {
+        let remoteTarget: { id: string; username: string } | null = null;
+        for (const p of playersRef.current.values()) {
+          if (p.id !== myIdRef.current && p.username.toLowerCase() === targetQuery) {
+            remoteTarget = { id: p.id, username: p.username };
+            break;
+          }
+        }
+        if (!remoteTarget) {
+          addSystemChatMessage(`Player '${parts[3]}' tidak ditemukan di room (untuk /set clone user).`);
+          return;
+        }
+        ably.publishCommand({ op: 'clone', targetId: remoteTarget.id, username: targetQuery, fullName: undefined });
+        addSystemChatMessage(`🎭 Karakter '${remoteTarget.username}' di-clone jadi '${targetQuery}'.`);
+        soundEngine.playPowerUp();
+        return;
+      }
+      if (scope !== 'me') {
+        addSystemChatMessage('Format: /set clone <user|me> <targetusername>');
+        return;
+      }
+      const me = playersRef.current.get(myIdRef.current);
+      if (!me) {
+        addSystemChatMessage('Gagal: player kamu belum siap.');
+        return;
+      }
+      // Cari target: live players dulu, lalu room members (termasuk offline)
+      let targetData: { username: string; fullName?: string; avatar?: string; tag?: string | null; colors?: { body?: string; tag?: string; nick?: string } | null } | null = null;
+      let targetId: string | null = null;
+      if (targetQuery === 'me' || targetQuery === (myUsernameRef.current || '').toLowerCase()) {
+        targetData = { username: myUsernameRef.current || 'Me', fullName: myFullNameRef.current || me.fullName, avatar: me.avatar, tag: null, colors: null };
+        targetId = myIdRef.current;
+      } else {
+        for (const p of playersRef.current.values()) {
+          if (p.username.toLowerCase() === targetQuery) {
+            targetData = { username: p.username, fullName: p.fullName, avatar: p.avatar, tag: p.tag, colors: p.colors };
+            targetId = p.id;
+            break;
+          }
+        }
+        if (!targetData) {
+          const foundInRoom = roomRef.current?.players?.find((pl) => pl.username.toLowerCase() === targetQuery);
+          if (foundInRoom) {
+            targetData = { username: foundInRoom.username, fullName: foundInRoom.fullName || undefined, avatar: foundInRoom.avatar };
+            targetId = foundInRoom.userId;
+          }
+        }
+      }
+      if (!targetData || !targetId) {
+        addSystemChatMessage(`Player '${parts[3]}' tidak ditemukan (online maupun offline).`);
+        return;
+      }
+      // Clone semua: nick, avatar, tag, warna
+      me.username = targetData.username;
+      me.fullName = targetData.fullName;
+      if (targetData.avatar) me.avatar = targetData.avatar;
+      me.tag = targetData.tag ?? undefined;
+      me.colors = targetData.colors ? { ...targetData.colors } : null;
+      me.clone = { username: targetData.username, fullName: targetData.fullName };
+      myUsernameRef.current = targetData.username;
+      myFullNameRef.current = targetData.fullName || '';
+      try {
+        window.localStorage.setItem('llys_custom_clone', JSON.stringify({ username: targetData.username, fullName: targetData.fullName }));
+        if (targetData.avatar) window.localStorage.setItem('llys_custom_avatar', targetData.avatar);
+        else window.localStorage.removeItem('llys_custom_avatar');
+        if (targetData.tag) window.localStorage.setItem('llys_custom_tag', targetData.tag);
+        else window.localStorage.removeItem('llys_custom_tag');
+        window.localStorage.setItem('llys_custom_colors', JSON.stringify(me.colors ?? {}));
+      } catch { }
+      if (targetId !== myIdRef.current) {
+        // Clone diri sendiri jadi target: broadcast ke SEMUA client dengan targetId = ID kita,
+        // bukan ID target, supaya client lain menerapkan clone pada KITA (bukan pada target).
+        ably.publishCommand({ op: 'clone', targetId: myIdRef.current, username: targetData.username, fullName: targetData.fullName });
+      }
+      addSystemChatMessage(`🎭 Karakter kamu di-clone jadi '${targetData.username}' (nick, avatar, tag, warna).`);
+      soundEngine.playPowerUp();
+      setCloneNonce((n) => n + 1);
+      return;
+    }
+
+    if (cmd === 'unset' && arg1 === 'clone') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+        return;
+      }
+      const me = playersRef.current.get(myIdRef.current);
+      if (me) {
+        me.clone = null;
+        // Kembalikan identitas asli dari room membership (sesudah clone dilepas)
+        const original = roomRef.current?.players?.find((pl) => pl.userId === myIdRef.current);
+        if (original) {
+          me.username = original.username;
+          me.fullName = original.fullName || undefined;
+          if (original.avatar) me.avatar = original.avatar;
+          myUsernameRef.current = original.username;
+          myFullNameRef.current = original.fullName || '';
+        }
+        me.tag = undefined;
+        me.colors = null;
+      }
+      try {
+        window.localStorage.removeItem('llys_custom_clone');
+        window.localStorage.removeItem('llys_custom_avatar');
+        window.localStorage.removeItem('llys_custom_tag');
+        window.localStorage.removeItem('llys_custom_colors');
+      } catch { }
+      ably.publishCommand({ op: 'clone', targetId: myIdRef.current, username: undefined, fullName: undefined });
+      addSystemChatMessage('🎭 Clone karakter dilepas, identitas asli dikembalikan.');
+      soundEngine.playBounce();
+      setCloneNonce((n) => n + 1);
+      return;
+    }
+
+    if (cmd === 'spawn' && arg1 === 'gun') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+        return;
+      }
+      const weaponType = parseWeaponType(parts[2]);
+      const targetQuery = parts[3]?.toLowerCase() || 'me';
+      if (!weaponType && parts[2] && ['none', 'off', 'unset'].includes(parts[2]?.toLowerCase() ?? '')) {
+        const target = findPlayer(targetQuery);
+        if (!target) {
+          addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+          return;
+        }
+        const p = playersRef.current.get(target.id);
+        if (p) {
+          p.gun = null;
+          p.blasterAmmo = 0;
+          p.blasterUntil = 0;
+        }
+        ably.publishCommand({ op: 'gun', targetId: target.id, value: false });
+        addSystemChatMessage(`🔫 Senjata '${target.username}' dicabut.`);
+        return;
+      }
+      if (!weaponType) {
+        addSystemChatMessage('Format: /spawn gun <minigun|laser|megalaser> [user|me]');
+        return;
+      }
+      const spec = WEAPONS[weaponType];
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+      const p = playersRef.current.get(target.id);
+      if (p) {
+        p.gun = weaponType;
+        p.blasterAmmo = Infinity;
+      }
+      if (target.id === myIdRef.current) setAmmoCount(Infinity);
+      ably.publishCommand({ op: 'gun', targetId: target.id, value: true, weapon: weaponType });
+      addSystemChatMessage(`🔫 ${spec.label} diberikan ke '${target.username}' (peluru unlimited).`);
+      soundEngine.playPowerUp();
+      return;
+    }
+
+    if (cmd === 'jail') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+        return;
+      }
+      const turnOn = arg1 !== 'off';
+      if (arg1 !== 'on' && arg1 !== 'off') {
+        addSystemChatMessage('Format: /jail on [user|me] atau /jail off [user|me]');
+        return;
+      }
+      const targetQuery = parts[3]?.toLowerCase() || parts[2]?.toLowerCase() || 'me';
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+      const p = playersRef.current.get(target.id);
+      if (p) p.jailedUntil = turnOn ? Date.now() + JAIL_FREEZE_MS : undefined;
+      ably.publishCommand({ op: 'jail', targetId: target.id, value: turnOn });
+      addSystemChatMessage(turnOn ? `⛓️ '${target.username}' dibekukan selama 15 detik.` : `⛓️ Bekukan '${target.username}' dilepas.`);
+      soundEngine.playPowerUp();
+      return;
+    }
+
+    if (cmd === 'change' && arg1 === 'tag') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+        return;
+      }
+      const targetQuery = arg2 || 'me';
+      const title = parts.slice(3).join(' ').trim();
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+      const tagValue = title ? title.slice(0, 20) : undefined;
+      const p = playersRef.current.get(target.id);
+      if (p) p.tag = tagValue;
+      if (target.id === myIdRef.current) {
+        try {
+          if (tagValue) window.localStorage.setItem('llys_custom_tag', tagValue);
+          else window.localStorage.removeItem('llys_custom_tag');
+        } catch { }
+      }
+      ably.publishCommand({ op: 'cosmetics', targetId: target.id, tag: tagValue });
+      addSystemChatMessage(tagValue ? `🏷️ Tag '${target.username}' diubah jadi "${tagValue}".` : `🏷️ Tag '${target.username}' direset.`);
+      soundEngine.playPowerUp();
+      return;
+    }
+
+    if (cmd === 'change' && arg1 === 'color') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+        return;
+      }
+      const targetQuery = arg2 || 'me';
+      const channel = (parts[3]?.toLowerCase() || '') as 'body' | 'tag' | 'nick';
+      const colorRaw = parts[4];
+      if (!['body', 'tag', 'nick'].includes(channel) || !colorRaw) {
+        addSystemChatMessage('Format: /change color <user|me> body|tag|nick <warna>');
+        addSystemChatMessage('Warna: hex (#ff0000), nama (red), rgb, blink, spin, atau none/reset.');
+        return;
+      }
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
+        return;
+      }
+      let colorSpec: string | undefined;
+      if (colorRaw.toLowerCase() !== 'none' && colorRaw.toLowerCase() !== 'reset') {
+        const parsed = parseColorArg(colorRaw);
+        if (!parsed) {
+          addSystemChatMessage(`Warna '${colorRaw}' tidak dikenal. Pakai hex, nama warna, rgb, blink, atau spin.`);
+          return;
+        }
+        colorSpec = parsed.value;
+      }
+      const p = playersRef.current.get(target.id);
+      if (p) {
+        p.colors = { ...(p.colors ?? {}) };
+        if (channel === 'body') p.colors.body = colorSpec;
+        else if (channel === 'tag') p.colors.tag = colorSpec;
+        else p.colors.nick = colorSpec;
+      }
+      if (target.id === myIdRef.current) {
+        try {
+          const meP = playersRef.current.get(myIdRef.current);
+          window.localStorage.setItem('llys_custom_colors', JSON.stringify(meP?.colors ?? {}));
+        } catch { }
+      }
+      ably.publishCommand({
+        op: 'cosmetics',
+        targetId: target.id,
+        colors: { [channel]: colorSpec },
+      });
+      addSystemChatMessage(colorSpec ? `🎨 ${channel} '${target.username}' diubah jadi ${colorSpec}.` : `🎨 ${channel} '${target.username}' direset.`);
+      soundEngine.playPowerUp();
       return;
     }
 
@@ -2787,11 +3556,9 @@ export default function GamePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, targetId, questionId: answeredId, answer: selected }),
-      }).catch(() => {});
+      }).catch(() => { });
       soundEngine.playAnswerCorrect();
-      setStageBanner(`🟦 Berhasil membantu soal untuk ${targetName}! (+0 Poin, Misi Tercatat)`);
-      if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
-      stageBannerTimerRef.current = setTimeout(() => setStageBanner(null), 4000);
+      showBanner(`🟦 Berhasil membantu soal untuk ${targetName}! (+0 Poin, Misi Tercatat)`, 4000);
       setQuestion(null);
       questionRef.current = null;
       setSelected('');
@@ -2837,9 +3604,7 @@ export default function GamePage() {
             curStg < totStg
               ? `🔓 GERBANG STAGE ${curStg} TERBUKA! Pergi ke Pintu Ujung Kanan untuk Masuk Stage ${curStg + 1} ➜`
               : `🏆 SEMUA SOAL STAGE ${curStg} SELESAI! Pergi ke Gerbang Finish di Ujung Kanan!`;
-          setStageBanner(msg);
-          if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
-          stageBannerTimerRef.current = setTimeout(() => setStageBanner(null), 5000);
+          showBanner(msg, 5000);
         }
         setSelected('');
         if (result.isCorrect) {
@@ -2902,426 +3667,432 @@ export default function GamePage() {
 
         <div className="mp-hud-layer">
           <div className="mp-topbar">
-              <div className="mp-top-left">
-                <div className="mp-brand-pill">
-                  <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
-                    <rect x="4" y="12" width="40" height="24" rx="12" fill="#e8eefc" stroke="#233866" strokeWidth="3.5" />
-                    <path d="M15 20v8M11 24h8" stroke="#3b66c4" strokeWidth="3.2" strokeLinecap="round" />
-                    <circle cx="32" cy="21" r="2.5" fill="#ef4b5b" />
-                    <circle cx="36" cy="26" r="2.5" fill="#ffb03b" />
-                  </svg>
-                  <div className="mp-brand-text">
-                    <span className="mp-brand-name">llysSmart</span>
-                    <span className="mp-brand-sub">Let&apos;s Learn Your Skills</span>
-                  </div>
+            <div className="mp-top-left">
+              <div className="mp-brand-pill">
+                <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
+                  <rect x="4" y="12" width="40" height="24" rx="12" fill="#e8eefc" stroke="#233866" strokeWidth="3.5" />
+                  <path d="M15 20v8M11 24h8" stroke="#3b66c4" strokeWidth="3.2" strokeLinecap="round" />
+                  <circle cx="32" cy="21" r="2.5" fill="#ef4b5b" />
+                  <circle cx="36" cy="26" r="2.5" fill="#ffb03b" />
+                </svg>
+                <div className="mp-brand-text">
+                  <span className="mp-brand-name">llysSmart</span>
+                  <span className="mp-brand-sub">Let&apos;s Learn Your Skills</span>
                 </div>
+              </div>
 
-                {!panelsHidden && (
+              {!panelsHidden && (
+                <button
+                  type="button"
+                  className="pause-btn mp-chat-top-btn"
+                  aria-pressed={!chatMinimized}
+                  aria-label={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
+                  title={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
+                  onClick={() => {
+                    soundEngine.playClick();
+                    setChatMinimized((prev) => !prev);
+                    setUnreadCount(0);
+                  }}
+                  onContextMenu={(e) => e.preventDefault()}
+                >
+                  <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"
+                      fill="#fff"
+                    />
+                    <circle cx="8.5" cy="11.5" r="1.3" fill="#6b3806" />
+                    <circle cx="12" cy="11.5" r="1.3" fill="#6b3806" />
+                    <circle cx="15.5" cy="11.5" r="1.3" fill="#6b3806" />
+                  </svg>
+                  {unreadCount > 0 && <span className="mp-chat-badge">{unreadCount}</span>}
+                </button>
+              )}
+            </div>
+
+            <div className="mp-center-stage-pill">
+              <div className="mp-stage-title">{getRoomSubjectTitle(room)}</div>
+              {totalStages > 1 && (
+                isStaff ? (
+                  <div className="mp-stage-switch-row" role="group" aria-label="Pilih Stage (Guru/Admin)">
+                    {Array.from({ length: totalStages }, (_, idx) => {
+                      const stgNum = idx + 1;
+                      const stgQs = getStageQuestions(levelQuestions, stgNum, totalStages);
+                      const stgAns = stgQs.filter((q) => answeredQuestionIds.includes(q.id)).length;
+                      const isCleared = stgQs.length > 0 && stgAns >= stgQs.length;
+                      return (
+                        <button
+                          key={stgNum}
+                          type="button"
+                          className={`mp-stage-chip-compact${currentStage === stgNum ? ' is-active' : ''}${isCleared ? ' is-cleared' : ''}`}
+                          title={`Stage ${stgNum} (${stgAns}/${stgQs.length} soal)`}
+                          onClick={() => {
+                            soundEngine.playClick();
+                            applyStage(stgNum, { respawnPlayer: true, showToast: true });
+                          }}
+                        >
+                          {stgNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mp-stage-switch-row">
+                    <span className="mp-stage-badge-student">
+                      Stage {currentStage} / {totalStages}
+                    </span>
+                  </div>
+                )
+              )}
+            </div>
+
+            {mirrorTarget && isStaff && (
+              <div className="mirror-indicator-pill" role="status">
+                <span>🔍 Mirroring: <strong>{mirrorTarget}</strong></span>
+                <button
+                  type="button"
+                  className="mirror-close-btn"
+                  title="Tutup Mode Mirror (/unset mirror)"
+                  onClick={() => {
+                    mirrorTargetRef.current = null;
+                    mirrorFetchTargetRef.current = null;
+                    setMirrorTarget(null);
+                    questionBlocksRef.current = [];
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            <div className="mp-top-right">
+              <div className="mp-timer-row">
+                <div
+                  className="mp-ping-pill"
+                  title={`Realtime Transport: ${ably.transportMode.toUpperCase()} (${ably.pingMs} ms)`}
+                  aria-label={`Ping ${ably.pingMs} ms`}
+                >
+                  <span className={`mp-ping-dot ${ably.pingMs <= 20 ? 'fast' : ably.pingMs <= 80 ? 'ok' : 'slow'}`} />
+                  <span>{ably.pingMs} ms</span>
+                </div>
+                {isStaff && (
+                  <div className="mp-teacher-actions">
+                    <button
+                      type="button"
+                      className={`pause-btn mp-staff-btn ${room?.status === 'paused' ? 'mp-staff-green' : 'mp-staff-blue'}`}
+                      aria-label={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
+                      title={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
+                      onClick={togglePauseGame}
+                    >
+                      {room?.status === 'paused' ? (
+                        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M8 5.5v13l11-6.5-11-6.5z" fill="#fff" />
+                        </svg>
+                      ) : (
+                        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
+                          <rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
+                        </svg>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="pause-btn mp-staff-btn mp-staff-blue mp-chat-top-btn"
+                      aria-label="Kelola Pemain"
+                      title="Kelola Pemain"
+                      onClick={() => {
+                        setKickModalOpen(true);
+                        fetch('/api/game/room-sync', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ roomId, chatCursor: chatCursorRef.current }),
+                        })
+                          .then((r) => (r.ok ? r.json() : null))
+                          .then((d) => {
+                            if (d && Array.isArray(d.rejoinRequests)) {
+                              setRejoinRequests(d.rejoinRequests);
+                            }
+                          })
+                          .catch(() => { });
+                      }}
+                    >
+                      <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="9" cy="8.5" r="3.2" fill="#fff" />
+                        <path
+                          d="M3.5 19c0-2.8 2.5-5 5.5-5s5.5 2.2 5.5 5"
+                          fill="none"
+                          stroke="#fff"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                        />
+                        <circle cx="16.8" cy="9.2" r="2.3" fill="#fff" opacity="0.92" />
+                        <path
+                          d="M15.8 14.3c2.4.3 4.4 2 4.4 4.4"
+                          fill="none"
+                          stroke="#fff"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      {rejoinRequests.length > 0 && (
+                        <span className="mp-chat-badge">{rejoinRequests.length}</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="pause-btn mp-staff-btn mp-staff-danger"
+                      aria-label="Akhiri Sesi Game"
+                      title="Akhiri Sesi Game"
+                      onClick={endGame}
+                    >
+                      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M12 3v9"
+                          fill="none"
+                          stroke="#fff"
+                          strokeWidth="2.6"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M7.05 6.05a8 8 0 1 0 9.9 0"
+                          fill="none"
+                          stroke="#fff"
+                          strokeWidth="2.4"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="pause-btn"
+                  aria-pressed={settingsModalOpen}
+                  aria-label="Pengaturan Suara & Tombol"
+                  title="Pengaturan Suara & Tombol"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    setSettingsModalOpen((v) => !v);
+                  }}
+                >
+                  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
+                      fill="#fff"
+                    />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className="pause-btn"
+                  aria-pressed={panelsHidden}
+                  aria-label={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
+                  title={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
+                  onClick={() => {
+                    soundEngine.playClick();
+                    setPanelsHidden((v) => !v);
+                  }}
+                >
+                  {panelsHidden ? (
+                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                      <line x1="3" y1="3" x2="21" y2="21" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                      <circle cx="12" cy="12" r="3" fill="#fff" />
+                    </svg>
+                  )}
+                </button>
+                <button type="button" className="pause-btn" aria-label="Kembali" title="Kembali" onClick={handleLeaveGame}>
+                  <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M20 6l-12 10 12 10v-6h8v-8h-8V6z" fill="#fff" /></svg>
+                </button>
+                <button
+                  type="button"
+                  className="pause-btn mp-fullscreen-btn"
+                  aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
+                  title={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
+                  onClick={toggleFullscreen}
+                >
+                  {isFullscreen ? (
+                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 3v3H6v3H3V3h6zm6 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm15 0h3v6h-6v-3h3v-3z" fill="#fff" />
+                    </svg>
+                  ) : (
+                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M3 3h6v3H6v3H3V3zm12 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm18 0v6h-6v-3h3v-3h3z" fill="#fff" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+
+              {!panelsHidden && (
+                <div className="mp-right-tool-rail">
+                  <div className="mp-tool-slot">
+                    <button
+                      type="button"
+                      className={`mp-icon-badge${!leaderboardMinimized ? ' is-active' : ''}`}
+                      aria-pressed={!leaderboardMinimized}
+                      aria-label={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
+                      title={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
+                      onClick={() => {
+                        soundEngine.playClick();
+                        setLeaderboardMinimized((v) => !v);
+                      }}
+                      onContextMenu={(e) => e.preventDefault()}
+                    >
+                      <span aria-hidden="true">🏆</span>
+                    </button>
+                    {!leaderboardMinimized && (
+                      <aside className="mp-dark-panel mp-leaderboard-box mp-tool-popover" aria-label="Papan peringkat" style={panelStyle('leaderboard')}>
+                        <h2
+                          className="mp-panel-heading mp-drag-handle"
+                          onPointerDown={(e) => startPanelDrag('leaderboard', e)}
+                          onPointerMove={movePanelDrag}
+                          onPointerUp={(e) => endPanelDrag(e)}
+                          onPointerCancel={(e) => endPanelDrag(e)}
+                        >
+                          <span className="mp-panel-heading-title">
+                            <span aria-hidden="true">🏆</span> Leaderboard
+                          </span>
+                          <button
+                            type="button"
+                            className="mp-win-btn"
+                            aria-label="Perkecil leaderboard"
+                            title="Perkecil"
+                            onClick={() => setLeaderboardMinimized(true)}
+                          >
+                            −
+                          </button>
+                        </h2>
+                        <ol className="mp-rank-list">
+                          {sortedPlayers
+                            .filter((p) => {
+                              if (p.role !== 'admin' && !playersRef.current.get(p.userId)?.clone) return true;
+                              return false;
+                            })
+                            .slice(0, 5)
+                            .map((p, i) => {
+                              const liveP = playersRef.current.get(p.userId);
+                              const cloned = liveP?.clone;
+                              const pFullName = cloned?.fullName || p.fullName || liveP?.fullName;
+                              const pUsername = cloned?.username || p.username;
+                              const rankDisplayName =
+                                pFullName && pFullName.trim().toLowerCase() !== pUsername.trim().toLowerCase()
+                                  ? `[${pUsername}] - ${pFullName.trim()}`
+                                  : `[${pUsername}]`;
+                              return (
+                                <li key={`${p.userId}:${cloneNonce}`} className="mp-rank-row">
+                                  <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
+                                  <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
+                                  <span className="rank-name" title={rankDisplayName}>{rankDisplayName}</span>
+                                  <span className="rank-score">{cloned ? -1910 : (scores[p.userId] ?? 0)}</span>
+                                </li>
+                              );
+                            })}
+                        </ol>
+                      </aside>
+                    )}
+                  </div>
+
+                  <div className="mp-tool-slot">
+                    <button
+                      type="button"
+                      className={`mp-icon-badge${!missionMinimized ? ' is-active' : ''}`}
+                      aria-pressed={!missionMinimized}
+                      aria-label={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
+                      title={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
+                      onClick={() => {
+                        soundEngine.playClick();
+                        setMissionMinimized((v) => !v);
+                      }}
+                      onContextMenu={(e) => e.preventDefault()}
+                    >
+                      <span aria-hidden="true">🎯</span>
+                    </button>
+                    {!missionMinimized && (
+                      <aside className="mp-dark-panel mp-topic-card mp-tool-popover" aria-label="Progres misi" style={panelStyle('mission')}>
+                        <h3
+                          className="mp-panel-heading mp-drag-handle"
+                          onPointerDown={(e) => startPanelDrag('mission', e)}
+                          onPointerMove={movePanelDrag}
+                          onPointerUp={(e) => endPanelDrag(e)}
+                          onPointerCancel={(e) => endPanelDrag(e)}
+                        >
+                          <span className="mp-panel-heading-title">
+                            <span aria-hidden="true">🎯</span> Misi
+                          </span>
+                          <button
+                            type="button"
+                            className="mp-win-btn"
+                            aria-label="Perkecil misi"
+                            title="Perkecil misi"
+                            onClick={() => setMissionMinimized(true)}
+                          >
+                            −
+                          </button>
+                        </h3>
+                        <ul className="mp-topic-checklist">
+                          <li><span className="check-green" aria-hidden="true">✔</span> Masuk arena</li>
+                          <li>
+                            <span className={doneSteps > 0 ? 'check-green' : 'check-pending'} aria-hidden="true">
+                              {doneSteps > 0 ? '✔' : '○'}
+                            </span>{' '}
+                            Jawab tantangan soal ({doneSteps}/{totalSteps})
+                          </li>
+                        </ul>
+                        <div className="mp-goal-bar-row">
+                          <span aria-hidden="true">🚩</span>
+                          <div className="mp-goal-track">
+                            <div className="mp-goal-fill" style={{ width: `${(doneSteps / totalSteps) * 100}%` }} />
+                          </div>
+                          <span className="mp-goal-fraction">{doneSteps} / {totalSteps}</span>
+                        </div>
+                      </aside>
+                    )}
+                  </div>
+
                   <button
                     type="button"
-                    className="pause-btn mp-chat-top-btn"
-                    aria-pressed={!chatMinimized}
-                    aria-label={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
-                    title={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
-                    onClick={() => {
+                    className="mp-icon-badge"
+                    aria-label="Perbesar Kamera (Zoom In)"
+                    title="Perbesar (Zoom In)"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
                       soundEngine.playClick();
-                      setChatMinimized((prev) => !prev);
-                      setUnreadCount(0);
+                      cameraRef.current?.zoomBy(0.12);
                     }}
                     onContextMenu={(e) => e.preventDefault()}
                   >
-                    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-                      <path
-                        d="M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"
-                        fill="#fff"
-                      />
-                      <circle cx="8.5" cy="11.5" r="1.3" fill="#6b3806" />
-                      <circle cx="12" cy="11.5" r="1.3" fill="#6b3806" />
-                      <circle cx="15.5" cy="11.5" r="1.3" fill="#6b3806" />
+                    <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
+                      <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
+                      <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
+                      <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
+                      <line x1="14" y1="10.5" x2="14" y2="17.5" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
                     </svg>
-                    {unreadCount > 0 && <span className="mp-chat-badge">{unreadCount}</span>}
                   </button>
-                )}
-              </div>
 
-              <div className="mp-center-stage-pill">
-                <div className="mp-stage-title">{getRoomSubjectTitle(room)}</div>
-                {totalStages > 1 && (
-                  isStaff ? (
-                    <div className="mp-stage-switch-row" role="group" aria-label="Pilih Stage (Guru/Admin)">
-                      {Array.from({ length: totalStages }, (_, idx) => {
-                        const stgNum = idx + 1;
-                        const stgQs = getStageQuestions(levelQuestions, stgNum, totalStages);
-                        const stgAns = stgQs.filter((q) => answeredQuestionIds.includes(q.id)).length;
-                        const isCleared = stgQs.length > 0 && stgAns >= stgQs.length;
-                        return (
-                          <button
-                            key={stgNum}
-                            type="button"
-                            className={`mp-stage-chip-compact${currentStage === stgNum ? ' is-active' : ''}${isCleared ? ' is-cleared' : ''}`}
-                            title={`Stage ${stgNum} (${stgAns}/${stgQs.length} soal)`}
-                            onClick={() => {
-                              soundEngine.playClick();
-                              applyStage(stgNum, { respawnPlayer: true, showToast: true });
-                            }}
-                          >
-                            {stgNum}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="mp-stage-switch-row">
-                      <span className="mp-stage-badge-student">
-                        Stage {currentStage} / {totalStages}
-                      </span>
-                    </div>
-                  )
-                )}
-              </div>
-
-              {mirrorTarget && isStaff && (
-                <div className="mirror-indicator-pill" role="status">
-                  <span>🔍 Mirroring: <strong>{mirrorTarget}</strong></span>
                   <button
                     type="button"
-                    className="mirror-close-btn"
-                    title="Tutup Mode Mirror (/unset mirror)"
-                    onClick={() => {
-                      mirrorTargetRef.current = null;
-                      mirrorFetchTargetRef.current = null;
-                      setMirrorTarget(null);
-                      questionBlocksRef.current = [];
+                    className="mp-icon-badge"
+                    aria-label="Perkecil Kamera (Zoom Out)"
+                    title="Perkecil (Zoom Out)"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      soundEngine.playClick();
+                      cameraRef.current?.zoomBy(-0.12);
                     }}
+                    onContextMenu={(e) => e.preventDefault()}
                   >
-                    ✕
+                    <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
+                      <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
+                      <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
+                      <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#a8d8ff" strokeWidth="2.8" strokeLinecap="round" />
+                    </svg>
                   </button>
                 </div>
               )}
-
-              <div className="mp-top-right">
-                <div className="mp-timer-row">
-                  <div
-                    className="mp-ping-pill"
-                    title={`Realtime Transport: ${ably.transportMode.toUpperCase()} (${ably.pingMs} ms)`}
-                    aria-label={`Ping ${ably.pingMs} ms`}
-                  >
-                    <span className={`mp-ping-dot ${ably.pingMs <= 20 ? 'fast' : ably.pingMs <= 80 ? 'ok' : 'slow'}`} />
-                    <span>{ably.pingMs} ms</span>
-                  </div>
-                  {isStaff && (
-                    <div className="mp-teacher-actions">
-                      <button
-                        type="button"
-                        className={`pause-btn mp-staff-btn ${room?.status === 'paused' ? 'mp-staff-green' : 'mp-staff-blue'}`}
-                        aria-label={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
-                        title={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
-                        onClick={togglePauseGame}
-                      >
-                        {room?.status === 'paused' ? (
-                          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M8 5.5v13l11-6.5-11-6.5z" fill="#fff" />
-                          </svg>
-                        ) : (
-                          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-                            <rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
-                            <rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
-                          </svg>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className="pause-btn mp-staff-btn mp-staff-blue mp-chat-top-btn"
-                        aria-label="Kelola Pemain"
-                        title="Kelola Pemain"
-                        onClick={() => {
-                          setKickModalOpen(true);
-                          fetch('/api/game/room-sync', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ roomId, chatCursor: chatCursorRef.current }),
-                          })
-                            .then((r) => (r.ok ? r.json() : null))
-                            .then((d) => {
-                              if (d && Array.isArray(d.rejoinRequests)) {
-                                setRejoinRequests(d.rejoinRequests);
-                              }
-                            })
-                            .catch(() => {});
-                        }}
-                      >
-                        <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
-                          <circle cx="9" cy="8.5" r="3.2" fill="#fff" />
-                          <path
-                            d="M3.5 19c0-2.8 2.5-5 5.5-5s5.5 2.2 5.5 5"
-                            fill="none"
-                            stroke="#fff"
-                            strokeWidth="2.2"
-                            strokeLinecap="round"
-                          />
-                          <circle cx="16.8" cy="9.2" r="2.3" fill="#fff" opacity="0.92" />
-                          <path
-                            d="M15.8 14.3c2.4.3 4.4 2 4.4 4.4"
-                            fill="none"
-                            stroke="#fff"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                        {rejoinRequests.length > 0 && (
-                          <span className="mp-chat-badge">{rejoinRequests.length}</span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className="pause-btn mp-staff-btn mp-staff-danger"
-                        aria-label="Akhiri Sesi Game"
-                        title="Akhiri Sesi Game"
-                        onClick={endGame}
-                      >
-                        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-                          <path
-                            d="M12 3v9"
-                            fill="none"
-                            stroke="#fff"
-                            strokeWidth="2.6"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M7.05 6.05a8 8 0 1 0 9.9 0"
-                            fill="none"
-                            stroke="#fff"
-                            strokeWidth="2.4"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    className="pause-btn"
-                    aria-pressed={settingsModalOpen}
-                    aria-label="Pengaturan Suara & Tombol"
-                    title="Pengaturan Suara & Tombol"
-                    onClick={() => {
-                      soundEngine.playClick();
-                      setSettingsModalOpen((v) => !v);
-                    }}
-                  >
-                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                      <path
-                        d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
-                        fill="#fff"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    className="pause-btn"
-                    aria-pressed={panelsHidden}
-                    aria-label={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
-                    title={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
-                    onClick={() => {
-                      soundEngine.playClick();
-                      setPanelsHidden((v) => !v);
-                    }}
-                  >
-                    {panelsHidden ? (
-                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                        <line x1="3" y1="3" x2="21" y2="21" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
-                      </svg>
-                    ) : (
-                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                        <circle cx="12" cy="12" r="3" fill="#fff" />
-                      </svg>
-                    )}
-                  </button>
-                  <button type="button" className="pause-btn" aria-label="Kembali" title="Kembali" onClick={handleLeaveGame}>
-                    <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M20 6l-12 10 12 10v-6h8v-8h-8V6z" fill="#fff" /></svg>
-                  </button>
-                  <button
-                    type="button"
-                    className="pause-btn mp-fullscreen-btn"
-                    aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
-                    title={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
-                    onClick={toggleFullscreen}
-                  >
-                    {isFullscreen ? (
-                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M9 3v3H6v3H3V3h6zm6 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm15 0h3v6h-6v-3h3v-3z" fill="#fff" />
-                      </svg>
-                    ) : (
-                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M3 3h6v3H6v3H3V3zm12 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm18 0v6h-6v-3h3v-3h3z" fill="#fff" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-
-                {!panelsHidden && (
-                  <div className="mp-right-tool-rail">
-                    <div className="mp-tool-slot">
-                      <button
-                        type="button"
-                        className={`mp-icon-badge${!leaderboardMinimized ? ' is-active' : ''}`}
-                        aria-pressed={!leaderboardMinimized}
-                        aria-label={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
-                        title={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
-                        onClick={() => {
-                          soundEngine.playClick();
-                          setLeaderboardMinimized((v) => !v);
-                        }}
-                        onContextMenu={(e) => e.preventDefault()}
-                      >
-                        <span aria-hidden="true">🏆</span>
-                      </button>
-                      {!leaderboardMinimized && (
-                        <aside className="mp-dark-panel mp-leaderboard-box mp-tool-popover" aria-label="Papan peringkat" style={panelStyle('leaderboard')}>
-                          <h2
-                            className="mp-panel-heading mp-drag-handle"
-                            onPointerDown={(e) => startPanelDrag('leaderboard', e)}
-                            onPointerMove={movePanelDrag}
-                            onPointerUp={(e) => endPanelDrag(e)}
-                            onPointerCancel={(e) => endPanelDrag(e)}
-                          >
-                            <span className="mp-panel-heading-title">
-                              <span aria-hidden="true">🏆</span> Leaderboard
-                            </span>
-                            <button
-                              type="button"
-                              className="mp-win-btn"
-                              aria-label="Perkecil leaderboard"
-                              title="Perkecil"
-                              onClick={() => setLeaderboardMinimized(true)}
-                            >
-                              −
-                            </button>
-                          </h2>
-                          <ol className="mp-rank-list">
-                            {sortedPlayers
-                              .filter((p) => p.role !== 'admin')
-                              .slice(0, 5)
-                              .map((p, i) => {
-                                const pFullName = p.fullName || playersRef.current.get(p.userId)?.fullName;
-                                const rankDisplayName =
-                                  pFullName && pFullName.trim().toLowerCase() !== p.username.trim().toLowerCase()
-                                    ? `[${p.username}] - ${pFullName.trim()}`
-                                    : `[${p.username}]`;
-                                return (
-                                  <li key={p.userId} className="mp-rank-row">
-                                    <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
-                                    <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
-                                    <span className="rank-name" title={rankDisplayName}>{rankDisplayName}</span>
-                                    <span className="rank-score">{scores[p.userId] ?? 0}</span>
-                                  </li>
-                                );
-                              })}
-                          </ol>
-                        </aside>
-                      )}
-                    </div>
-
-                    <div className="mp-tool-slot">
-                      <button
-                        type="button"
-                        className={`mp-icon-badge${!missionMinimized ? ' is-active' : ''}`}
-                        aria-pressed={!missionMinimized}
-                        aria-label={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
-                        title={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
-                        onClick={() => {
-                          soundEngine.playClick();
-                          setMissionMinimized((v) => !v);
-                        }}
-                        onContextMenu={(e) => e.preventDefault()}
-                      >
-                        <span aria-hidden="true">🎯</span>
-                      </button>
-                      {!missionMinimized && (
-                        <aside className="mp-dark-panel mp-topic-card mp-tool-popover" aria-label="Progres misi" style={panelStyle('mission')}>
-                          <h3
-                            className="mp-panel-heading mp-drag-handle"
-                            onPointerDown={(e) => startPanelDrag('mission', e)}
-                            onPointerMove={movePanelDrag}
-                            onPointerUp={(e) => endPanelDrag(e)}
-                            onPointerCancel={(e) => endPanelDrag(e)}
-                          >
-                            <span className="mp-panel-heading-title">
-                              <span aria-hidden="true">🎯</span> Misi
-                            </span>
-                            <button
-                              type="button"
-                              className="mp-win-btn"
-                              aria-label="Perkecil misi"
-                              title="Perkecil misi"
-                              onClick={() => setMissionMinimized(true)}
-                            >
-                              −
-                            </button>
-                          </h3>
-                          <ul className="mp-topic-checklist">
-                            <li><span className="check-green" aria-hidden="true">✔</span> Masuk arena</li>
-                            <li>
-                              <span className={doneSteps > 0 ? 'check-green' : 'check-pending'} aria-hidden="true">
-                                {doneSteps > 0 ? '✔' : '○'}
-                              </span>{' '}
-                              Jawab tantangan soal ({doneSteps}/{totalSteps})
-                            </li>
-                          </ul>
-                          <div className="mp-goal-bar-row">
-                            <span aria-hidden="true">🚩</span>
-                            <div className="mp-goal-track">
-                              <div className="mp-goal-fill" style={{ width: `${(doneSteps / totalSteps) * 100}%` }} />
-                            </div>
-                            <span className="mp-goal-fraction">{doneSteps} / {totalSteps}</span>
-                          </div>
-                        </aside>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      className="mp-icon-badge"
-                      aria-label="Perbesar Kamera (Zoom In)"
-                      title="Perbesar (Zoom In)"
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        soundEngine.playClick();
-                        cameraRef.current?.zoomBy(0.12);
-                      }}
-                      onContextMenu={(e) => e.preventDefault()}
-                    >
-                      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
-                        <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
-                        <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
-                        <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
-                        <line x1="14" y1="10.5" x2="14" y2="17.5" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
-                      </svg>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="mp-icon-badge"
-                      aria-label="Perkecil Kamera (Zoom Out)"
-                      title="Perkecil (Zoom Out)"
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        soundEngine.playClick();
-                        cameraRef.current?.zoomBy(-0.12);
-                      }}
-                      onContextMenu={(e) => e.preventDefault()}
-                    >
-                      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
-                        <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
-                        <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
-                        <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#a8d8ff" strokeWidth="2.8" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-              </div>
+            </div>
           </div>
 
           {stageBanner && (
@@ -3422,9 +4193,10 @@ export default function GamePage() {
               onPointerCancel={endControlGroupDrag}
             >
               {editingControlsLayout && <span className="dpad-edit-tag">Aksi &amp; Lompat</span>}
+              {ammoCount > 0 && (
               <button
                 type="button"
-                className={`ctrl-circle ctrl-shoot-btn${ammoCount > 0 ? ' has-ammo' : ''}`}
+                className={`ctrl-circle ctrl-shoot-btn has-ammo`}
                 aria-label="Tembak Laser"
                 title="Tembak Laser (F / X / E)"
                 onPointerDown={(e) => {
@@ -3435,8 +4207,9 @@ export default function GamePage() {
                 onContextMenu={(e) => e.preventDefault()}
               >
                 <span className="ctrl-shoot-icon" aria-hidden="true">⚡</span>
-                {ammoCount > 0 && <span className="ctrl-ammo-badge">{ammoCount}</span>}
+                <span className="ctrl-ammo-badge">{ammoCount}</span>
               </button>
+              )}
               <button
                 type="button"
                 className="ctrl-circle"
@@ -3464,7 +4237,7 @@ export default function GamePage() {
           </div>
 
           {(!panelsHidden || hasVisibleQuestion) && (
-          <div className="mp-bottom-dock">
+            <div className="mp-bottom-dock">
               {!panelsHidden && !chatMinimized && (
                 <aside className="mp-dark-panel mp-chat-panel mp-chat-fixed" aria-label="Ruang obrolan">
                   <div className="mp-chat-header">
@@ -3497,11 +4270,18 @@ export default function GamePage() {
 
                       const senderPlayer = (m.userId ? playersRef.current.get(m.userId) : null) ||
                         roomRef.current?.players?.find((pl) => pl.userId === m.userId || pl.username === m.senderName);
-                      const isSenderAdmin = m.role === 'admin' || senderPlayer?.role === 'admin' || m.senderName.toLowerCase() === 'admin' || m.senderName.toLowerCase() === 'administrator';
+                      const senderClone = m.userId ? playersRef.current.get(m.userId)?.clone : undefined;
+                      const isSenderAdmin = (m.role === 'admin' || senderPlayer?.role === 'admin' || m.senderName.toLowerCase() === 'admin' || m.senderName.toLowerCase() === 'administrator') && !m.cloned && !senderClone;
 
                       let senderLabel = '';
                       if (isSenderAdmin) {
                         senderLabel = '[Administrator]';
+                      } else if (m.cloned || senderClone) {
+                        const uname = senderClone?.username || m.senderName;
+                        const fname = senderClone?.fullName || m.senderFullName || senderPlayer?.fullName;
+                        senderLabel = fname && fname.trim().toLowerCase() !== uname.trim().toLowerCase()
+                          ? `[${uname}] - ${fname.trim()}`
+                          : `[${uname}]`;
                       } else {
                         const uname = m.senderName;
                         const fname = m.senderFullName || senderPlayer?.fullName;
@@ -3894,7 +4674,7 @@ export default function GamePage() {
                 )}
 
                 {sortedPlayers.filter((pl) => pl.userId !== myIdRef.current).length === 0 &&
-                rejoinRequests.length === 0 ? (
+                  rejoinRequests.length === 0 ? (
                   <p className="feedback-subtext text-center">Belum ada siswa di dalam ruang.</p>
                 ) : (
                   sortedPlayers

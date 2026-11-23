@@ -33,6 +33,8 @@ export type Player = {
   gun?: string | null;
   tag?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
+  clone?: { username: string; fullName?: string } | null;
+  ropedById?: string | null;
 };
 
 export type Projectile = {
@@ -43,6 +45,13 @@ export type Projectile = {
   shooterId: string;
   stage: number;
   createdAt: number;
+  // Admin weapon rounds (/spawn gun): membawa damage & tampilan berbeda
+  kind?: 'blaster' | 'admin-round';
+  damage?: number;
+  color?: string;
+  glow?: string;
+  length?: number;
+  thickness?: number;
 };
 
 export type BossProjectile = {
@@ -259,7 +268,7 @@ export function updateStageEntities(
       if (!b.alive) continue;
       const bHitbox = { x: b.x + 8, y: b.y + 8, w: b.w - 16, h: b.h - 16 };
       if (rectsOverlap(pBox, bHitbox)) {
-        b.hp = Math.max(0, b.hp - 1);
+        b.hp = Math.max(0, b.hp - (pr.damage ?? 1));
         b.hitFlashUntil = now + 120;
         if (b.hp <= 0) b.alive = false;
         onProjectileHitBoss?.(pr.id, b.id);
@@ -302,11 +311,38 @@ export function updatePlayerPhysics(
     ) => void;
     onCollectPowerUp?: (pu: StagePowerUp) => void;
     bossProjectiles?: BossProjectile[];
-    playerRounds?: { x: number; y: number; shooterId: string; damage?: number }[];
+    playerRounds?: { x: number; y: number; shooterId: string; damage?: number; len?: number; w?: number; h?: number }[];
     onPlayerHitByRound?: (victimId: string, shooterId: string, dmg: number) => void;
   },
 ) {
   const now = Date.now();
+
+  // Admin weapon rounds: cek dulu sebelum jail early-return, biar player yang dibekukan admin tetap bisa ditembak & respawn
+  if (!p.isGodMode && !p.ropedById) {
+    const pBox = { x: p.x, y: p.y, w: PLAYER_W, h: PLAYER_H };
+    for (const pr of stageOptions?.playerRounds ?? []) {
+      if (pr.shooterId === p.id) continue;
+      const rW = pr.w ?? 28;
+      const rH = pr.h ?? 18;
+      const isBigRound = (pr.len ?? 0) > 100;
+      const bigH = isBigRound ? Math.max(rH, 120) : rH;
+      const rBox = { x: pr.x - (pr.len ?? rW), y: pr.y - bigH / 2, w: rW + (pr.len ?? 0), h: bigH };
+      if (rectsOverlap(rBox, pBox)) {
+        p.isDying = true;
+        p.deathStartedAt = now;
+        p.vx = 0;
+        p.vy = -13.2;
+        p.onGround = false;
+        p.ridingPlayerId = null;
+        p.lastCarrierX = undefined;
+        p.ridingPlatform = null;
+        p.jailedUntil = undefined;
+        onSoundEvent?.('death');
+        stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1);
+        return;
+      }
+    }
+  }
 
   // Jailed: dibekukan admin, tidak bisa gerak & lompat sampai jailedUntil lewat
   if (p.jailedUntil && p.jailedUntil > now) {
@@ -394,6 +430,7 @@ export function updatePlayerPhysics(
   // Horizontal collision with solid block obstacles (crates, qblocks)
   const hBox = { x: p.x, y: p.y + 4, w: PLAYER_W, h: PLAYER_H - 8 };
   for (const plat of allPlatforms) {
+    if (p.ropedById) continue; // diikat tali: tembus obstacle (collision false)
     if (!isSolidBox(plat.type)) continue;
     if (!rectsOverlap(hBox, plat)) continue;
     if (prevX + PLAYER_W <= plat.x + 4) {
@@ -421,13 +458,14 @@ export function updatePlayerPhysics(
 
   const box = { x: p.x, y: p.y, w: PLAYER_W, h: PLAYER_H };
   for (const plat of allPlatforms) {
+    if (p.ropedById) continue; // diikat tali: tembus obstacle (collision false)
     if (plat.type === 'crumble' && plat.brokenUntil && now < plat.brokenUntil) {
       continue;
     }
     if (!rectsOverlap(box, plat)) continue;
 
     if (plat.type === 'spike') {
-      if (p.isGodMode) {
+      if (p.isGodMode || p.ropedById) {
         p.vy = -8.5;
         p.onGround = false;
         onSoundEvent?.('bounce');
@@ -446,7 +484,7 @@ export function updatePlayerPhysics(
     }
 
     if (plat.type === 'fire') {
-      if (p.isGodMode) continue;
+      if (p.isGodMode || p.ropedById) continue;
       const alreadyBurning = Boolean(p.burnUntil && p.burnUntil > now + 4400);
       p.burnUntil = now + 5000;
       if (!alreadyBurning) {
@@ -506,6 +544,7 @@ export function updatePlayerPhysics(
 
   // Conveyor belt: platform beroda yang mendorong karakter otomatis
   for (const plat of allPlatforms) {
+    if (p.ropedById) continue; // diikat tali: ga terpengaruh conveyor
     if (plat.type !== 'conveyor') continue;
     const standingOn = p.onGround && Math.abs(p.y + PLAYER_H - plat.y) <= 6 && p.x + PLAYER_W > plat.x && p.x < plat.x + plat.w;
     if (!standingOn) continue;
@@ -573,6 +612,7 @@ export function updatePlayerPhysics(
       continue;
     }
 
+    if (p.isGodMode || p.ropedById) continue;
     // Otherwise touching Virus from side or touching Fireball causes KO!
     p.isDying = true;
     p.deathStartedAt = now;
@@ -592,7 +632,7 @@ export function updatePlayerPhysics(
     if (!b.alive) continue;
     const bHitbox = { x: b.x + 10, y: b.y + 10, w: b.w - 20, h: b.h - 20 };
     if (!rectsOverlap(box, bHitbox)) continue;
-    if (p.isGodMode) continue;
+    if (p.isGodMode || p.ropedById) continue;
     p.isDying = true;
     p.deathStartedAt = now;
     p.vx = 0;
@@ -608,7 +648,7 @@ export function updatePlayerPhysics(
   // Boss projectile collisions: kena ludah boss = KO (kecuali god mode)
   for (const bp of stageOptions?.bossProjectiles ?? []) {
     if (!rectsOverlap(box, { x: bp.x - 10, y: bp.y - 10, w: 20, h: 20 })) continue;
-    if (p.isGodMode) continue;
+    if (p.isGodMode || p.ropedById) continue;
     p.isDying = true;
     p.deathStartedAt = now;
     p.vx = 0;
@@ -637,8 +677,12 @@ export function updatePlayerPhysics(
     // Admin weapon rounds (laser/minigun/mega laser): kena player lain = KO (kecuali god mode)
     for (const pr of stageOptions?.playerRounds ?? []) {
       if (pr.shooterId === p.id) continue;
-      const rBox = { x: pr.x - 14, y: pr.y - 9, w: 28, h: 18 };
-      if (rectsOverlap(rBox, box) && !p.isGodMode) {
+      const rW = pr.w ?? 28;
+      const rH = pr.h ?? 18;
+      const isBigRound = (pr.len ?? 0) > 100;
+      const bigH = isBigRound ? Math.max(rH, 120) : rH;
+      const rBox = { x: pr.x - (pr.len ?? rW), y: pr.y - bigH / 2, w: rW + (pr.len ?? 0), h: bigH };
+      if (rectsOverlap(rBox, box) && !p.isGodMode && !p.ropedById) {
         p.isDying = true;
         p.deathStartedAt = now;
         p.vx = 0;
@@ -647,11 +691,15 @@ export function updatePlayerPhysics(
         p.ridingPlayerId = null;
         p.lastCarrierX = undefined;
         p.ridingPlatform = null;
+        p.jailedUntil = undefined;
         onSoundEvent?.('death');
         stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1);
         return;
       }
     }
+
+    // Diikat tali: no stacking, biar ga bisa "mengangkat"/terbang di atas admin
+    if (p.ropedById || other.ropedById) continue;
 
     const headTop = other.y + 4; // allow feet to rest naturally on top of cat head
     const overlapX = p.x + PLAYER_W > other.x + 4 && p.x < other.x + PLAYER_W - 4;

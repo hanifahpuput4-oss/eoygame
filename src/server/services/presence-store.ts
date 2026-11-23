@@ -14,6 +14,10 @@ export type LivePlayerState = {
   isDying?: boolean;
   deathStartedAt?: number;
   burnUntil?: number;
+  tag?: string | null;
+  colors?: { body?: string; tag?: string; nick?: string } | null;
+  clone?: { username: string; fullName?: string } | null;
+  ropedById?: string | null;
   updatedAt: number;
 };
 

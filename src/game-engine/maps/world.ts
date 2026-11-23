@@ -667,6 +667,7 @@ const BOSS_KINDS: Record<number, { kind: string; name: string }> = {
 };
 
 export function createStageBosses(stage: number): StageBoss[] {
+  if (stage === 1) return [];
   const meta = BOSS_KINDS[stage] ?? { kind: 'guardian', name: 'Penjaga Pintu' };
   const hp = stage >= 10 ? 60 : stage >= 8 ? 40 : 30;
   return [

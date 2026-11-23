@@ -317,6 +317,55 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
       return ok({ success: true, count });
     }
 
+    if (action === 'skip-stage') {
+      if (!isStaff) return fail('Hanya Guru/Admin yang bisa skip stage', 403);
+      const schema = z.object({
+        roomId: z.string().min(1),
+        targetId: z.string().min(1),
+        stage: z.number().int().min(1),
+        questionIds: z.array(z.string().min(1)).min(1),
+      });
+      const input = schema.parse(body);
+
+      const qRows = await db
+        .select({ id: questions.id, correctAnswer: questions.correctAnswer })
+        .from(questions)
+        .where(inArray(questions.id, input.questionIds));
+      const answerById = new Map(qRows.map((q) => [q.id, q.correctAnswer]));
+
+      const sessions = await db
+        .select()
+        .from(gameSessions)
+        .where(and(eq(gameSessions.roomId, input.roomId), eq(gameSessions.userId, input.targetId)));
+
+      let count = 0;
+      for (const sess of sessions) {
+        for (const qid of input.questionIds) {
+          const dup = await db
+            .select({ id: playerAnswers.id })
+            .from(playerAnswers)
+            .where(and(eq(playerAnswers.sessionId, sess.id), eq(playerAnswers.questionId, qid)))
+            .limit(1);
+          if (dup.length > 0) continue;
+          await db.insert(playerAnswers).values({
+            id: generateId('ans'),
+            sessionId: sess.id,
+            questionId: qid,
+            answer: answerById.get(qid) ?? 'skipped',
+            isCorrect: true,
+            pointsEarned: 0,
+            assisted: true,
+            timeSpent: 0,
+          });
+          count += 1;
+        }
+        getUserAnswerCache().delete(`${input.roomId}:${sess.userId}`);
+      }
+
+      invalidateRoomSyncCache(input.roomId);
+      return ok({ success: true, count });
+    }
+
     if (action === 'leave') {
       const schema = z.object({ roomId: z.string().min(1) });
       const { roomId } = schema.parse(body);

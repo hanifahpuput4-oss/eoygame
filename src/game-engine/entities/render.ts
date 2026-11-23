@@ -1,5 +1,6 @@
 import { DECOR, WORLD, type Platform, type StageBoss, type StageEnemy, type StagePowerUp } from '../maps/world';
 import type { Projectile } from '../physics/physics';
+import { resolvePlayerColor, toHexColor } from '../physics/weapons';
 
 export type StageRenderInfo = {
   stage: number;
@@ -33,6 +34,11 @@ export type CatHazardState = {
   blasterAmmo?: number;
   blasterUntil?: number;
   isGodMode?: boolean;
+  jailedUntil?: number;
+  gun?: string | null;
+  tag?: string | null;
+  colors?: { body?: string; tag?: string; nick?: string } | null;
+  clone?: { username: string; fullName?: string } | null;
 };
 
 function drawCat(
@@ -57,13 +63,19 @@ function drawCat(
   const base = AVATAR_COLORS[avatar] ?? AVATAR_COLORS['cat-blue'];
   const hue = hashHue(name + avatar);
   const flickerFire = isBurning && Math.floor(now / 70) % 2 === 0;
-  const colors = isBurning
+  const bodySpec = hazard?.colors?.body;
+  const bodyOverride = bodySpec ? toHexColor(resolvePlayerColor(bodySpec, now) ?? bodySpec) : null;
+  const cloned = Boolean(hazard?.clone);
+  const effRole = cloned ? 'student' : role;
+  const colors = bodyOverride
+    ? { body: bodyOverride, belly: bodyOverride, ear: bodyOverride }
+    : isBurning
     ? flickerFire
       ? { body: '#ea580c', belly: '#fed7aa', ear: '#9a3412' }
       : { body: '#451a03', belly: '#fdba74', ear: '#dc2626' }
-    : role === 'admin'
+    : effRole === 'admin'
       ? { body: '#e11d48', belly: '#fecdd3', ear: '#9f1239' }
-      : role === 'teacher'
+      : effRole === 'teacher'
         ? { body: 'hsl(45, 90%, 55%)', belly: 'hsl(45, 95%, 80%)', ear: 'hsl(40, 85%, 40%)' }
         : { body: `hsl(${hue}, 70%, 55%)`, belly: `hsl(${hue}, 75%, 82%)`, ear: `hsl(${hue}, 70%, 38%)` };
   void base;
@@ -184,7 +196,7 @@ function drawCat(
     ctx.restore();
   }
 
-  const hasStaffTitle = role === 'teacher' || role === 'admin';
+  const hasStaffTitle = !cloned && (role === 'teacher' || role === 'admin');
   const isSuperCat = Boolean(hazard?.blasterUntil && hazard.blasterUntil > now);
   const isGodMode = Boolean(hazard?.isGodMode);
 
@@ -239,11 +251,21 @@ function drawCat(
     ctx.restore();
   }
 
-  ctx.fillStyle = role === 'admin' ? '#9f1239' : role === 'teacher' ? '#8c5308' : '#111827';
+  const displayName = hazard?.clone?.username ?? name;
+  const nickOverride = hazard?.colors?.nick
+    ? resolvePlayerColor(hazard.colors.nick, now)
+    : undefined;
+  ctx.fillStyle = nickOverride ?? (effRole === 'admin' ? '#9f1239' : effRole === 'teacher' ? '#8c5308' : '#111827');
   ctx.font = 'bold 11px Nunito, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(name, drawX + w / 2, y - 14);
-  if (isSuperCat && !hasStaffTitle) {
+  ctx.fillText(displayName, drawX + w / 2, y - 14);
+
+  const tagOverride = hazard?.tag;
+  const tagColor = hazard?.colors?.tag ? resolvePlayerColor(hazard.colors.tag, now) : undefined;
+  const hasGun = Boolean(hazard?.gun);
+  const showGunBadge = hasGun && (isSuperCat || hasStaffTitle || hazard?.blasterUntil);
+
+  if (isSuperCat && !hasStaffTitle && !tagOverride) {
     const ammoText = `⚡ LASER x${hazard?.blasterAmmo ?? 0}`;
     ctx.font = 'bold 9px Nunito, sans-serif';
     const tw = ctx.measureText(ammoText).width + 10;
@@ -257,14 +279,69 @@ function drawCat(
     ctx.stroke();
     ctx.fillStyle = '#fde047';
     ctx.fillText(ammoText, drawX + w / 2, by - 1);
-  } else if (role === 'admin') {
-    ctx.fillStyle = '#ff2a5f';
+  } else if (tagOverride) {
+    // Spoofed title (/change tag), warna bisa custom via /change color tag
+    ctx.fillStyle = tagColor ?? (effRole === 'admin' ? '#ff2a5f' : effRole === 'teacher' ? '#ffd338' : '#fde047');
+    ctx.font = 'bold 9.5px Nunito, sans-serif';
+    ctx.fillText(tagOverride.toUpperCase().slice(0, 20), drawX + w / 2, y - 26);
+  } else if (effRole === 'admin') {
+    ctx.fillStyle = tagColor ?? '#ff2a5f';
     ctx.font = 'bold 9.5px Nunito, sans-serif';
     ctx.fillText('ADMINISTRATOR', drawX + w / 2, y - 26);
-  } else if (role === 'teacher') {
-    ctx.fillStyle = '#ffd338';
+  } else if (effRole === 'teacher') {
+    ctx.fillStyle = tagColor ?? '#ffd338';
     ctx.font = 'bold 9px Nunito, sans-serif';
     ctx.fillText('TEACHER', drawX + w / 2, y - 26);
+  }
+
+  if (showGunBadge && !tagOverride) {
+    // Senjata admin aktif: label ammo dengan warna sesuai weapon
+    const gunLabel = `🔫 ${String(hazard!.gun).toUpperCase()} x${hazard?.blasterAmmo ?? 0}`;
+    ctx.font = 'bold 9px Nunito, sans-serif';
+    const tw = ctx.measureText(gunLabel).width + 10;
+    const bx = drawX + w / 2 - tw / 2;
+    const by = y - 28;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.strokeStyle = '#f97316';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, bx, by - 12, tw, 15, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#fdba74';
+    ctx.fillText(gunLabel, drawX + w / 2, by - 1);
+  }
+
+  // Jail: kurung es + rantai di sekitar kucing, sisa detik di atas kepala
+  const isJailed = Boolean(hazard?.jailedUntil && hazard.jailedUntil > now);
+  if (isJailed) {
+    const remainSec = Math.max(1, Math.ceil(((hazard!.jailedUntil!) - now) / 1000));
+    ctx.save();
+    const cageColor = `rgba(148, 197, 255, ${0.55 + 0.25 * Math.sin(now * 0.008)})`;
+    ctx.strokeStyle = cageColor;
+    ctx.lineWidth = 2.5;
+    roundRect(ctx, drawX - 4, y - 4, w + 8, h + 8, 10);
+    ctx.stroke();
+    for (let i = 0; i < 3; i += 1) {
+      const vx = drawX + 4 + i * ((w - 8) / 2);
+      ctx.beginPath();
+      ctx.moveTo(vx, y + 2);
+      ctx.lineTo(vx, y + h - 2);
+      ctx.stroke();
+    }
+    const jailLabel = `⛓️ ${remainSec}s`;
+    ctx.font = 'bold 10px Nunito, sans-serif';
+    const tw = ctx.measureText(jailLabel).width + 12;
+    const bx = drawX + w / 2 - tw / 2;
+    const by = y - (hasStaffTitle || tagOverride ? 44 : 32);
+    ctx.fillStyle = '#1e3a8a';
+    ctx.strokeStyle = cageColor;
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, bx, by - 14, tw, 19, 7);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#bfdbfe';
+    ctx.fillText(jailLabel, drawX + w / 2, by - 1);
+    ctx.restore();
   }
 
   if (isBurning && (!bubble || now - bubble.at >= 5000)) {
@@ -1348,21 +1425,26 @@ export function drawPowerUps(ctx: CanvasRenderingContext2D, powerUps: StagePower
 export function drawProjectiles(ctx: CanvasRenderingContext2D, projectiles: Projectile[], now = Date.now()) {
   void now;
   for (const pr of projectiles) {
+    const isAdminRound = pr.kind === 'admin-round';
+    const color = pr.color ?? '#38bdf8';
+    const glow = pr.glow ?? '#bae6fd';
+    const len = pr.length ?? 24;
+    const thick = pr.thickness ?? 8;
     ctx.save();
-    ctx.shadowColor = '#38bdf8';
-    ctx.shadowBlur = 12;
+    ctx.shadowColor = isAdminRound ? glow : '#38bdf8';
+    ctx.shadowBlur = isAdminRound ? 18 : 12;
 
     const dir = pr.vx >= 0 ? 1 : -1;
-    const len = 24;
-    ctx.fillStyle = '#38bdf8';
-    ctx.strokeStyle = '#fef08a';
+    ctx.fillStyle = color;
+    ctx.strokeStyle = isAdminRound ? glow : '#fef08a';
     ctx.lineWidth = 2;
-    roundRect(ctx, pr.x - (dir === 1 ? len : 0), pr.y - 4, len, 8, 4);
+    roundRect(ctx, pr.x - (dir === 1 ? len : 0), pr.y - thick / 2, len, thick, thick / 2);
     ctx.fill();
     ctx.stroke();
 
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(pr.x - (dir === 1 ? len - 4 : -4), pr.y - 1.5, len - 8, 3);
+    const coreLen = Math.max(3, len - 8);
+    ctx.fillRect(pr.x - (dir === 1 ? len - 4 : -4), pr.y - 1.5, coreLen, 3);
     ctx.restore();
   }
 }

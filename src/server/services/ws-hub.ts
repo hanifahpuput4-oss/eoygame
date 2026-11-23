@@ -26,6 +26,10 @@ type WsClient = {
   avatar: string;
   role: string;
   stage: number;
+  tag?: string | null;
+  colors?: { body?: string; tag?: string; nick?: string } | null;
+  clone?: { username: string; fullName?: string } | null;
+  ropedById?: string | null;
 };
 
 type SseClient = {
@@ -272,6 +276,10 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
     client.avatar = typeof msg.avatar === 'string' ? msg.avatar : client.avatar || 'cat-orange';
     client.role = typeof msg.role === 'string' ? msg.role : client.role || 'student';
     client.stage = typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : client.stage || 1;
+    if (msg.tg === null || typeof msg.tg === 'string') client.tag = msg.tg;
+    if (msg.cl === null || (msg.cl && typeof msg.cl === 'object')) client.colors = msg.cl as WsClient['colors'];
+    if (msg.cn === null || (msg.cn && typeof msg.cn === 'object')) client.clone = msg.cn as WsClient['clone'];
+    if (msg.rp === null || typeof msg.rp === 'string') client.ropedById = msg.rp;
 
     addClientToRoom(client);
     if (!client.userId) return;
@@ -290,6 +298,10 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         vy: typeof msg.vy === 'number' ? msg.vy : 0,
         facing: msg.f === -1 ? -1 : 1,
         onGround: Boolean(msg.g ?? true),
+        tag: client.tag,
+        colors: client.colors,
+        clone: client.clone,
+        ropedById: client.ropedById,
       });
     }
 
@@ -315,6 +327,10 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         av: client.avatar,
         r: client.role,
         stg: client.stage,
+        tg: client.tag,
+        cl: client.colors,
+        cn: client.clone,
+        rp: client.ropedById,
         x: typeof msg.x === 'number' ? msg.x : 120,
         y: typeof msg.y === 'number' ? msg.y : 600,
         f: msg.f === -1 ? -1 : 1,
@@ -386,6 +402,12 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
           x: typeof msg.x === 'number' ? msg.x : 0,
           y: typeof msg.y === 'number' ? msg.y : 0,
           vx: typeof msg.vx === 'number' ? msg.vx : 14,
+          len: typeof msg.len === 'number' ? msg.len : undefined,
+          thk: typeof msg.thk === 'number' ? msg.thk : undefined,
+          color: typeof msg.color === 'string' ? msg.color : undefined,
+          glow: typeof msg.glow === 'string' ? msg.glow : undefined,
+          gun: typeof msg.gun === 'string' ? msg.gun : undefined,
+          dmg: typeof msg.dmg === 'number' ? msg.dmg : undefined,
         },
         client.userId,
         client.id,
@@ -448,6 +470,16 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
       isDying,
       deathStartedAt,
       burnUntil,
+      tag: msg.tg === null || typeof msg.tg === 'string' ? (client.tag = msg.tg) : client.tag,
+      colors:
+        msg.cl === null || (msg.cl && typeof msg.cl === 'object')
+          ? (client.colors = msg.cl as WsClient['colors'])
+          : client.colors,
+      clone:
+        msg.cn === null || (msg.cn && typeof msg.cn === 'object')
+          ? (client.clone = msg.cn as WsClient['clone'])
+          : client.clone,
+      ropedById: msg.rp === null || typeof msg.rp === 'string' ? (client.ropedById = msg.rp) : client.ropedById,
     });
     if (!updated) return;
 
@@ -470,6 +502,10 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         ds: deathStartedAt,
         b: burnUntil,
         ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
+        tg: client.tag,
+        cl: client.colors,
+        cn: client.clone,
+        rp: client.ropedById,
       },
       client.userId,
       client.id,
