@@ -7,21 +7,8 @@ import { requireUser } from '@/server/auth/session';
 import { getRoom, updateRoomStatus, removePlayer, assertHost, leaveRoom, ensureSession } from '@/server/services/room-service';
 import { stripCorrectAnswer } from '@/server/services/question-service';
 import { publishToRoom } from '@/server/services/realtime-service';
-import { ensureWsServer } from '@/server/services/ws-hub';
 import { getEphemeralChatSince } from '@/server/services/chat-store';
-import {
-  addRejoinRequest,
-  getLiveRoomPositions,
-  getRejoinRequests,
-  invalidateRoomSyncCache,
-  isPlayerKicked,
-  isRoomDeleted,
-  markPlayerKicked,
-  markRoomDeleted,
-  removePresence,
-  setLiveRoomStatus,
-  touchPresence,
-} from '@/server/services/presence-store';
+import { invalidateRoomSyncCache, removePresence, touchPresence } from '@/server/services/presence-store';
 import { generateId } from '@/server/auth/crypto';
 import { ok, fail, handleError } from '@/server/middleware/http';
 
@@ -29,7 +16,7 @@ const statusSchema = z.object({
   status: z.enum(['waiting', 'starting', 'in_progress', 'paused', 'completed']),
 });
 
-async function loadSafeLevelQuestions(levelId: string, isAdmin = false) {
+async function loadSafeLevelQuestions(levelId: string) {
   const links = await db
     .select()
     .from(levelQuestions)
@@ -47,45 +34,29 @@ async function loadSafeLevelQuestions(levelId: string, isAdmin = false) {
     .map((qid) => qRows.find((q) => q.id === qid))
     .filter((q): q is NonNullable<typeof q> => Boolean(q))
     .map((q) => ({
-      ...(isAdmin ? q : stripCorrectAnswer(q)),
+      ...stripCorrectAnswer(q),
       options: opts.filter((o) => o.questionId === q.id),
     }));
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    ensureWsServer();
     const user = await requireUser();
     const { id } = await ctx.params;
     const bootstrap = req.nextUrl.searchParams.get('bootstrap') === '1';
-
-    if (isRoomDeleted(id)) {
-      return fail('Room game telah dihapus oleh guru', 404);
-    }
 
     if (!bootstrap) {
       return ok({ room: await getRoom(id) });
     }
 
     let room = await getRoom(id);
-    setLiveRoomStatus(id, room.status);
-    const isStaff = user.role === 'teacher' || user.role === 'admin';
-    const kicked = !isStaff && isPlayerKicked(id, user.id);
-    if (kicked) {
-      addRejoinRequest(id, { userId: user.id, username: user.username });
-      void publishToRoom(id, 'rejoin-request', {
-        requests: getRejoinRequests(id),
-      });
-    }
     const isAllowedInArena =
-      !kicked &&
-      room.status !== 'completed' &&
-      (isStaff || room.status === 'in_progress' || room.status === 'paused');
+      room.status !== 'completed' && (user.role === 'teacher' || room.status === 'in_progress');
 
     if (isAllowedInArena) {
       touchPresence(id, user.id, true);
       const inRoom = (room.players ?? []).some((pl) => pl.userId === user.id);
-      if (!inRoom && (user.role === 'admin' || user.role !== 'teacher' || room.hostId === user.id)) {
+      if (!inRoom && (user.role !== 'teacher' || room.hostId === user.id)) {
         await db
           .insert(roomPlayers)
           .values({
@@ -99,22 +70,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       }
     }
 
-    const liveMap = getLiveRoomPositions(id);
-    const enrichedPlayers = (room.players ?? []).map((pl) => {
-      const live = liveMap.get(pl.userId);
-      return {
-        ...pl,
-        stage: live?.stage ?? 1,
-        lastX: live?.x ?? pl.lastX,
-        lastY: live?.y ?? pl.lastY,
-        lastFacing: live?.facing ?? pl.lastFacing,
-      };
-    });
-    room = { ...room, players: enrichedPlayers };
-
     const levelId = room.level?.id;
     const [levelQs, session] = await Promise.all([
-      levelId ? loadSafeLevelQuestions(levelId, user.role === 'admin') : Promise.resolve([]),
+      levelId ? loadSafeLevelQuestions(levelId) : Promise.resolve([]),
       levelId && isAllowedInArena
         ? ensureSession(id, user.id, levelId).catch(() => null)
         : Promise.resolve(null),
@@ -161,8 +119,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       answeredQuestionIds,
       answerResults,
       correctCount: answeredQuestionIds.length,
-      kicked,
-      rejoinRequests: isStaff ? getRejoinRequests(id) : [],
     });
   } catch (err) {
     return handleError(err);
@@ -185,25 +141,23 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       return fail('Aksi tidak diizinkan', 403);
     }
 
-    if (user.role !== 'teacher' && user.role !== 'admin') {
-      return fail('Hanya guru atau administrator yang dapat melakukan aksi ini', 403);
+    if (user.role !== 'teacher') {
+      return fail('Hanya guru yang dapat melakukan aksi ini', 403);
     }
 
     if (body.action === 'remove-player') {
       const schema = z.object({ playerId: z.string().min(1) });
       const { playerId } = schema.parse(body);
-      markPlayerKicked(id, playerId);
+      removePresence(id, playerId);
       await removePlayer(id, user.id, playerId);
       invalidateRoomSyncCache(id);
-      await publishToRoom(id, 'kicked', { playerId, left: false });
       return ok({ room: await getRoom(id) });
     }
 
     const { status } = statusSchema.parse(body);
     const room = await updateRoomStatus(id, user.id, status);
-    setLiveRoomStatus(id, status);
     invalidateRoomSyncCache(id);
-    await publishToRoom(id, 'room-status', { status });
+    void publishToRoom(id, 'room-status', { status });
     return ok({ room });
   } catch (err) {
     return handleError(err);
@@ -213,14 +167,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireUser();
-    if (user.role !== 'teacher' && user.role !== 'admin') {
-      return fail('Hanya guru atau administrator yang dapat menghapus ruang', 403);
+    if (user.role !== 'teacher') {
+      return fail('Hanya guru yang dapat menghapus ruang', 403);
     }
     const { id } = await ctx.params;
     await assertHost(id, user.id);
-    markRoomDeleted(id);
     await db.delete(rooms).where(eq(rooms.id, id));
-    await publishToRoom(id, 'room-status', { status: 'deleted' });
     return ok({ success: true });
   } catch (err) {
     return handleError(err);

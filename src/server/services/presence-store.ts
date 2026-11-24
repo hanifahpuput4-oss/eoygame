@@ -1,10 +1,8 @@
 export type LivePlayerState = {
   userId: string;
   username: string;
-  fullName?: string;
   avatar: string;
   role: string;
-  stage?: number;
   x: number;
   y: number;
   vx: number;
@@ -14,9 +12,6 @@ export type LivePlayerState = {
   isDying?: boolean;
   deathStartedAt?: number;
   burnUntil?: number;
-  tag?: string | null;
-  colors?: { body?: string; tag?: string; nick?: string } | null;
-  ropedById?: string | null;
   updatedAt: number;
 };
 
@@ -26,7 +21,6 @@ export type CachedRoomDbState = {
   players: {
     userId: string;
     username: string;
-    fullName?: string | null;
     avatar: string;
     role: string;
     lastX: number | null;
@@ -36,231 +30,13 @@ export type CachedRoomDbState = {
   scores: { userId: string; score: number; stars: number }[];
 };
 
-export type RejoinRequest = {
-  userId: string;
-  username: string;
-  requestedAt: number;
-};
-
-export type RoomObstacleState = {
-  crumbles: Map<string, { stage: number; idx: number; startedAt: number }>;
-  stomps: Map<string, { stage: number; id: string; until: number }>;
-  powerups: Map<string, { stage: number; id: string; until: number }>;
-};
-
 const globalForPresence = globalThis as unknown as {
   __llysRoomPresence?: Map<string, Map<string, number>>;
   __llysRecentlyLeft?: Map<string, number>;
   __llysLivePositions?: Map<string, Map<string, LivePlayerState>>;
   __llysRoomDbCache?: Map<string, CachedRoomDbState>;
   __llysLastDbPosWrite?: Map<string, number>;
-  __llysKickedPlayers?: Map<string, number>;
-  __llysDeletedRooms?: Map<string, number>;
-  __llysLiveRoomStatus?: Map<string, string>;
-  __llysRejoinRequests?: Map<string, Map<string, RejoinRequest>>;
-  __llysRejectedRejoins?: Map<string, number>;
-  __llysRoomObstacles?: Map<string, RoomObstacleState>;
 };
-
-function getRoomObstaclesStore(): Map<string, RoomObstacleState> {
-  if (!globalForPresence.__llysRoomObstacles) {
-    globalForPresence.__llysRoomObstacles = new Map();
-  }
-  return globalForPresence.__llysRoomObstacles;
-}
-
-export function recordRoomCrumble(roomId: string, stage: number, idx: number, startedAt: number) {
-  const store = getRoomObstaclesStore();
-  let state = store.get(roomId);
-  if (!state) {
-    state = { crumbles: new Map(), stomps: new Map(), powerups: new Map() };
-    store.set(roomId, state);
-  }
-  if (!state.powerups) state.powerups = new Map();
-  state.crumbles.set(`${stage}:${idx}`, { stage, idx, startedAt });
-}
-
-export function recordRoomStomp(roomId: string, stage: number, id: string, until: number) {
-  const store = getRoomObstaclesStore();
-  let state = store.get(roomId);
-  if (!state) {
-    state = { crumbles: new Map(), stomps: new Map(), powerups: new Map() };
-    store.set(roomId, state);
-  }
-  if (!state.powerups) state.powerups = new Map();
-  state.stomps.set(`${stage}:${id}`, { stage, id, until });
-}
-
-export function recordRoomPowerUp(roomId: string, stage: number, id: string, until: number) {
-  const store = getRoomObstaclesStore();
-  let state = store.get(roomId);
-  if (!state) {
-    state = { crumbles: new Map(), stomps: new Map(), powerups: new Map() };
-    store.set(roomId, state);
-  }
-  if (!state.powerups) state.powerups = new Map();
-  state.powerups.set(`${stage}:${id}`, { stage, id, until });
-}
-
-export function getLiveRoomObstacles(roomId: string) {
-  const state = getRoomObstaclesStore().get(roomId);
-  if (!state) return { crumbles: [], stomps: [], powerups: [] };
-  const now = Date.now();
-  const crumbles: { stage: number; idx: number; startedAt: number }[] = [];
-  for (const [key, c] of state.crumbles.entries()) {
-    if (now - c.startedAt < 3800) {
-      crumbles.push(c);
-    } else {
-      state.crumbles.delete(key);
-    }
-  }
-  const stomps: { stage: number; id: string; until: number }[] = [];
-  for (const [key, s] of state.stomps.entries()) {
-    if (s.until > now) {
-      stomps.push(s);
-    } else {
-      state.stomps.delete(key);
-    }
-  }
-  const powerups: { stage: number; id: string; until: number }[] = [];
-  if (state.powerups) {
-    for (const [key, p] of state.powerups.entries()) {
-      if (p.until > now) {
-        powerups.push(p);
-      } else {
-        state.powerups.delete(key);
-      }
-    }
-  }
-  return { crumbles, stomps, powerups };
-}
-
-function getRejoinRequestsStore(): Map<string, Map<string, RejoinRequest>> {
-  if (!globalForPresence.__llysRejoinRequests) {
-    globalForPresence.__llysRejoinRequests = new Map();
-  }
-  return globalForPresence.__llysRejoinRequests;
-}
-
-function getRejectedRejoinsStore(): Map<string, number> {
-  if (!globalForPresence.__llysRejectedRejoins) {
-    globalForPresence.__llysRejectedRejoins = new Map();
-  }
-  return globalForPresence.__llysRejectedRejoins;
-}
-
-function getKickedPlayersStore(): Map<string, number> {
-  if (!globalForPresence.__llysKickedPlayers) {
-    globalForPresence.__llysKickedPlayers = new Map();
-  }
-  return globalForPresence.__llysKickedPlayers;
-}
-
-function getDeletedRoomsStore(): Map<string, number> {
-  if (!globalForPresence.__llysDeletedRooms) {
-    globalForPresence.__llysDeletedRooms = new Map();
-  }
-  return globalForPresence.__llysDeletedRooms;
-}
-
-function getLiveRoomStatusStore(): Map<string, string> {
-  if (!globalForPresence.__llysLiveRoomStatus) {
-    globalForPresence.__llysLiveRoomStatus = new Map();
-  }
-  return globalForPresence.__llysLiveRoomStatus;
-}
-
-export function markPlayerKicked(roomId: string, userId: string): void {
-  getKickedPlayersStore().set(`${roomId}:${userId}`, Date.now());
-  getRejectedRejoinsStore().delete(`${roomId}:${userId}`);
-  getRejoinRequestsStore().get(roomId)?.delete(userId);
-  removePresence(roomId, userId);
-}
-
-export function clearPlayerKicked(roomId: string, userId: string): void {
-  getKickedPlayersStore().delete(`${roomId}:${userId}`);
-  getRecentlyLeftStore().delete(`${roomId}:${userId}`);
-  getRejectedRejoinsStore().delete(`${roomId}:${userId}`);
-  getRejoinRequestsStore().get(roomId)?.delete(userId);
-  invalidateRoomSyncCache(roomId);
-}
-
-export function addRejoinRequest(roomId: string, user: { userId: string; username: string }): RejoinRequest {
-  const store = getRejoinRequestsStore();
-  let roomReqs = store.get(roomId);
-  if (!roomReqs) {
-    roomReqs = new Map();
-    store.set(roomId, roomReqs);
-  }
-  getRejectedRejoinsStore().delete(`${roomId}:${user.userId}`);
-  const existing = roomReqs.get(user.userId);
-  if (existing) return existing;
-  const entry: RejoinRequest = {
-    userId: user.userId,
-    username: user.username,
-    requestedAt: Date.now(),
-  };
-  roomReqs.set(user.userId, entry);
-  invalidateRoomSyncCache(roomId);
-  return entry;
-}
-
-export function getRejoinRequests(roomId: string): RejoinRequest[] {
-  const roomReqs = getRejoinRequestsStore().get(roomId);
-  if (!roomReqs) return [];
-  return Array.from(roomReqs.values());
-}
-
-export function approvePlayerRejoin(roomId: string, userId: string): void {
-  clearPlayerKicked(roomId, userId);
-}
-
-export function rejectPlayerRejoin(roomId: string, userId: string): void {
-  getRejoinRequestsStore().get(roomId)?.delete(userId);
-  getRejectedRejoinsStore().set(`${roomId}:${userId}`, Date.now());
-  invalidateRoomSyncCache(roomId);
-}
-
-export function consumeRejoinRejection(roomId: string, userId: string): boolean {
-  const key = `${roomId}:${userId}`;
-  const rejected = getRejectedRejoinsStore().has(key);
-  if (rejected) {
-    getRejectedRejoinsStore().delete(key);
-    return true;
-  }
-  return false;
-}
-
-export function isPlayerKicked(roomId: string, userId: string): boolean {
-  const kickedAt = getKickedPlayersStore().get(`${roomId}:${userId}`);
-  if (!kickedAt) return false;
-  if (Date.now() - kickedAt > 2 * 60 * 60 * 1000) {
-    getKickedPlayersStore().delete(`${roomId}:${userId}`);
-    return false;
-  }
-  return true;
-}
-
-export function markRoomDeleted(roomId: string): void {
-  getDeletedRoomsStore().set(roomId, Date.now());
-  getLiveRoomStatusStore().set(roomId, 'deleted');
-  getPresenceStore().delete(roomId);
-  getLivePositionsStore().delete(roomId);
-  invalidateRoomSyncCache(roomId);
-}
-
-export function isRoomDeleted(roomId: string): boolean {
-  return getDeletedRoomsStore().has(roomId);
-}
-
-export function setLiveRoomStatus(roomId: string, status: string): void {
-  getLiveRoomStatusStore().set(roomId, status);
-}
-
-export function getLiveRoomStatus(roomId: string): string | undefined {
-  if (isRoomDeleted(roomId)) return 'deleted';
-  return getLiveRoomStatusStore().get(roomId);
-}
 
 function getPresenceStore(): Map<string, Map<string, number>> {
   if (!globalForPresence.__llysRoomPresence) {
@@ -331,9 +107,6 @@ export function shouldWritePosToDb(roomId: string, userId: string, intervalMs = 
 }
 
 export function touchPresence(roomId: string, userId: string, explicitJoin = false): boolean {
-  if (isRoomDeleted(roomId) || isPlayerKicked(roomId, userId)) {
-    return false;
-  }
   const key = `${roomId}:${userId}`;
   const leftStore = getRecentlyLeftStore();
   if (explicitJoin) {
@@ -379,19 +152,6 @@ export function updateLivePlayerPosition(
 
 export function getLiveRoomPositions(roomId: string): Map<string, LivePlayerState> {
   return getLivePositionsStore().get(roomId) ?? new Map();
-}
-
-/**
- * Lepas semua tali di live-state satu room (dipakai /untake rope all).
- * Penting: tanpa ini, snapshot server masih membawa ropedById lama dan
- * mengembalikan tali yang sudah dilepas di client.
- */
-export function clearRoomRopes(roomId: string): void {
-  const roomPos = getLivePositionsStore().get(roomId);
-  if (!roomPos) return;
-  for (const entry of roomPos.values()) {
-    entry.ropedById = null;
-  }
 }
 
 export function removePresence(roomId: string, userId: string): void {

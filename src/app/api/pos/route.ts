@@ -1,77 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  getLiveRoomObstacles,
   getLiveRoomPositions,
-  getLiveRoomStatus,
-  isPlayerKicked,
-  isRoomDeleted,
-  recordRoomCrumble,
-  recordRoomPowerUp,
-  recordRoomStomp,
   touchPresence,
   updateLivePlayerPosition,
 } from '@/server/services/presence-store';
-import { broadcastRoomEvent, ensureWsServer, registerSseClient } from '@/server/services/ws-hub';
+import { broadcastRoomEvent, ensureWsServer } from '@/server/services/ws-hub';
 
-export const dynamic = 'force-dynamic';
-
-export async function GET(req: NextRequest) {
+export async function GET() {
   const wsPort = ensureWsServer();
-  const stream = req.nextUrl.searchParams.get('stream') === '1';
-  if (!stream) {
-    return NextResponse.json({ wsPort });
-  }
-
-  const roomId = req.nextUrl.searchParams.get('r') ?? '';
-  const userId = req.nextUrl.searchParams.get('u') ?? '';
-  if (!roomId) {
-    return NextResponse.json({ error: 'missing room' }, { status: 400 });
-  }
-
-  const encoder = new TextEncoder();
-  let cleanupSse: (() => void) | null = null;
-  let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
-
-  const readable = new ReadableStream({
-    start(controller) {
-      const sendRaw = (jsonText: string): boolean => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${jsonText}\n\n`));
-          return true;
-        } catch {
-          return false;
-        }
-      };
-
-      // Kirim snapshot awal begitu SSE tersambung (tembus Cloudflare / Nginx / Tunnel HTTPS)
-      const snapshot = Array.from(getLiveRoomPositions(roomId).values());
-      sendRaw(JSON.stringify({ t: 'snapshot', players: snapshot, obstacles: getLiveRoomObstacles(roomId), st: Date.now() }));
-
-      cleanupSse = registerSseClient(roomId, userId, sendRaw);
-
-      keepAliveTimer = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(': keepalive\n\n'));
-        } catch {
-          if (keepAliveTimer) clearInterval(keepAliveTimer);
-          cleanupSse?.();
-        }
-      }, 15000);
-    },
-    cancel() {
-      if (keepAliveTimer) clearInterval(keepAliveTimer);
-      cleanupSse?.();
-    },
-  });
-
-  return new Response(readable, {
-    headers: {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
+  return NextResponse.json({ wsPort });
 }
 
 export async function POST(req: NextRequest) {
@@ -84,18 +21,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'invalid' }, { status: 400 });
     }
 
-    if (isRoomDeleted(roomId)) {
-      return NextResponse.json({ wsPort, roomDeleted: true, rs: 'deleted', p: [] });
-    }
-    if (isPlayerKicked(roomId, userId)) {
-      return NextResponse.json({ wsPort, kicked: true, p: [] });
-    }
-
     if (typeof body.x === 'number' && typeof body.y === 'number') {
       const username = typeof body.un === 'string' ? body.un : 'Player';
       const avatar = typeof body.av === 'string' ? body.av : 'cat-orange';
       const role = typeof body.rl === 'string' ? body.rl : 'student';
-      const stage = typeof body.stg === 'number' ? body.stg : typeof body.stage === 'number' ? body.stage : 1;
       const vx = typeof body.vx === 'number' ? body.vx : 0;
       const vy = typeof body.vy === 'number' ? body.vy : 0;
       const facing: 1 | -1 = body.f === -1 ? -1 : 1;
@@ -109,7 +38,6 @@ export async function POST(req: NextRequest) {
         username,
         avatar,
         role,
-        stage,
         x: body.x,
         y: body.y,
         vx,
@@ -121,7 +49,7 @@ export async function POST(req: NextRequest) {
         burnUntil,
       });
 
-      // Push immediately (< 0.2ms) to all LAN WebSocket AND Cloudflare/Domain SSE clients!
+      // Push immediately (< 0.2ms) to all LAN WebSocket clients so outside-LAN players never lag LAN players
       if (updated) {
         broadcastRoomEvent(
           roomId,
@@ -131,7 +59,6 @@ export async function POST(req: NextRequest) {
             un: username,
             av: avatar,
             r: role,
-            stg: stage,
             x: body.x,
             y: body.y,
             vx,
@@ -150,52 +77,6 @@ export async function POST(req: NextRequest) {
       touchPresence(roomId, userId);
     }
 
-    if (body.obstacle && typeof body.obstacle === 'object') {
-      const obs = body.obstacle as Record<string, unknown>;
-      const op = typeof obs.op === 'string' ? obs.op : '';
-      const stg = typeof obs.stg === 'number' ? obs.stg : 1;
-      if (op === 'crumble' && typeof obs.idx === 'number') {
-        const at = typeof obs.at === 'number' ? obs.at : Date.now();
-        recordRoomCrumble(roomId, stg, obs.idx, at);
-        broadcastRoomEvent(roomId, { t: 'obstacle', op: 'crumble', stg, idx: obs.idx, at }, userId);
-      } else if (op === 'stomp' && typeof obs.id === 'string') {
-        const until = typeof obs.until === 'number' ? obs.until : Date.now() + 6000;
-        recordRoomStomp(roomId, stg, obs.id, until);
-        broadcastRoomEvent(roomId, { t: 'obstacle', op: 'stomp', stg, id: obs.id, until }, userId);
-      } else if (op === 'powerup' && typeof obs.id === 'string') {
-        const until = typeof obs.until === 'number' ? obs.until : Date.now() + 40000;
-        recordRoomPowerUp(roomId, stg, obs.id, until);
-        broadcastRoomEvent(roomId, { t: 'obstacle', op: 'powerup', stg, id: obs.id, until }, userId);
-      } else if (op === 'shoot' && typeof obs.pid === 'string') {
-        broadcastRoomEvent(
-          roomId,
-          {
-            t: 'obstacle',
-            op: 'shoot',
-            stg,
-            pid: obs.pid,
-            x: typeof obs.x === 'number' ? obs.x : 0,
-            y: typeof obs.y === 'number' ? obs.y : 0,
-            vx: typeof obs.vx === 'number' ? obs.vx : 14,
-            len: typeof obs.len === 'number' ? obs.len : undefined,
-            thk: typeof obs.thk === 'number' ? obs.thk : undefined,
-            color: typeof obs.color === 'string' ? obs.color : undefined,
-            glow: typeof obs.glow === 'string' ? obs.glow : undefined,
-            gun: typeof obs.gun === 'string' ? obs.gun : undefined,
-            dmg: typeof obs.dmg === 'number' ? obs.dmg : undefined,
-            weapon: typeof obs.weapon === 'string' ? obs.weapon : undefined,
-            shooterRole: typeof obs.shooterRole === 'string' ? obs.shooterRole : undefined,
-            shooterId: typeof obs.shooterId === 'string' ? obs.shooterId : userId,
-          },
-          userId,
-        );
-      }
-    }
-
-    if (body.cmd && typeof body.cmd === 'object') {
-      broadcastRoomEvent(roomId, { t: 'cmd', ...(body.cmd as Record<string, unknown>) }, userId);
-    }
-
     const liveMap = getLiveRoomPositions(roomId);
     const peers: Record<string, unknown>[] = [];
     const now = Date.now();
@@ -207,7 +88,6 @@ export async function POST(req: NextRequest) {
         un: p.username,
         av: p.avatar,
         rl: p.role,
-        stg: p.stage ?? 1,
         x: p.x,
         y: p.y,
         vx: p.vx,
@@ -220,13 +100,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({
-      wsPort,
-      st: Date.now(),
-      rs: getLiveRoomStatus(roomId),
-      obstacles: getLiveRoomObstacles(roomId),
-      p: peers,
-    });
+    return NextResponse.json({ wsPort, p: peers });
   } catch {
     return NextResponse.json({ p: [] }, { status: 200 });
   }

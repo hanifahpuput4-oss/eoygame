@@ -1,6 +1,6 @@
 import { and, eq, asc, inArray } from 'drizzle-orm';
 import { db } from '@/db';
-import { levelQuestions, levels, questions } from '@/db/schema';
+import { levelQuestions, levels } from '@/db/schema';
 import { generateId } from '@/server/auth/crypto';
 import type { LevelInput } from '@/server/middleware/validation';
 
@@ -13,11 +13,7 @@ export class LevelError extends Error {
   }
 }
 
-export async function createLevel(
-  teacherId: string,
-  input: LevelInput & { mapConfig?: Record<string, unknown> },
-  isAdmin = false,
-) {
+export async function createLevel(teacherId: string, input: LevelInput & { mapConfig?: Record<string, unknown> }) {
   const id = generateId('lvl');
   await db.insert(levels).values({
     id,
@@ -31,21 +27,14 @@ export async function createLevel(
     position: 0,
   });
   await setLevelQuestions(id, input.questionIds);
-  return getLevel(id, teacherId, isAdmin);
+  return getLevel(id, teacherId);
 }
 
-export async function updateLevel(
-  id: string,
-  teacherId: string,
-  input: LevelInput & { mapConfig?: Record<string, unknown>; teacherId?: string },
-  isAdmin = false,
-) {
-  const current = await getLevel(id, teacherId, isAdmin);
-  const nextTeacherId = isAdmin && input.teacherId ? input.teacherId : current.teacherId;
+export async function updateLevel(id: string, teacherId: string, input: LevelInput & { mapConfig?: Record<string, unknown> }) {
+  const current = await getLevel(id, teacherId);
   await db
     .update(levels)
     .set({
-      teacherId: nextTeacherId,
       name: input.name,
       description: input.description,
       difficulty: input.difficulty,
@@ -56,17 +45,11 @@ export async function updateLevel(
     })
     .where(eq(levels.id, id));
   await setLevelQuestions(id, input.questionIds);
-  if (isAdmin && input.teacherId && input.questionIds.length > 0) {
-    await db
-      .update(questions)
-      .set({ creatorId: input.teacherId, updatedAt: new Date() })
-      .where(inArray(questions.id, input.questionIds));
-  }
-  return getLevel(id, teacherId, isAdmin);
+  return getLevel(id, teacherId);
 }
 
-export async function deleteLevel(id: string, teacherId: string, isAdmin = false) {
-  await getLevel(id, teacherId, isAdmin);
+export async function deleteLevel(id: string, teacherId: string) {
+  await getLevel(id, teacherId);
   await db.delete(levels).where(eq(levels.id, id));
 }
 
@@ -83,11 +66,11 @@ async function setLevelQuestions(levelId: string, questionIds: string[]) {
   );
 }
 
-export async function getLevel(id: string, teacherId: string, isAdmin = false) {
+export async function getLevel(id: string, teacherId: string) {
   const rows = await db
     .select()
     .from(levels)
-    .where(isAdmin ? eq(levels.id, id) : and(eq(levels.id, id), eq(levels.teacherId, teacherId)))
+    .where(and(eq(levels.id, id), eq(levels.teacherId, teacherId)))
     .limit(1);
   if (!rows[0]) throw new Error('Level tidak ditemukan');
   const links = await db
@@ -98,14 +81,12 @@ export async function getLevel(id: string, teacherId: string, isAdmin = false) {
   return { ...rows[0], questionIds: links.map((l) => l.questionId) };
 }
 
-export async function listLevels(teacherId: string, isAdmin = false) {
-  const rows = isAdmin
-    ? await db.select().from(levels).orderBy(asc(levels.position), asc(levels.createdAt))
-    : await db
-        .select()
-        .from(levels)
-        .where(eq(levels.teacherId, teacherId))
-        .orderBy(asc(levels.position), asc(levels.createdAt));
+export async function listLevels(teacherId: string) {
+  const rows = await db
+    .select()
+    .from(levels)
+    .where(eq(levels.teacherId, teacherId))
+    .orderBy(asc(levels.position), asc(levels.createdAt));
   if (rows.length === 0) return [];
   const links = await db
     .select()

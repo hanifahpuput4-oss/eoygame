@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { clearCachedData, getCachedData, hydrateAllFromSession, setCachedData } from '@/lib/client-cache';
 
-export default function DashboardPrefetcher({ role }: { role: 'admin' | 'teacher' | 'student' }) {
+export default function DashboardPrefetcher({ role }: { role: 'teacher' | 'student' }) {
   useEffect(() => {
     hydrateAllFromSession();
     let active = true;
@@ -28,7 +28,7 @@ export default function DashboardPrefetcher({ role }: { role: 'admin' | 'teacher
     document.addEventListener('visibilitychange', checkSession);
 
     const timer = setTimeout(() => {
-      if (role === 'teacher' || role === 'admin') {
+      if (role === 'teacher') {
         if (!getCachedData('teacher:rooms') || !getCachedData('teacher:classrooms')) {
           fetch('/api/rooms?bootstrap=1')
             .then((r) => (r.ok ? r.json() : null))

@@ -152,21 +152,12 @@ const levelsData = [
 ];
 
 async function main() {
-  const adminId = generateId('usr');
   const teacherId = generateId('usr');
   const studentId = generateId('usr');
 
   await db
     .insert(schema.users)
     .values([
-      {
-        id: adminId,
-        email: 'masbimmm@sekolah.sch.id',
-        username: 'masbimmm',
-        fullName: 'Administrator masbimmm',
-        passwordHash: hashPassword('password123'),
-        role: 'admin',
-      },
       {
         id: teacherId,
         email: 'guru@sekolah.sch.id',
@@ -187,11 +178,6 @@ async function main() {
       },
     ])
     .onConflictDoNothing();
-
-  await db
-    .update(schema.users)
-    .set({ role: 'admin', updatedAt: new Date() })
-    .where(eq(schema.users.username, 'masbimmm'));
 
   const classroomId = generateId('cls');
   await db

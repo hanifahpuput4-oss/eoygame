@@ -22,18 +22,15 @@ export async function createClassroom(
   return rows[0];
 }
 
-export async function listClassrooms(teacherId: string, isAdmin = false) {
-  if (isAdmin) {
-    return db.select().from(classrooms).orderBy(desc(classrooms.createdAt));
-  }
+export async function listClassrooms(teacherId: string) {
   return db.select().from(classrooms).where(eq(classrooms.teacherId, teacherId));
 }
 
-export async function getClassroomForTeacher(id: string, teacherId: string, isAdmin = false) {
+export async function getClassroomForTeacher(id: string, teacherId: string) {
   const rows = await db
     .select()
     .from(classrooms)
-    .where(isAdmin ? eq(classrooms.id, id) : and(eq(classrooms.id, id), eq(classrooms.teacherId, teacherId)))
+    .where(and(eq(classrooms.id, id), eq(classrooms.teacherId, teacherId)))
     .limit(1);
   if (!rows[0]) throw new ClassroomError('Kelas tidak ditemukan', 404);
   return rows[0];
@@ -42,36 +39,30 @@ export async function getClassroomForTeacher(id: string, teacherId: string, isAd
 export async function updateClassroom(
   id: string,
   teacherId: string,
-  data: Partial<{ name: string; subject: string; grade: string; description: string; teacherId: string }>,
-  isAdmin = false,
+  data: Partial<{ name: string; subject: string; grade: string; description: string }>,
 ) {
-  await getClassroomForTeacher(id, teacherId, isAdmin);
-  const { teacherId: nextTeacherId, ...rest } = data;
+  await getClassroomForTeacher(id, teacherId);
   await db
     .update(classrooms)
-    .set({
-      ...rest,
-      ...(isAdmin && nextTeacherId ? { teacherId: nextTeacherId } : {}),
-      updatedAt: new Date(),
-    })
+    .set({ ...data, updatedAt: new Date() })
     .where(eq(classrooms.id, id));
-  return getClassroomForTeacher(id, teacherId, isAdmin);
+  return getClassroomForTeacher(id, teacherId);
 }
 
-export async function deleteClassroom(id: string, teacherId: string, isAdmin = false) {
-  await getClassroomForTeacher(id, teacherId, isAdmin);
+export async function deleteClassroom(id: string, teacherId: string) {
+  await getClassroomForTeacher(id, teacherId);
   await db.delete(classrooms).where(eq(classrooms.id, id));
 }
 
-export async function regenerateJoinCode(id: string, teacherId: string, isAdmin = false) {
-  await getClassroomForTeacher(id, teacherId, isAdmin);
+export async function regenerateJoinCode(id: string, teacherId: string) {
+  await getClassroomForTeacher(id, teacherId);
   const code = generateCode(6);
   await db.update(classrooms).set({ joinCode: code }).where(eq(classrooms.id, id));
   return code;
 }
 
-export async function listStudents(classroomId: string, teacherId: string, isAdmin = false) {
-  await getClassroomForTeacher(classroomId, teacherId, isAdmin);
+export async function listStudents(classroomId: string, teacherId: string) {
+  await getClassroomForTeacher(classroomId, teacherId);
   const members = await db
     .select({ userId: classroomMembers.studentId })
     .from(classroomMembers)

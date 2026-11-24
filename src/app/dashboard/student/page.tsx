@@ -116,8 +116,7 @@ export default function StudentDashboard() {
         setJoiningRoomId(null);
         return;
       }
-      const targetId = data?.room?.id ?? data?.roomId ?? room.id;
-      router.push(`/game/${targetId}`);
+      router.push(`/game/${data.room.id}`);
     } catch {
       setJoinError('Terjadi kesalahan jaringan');
       setJoiningRoomId(null);
@@ -125,49 +124,49 @@ export default function StudentDashboard() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Top Banner + Join Class Section */}
-      <div className="grid gap-4 lg:grid-cols-12">
-        <div className="card-panel flex flex-col justify-between lg:col-span-5">
+      <div className="grid gap-5 lg:grid-cols-12">
+        <div className="card-panel flex flex-col justify-between bg-gradient-to-br from-white via-white to-[var(--cream-soft)] lg:col-span-5">
           <div>
-            <span className="inline-flex items-center rounded-lg bg-[var(--cream-soft)] px-2.5 py-0.5 text-xs font-bold text-[var(--wood-dark)]">
-              Dashboard Siswa
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--orange-primary)]/15 px-3 py-1 text-xs font-bold text-[var(--wood-dark)]">
+              🐾 Petualang Siswa
             </span>
             {loading ? (
               <div className="mt-3 space-y-2 animate-pulse">
-                <div className="h-7 w-44 rounded-lg bg-[#e8d5b0]/60" />
+                <div className="h-8 w-48 rounded-xl bg-[#e8d5b0]/60" />
                 <div className="h-4 w-36 rounded-lg bg-[#e8d5b0]/50" />
               </div>
             ) : (
               <>
                 <h1 className="mt-2 font-display text-2xl font-bold sm:text-3xl">
-                  Halo, {profile?.username ?? 'Siswa'}
+                  Halo, {profile?.username ?? 'Petualang'}! 🐱
                 </h1>
                 <p className="mt-1 text-sm text-[var(--wood-text)]/70">
-                  Pilih kelas yang kamu ikuti untuk bergabung ke sesi permainan yang sedang berlangsung.
+                  Siap menyelesaikan misi dan tantangan dari gurumu hari ini?
                 </p>
               </>
             )}
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-[#e2cfb0] bg-[var(--cream-bg)]/60 px-3.5 py-2.5">
-              <div className="text-xs font-bold uppercase tracking-wide text-[var(--wood-text)]/60">Total Poin</div>
+            <div className="rounded-2xl border border-[#e8d5b0] bg-[var(--cream-bg)]/70 px-4 py-3">
+              <div className="text-xs font-semibold text-[var(--wood-text)]/65">Total Poin</div>
               {loading ? (
                 <div className="mt-1 h-6 w-16 animate-pulse rounded-lg bg-[#e8d5b0]/60" />
               ) : (
                 <div className="mt-0.5 font-display text-xl font-bold text-[var(--wood-dark)]">
-                  {profile?.totalPoints ?? 0}
+                  ⭐ {profile?.totalPoints ?? 0}
                 </div>
               )}
             </div>
-            <div className="rounded-xl border border-[#e2cfb0] bg-[var(--cream-bg)]/60 px-3.5 py-2.5">
-              <div className="text-xs font-bold uppercase tracking-wide text-[var(--wood-text)]/60">Kelas Diikuti</div>
+            <div className="rounded-2xl border border-[#e8d5b0] bg-[var(--cream-bg)]/70 px-4 py-3">
+              <div className="text-xs font-semibold text-[var(--wood-text)]/65">Kelas Diikuti</div>
               {loading ? (
                 <div className="mt-1 h-6 w-12 animate-pulse rounded-lg bg-[#e8d5b0]/60" />
               ) : (
                 <div className="mt-0.5 font-display text-xl font-bold text-[var(--wood-dark)]">
-                  {classrooms.length}
+                  🏫 {classrooms.length}
                 </div>
               )}
             </div>
@@ -175,16 +174,18 @@ export default function StudentDashboard() {
         </div>
 
         <div className="card-panel flex flex-col justify-center lg:col-span-7">
-          <div>
-            <h2 className="font-display text-lg font-bold sm:text-xl">Masuk Kelas Baru</h2>
-            <p className="mt-1 text-sm text-[var(--wood-text)]/70">
-              Masukkan 6 karakter kode kelas dari gurumu. Setelah tergabung, tombol <strong>Join Room</strong> akan otomatis muncul saat guru memulai sesi.
-            </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-display text-xl font-semibold sm:text-2xl">Masuk Kelas Baru</h2>
+              <p className="mt-1 text-sm text-[var(--wood-text)]/70">
+                Masukkan 6 karakter kode kelas dari gurumu. Setelah tergabung, tombol <strong>Join Room</strong> akan otomatis muncul di bawah saat guru memulai game.
+              </p>
+            </div>
           </div>
 
-          <form onSubmit={onJoinClassroom} className="mt-4 flex flex-col gap-2.5 sm:flex-row">
+          <form onSubmit={onJoinClassroom} className="mt-4 flex flex-col gap-3 sm:flex-row">
             <input
-              className="input-field font-mono text-base uppercase tracking-widest"
+              className="input-field font-mono text-base uppercase tracking-widest sm:text-lg"
               value={joinCode}
               onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
               placeholder="CONTOH: XYZ789"
@@ -195,7 +196,7 @@ export default function StudentDashboard() {
             <button
               type="submit"
               disabled={joiningClass || joinCode.trim().length < 6}
-              className="btn-secondary shrink-0"
+              className="btn-secondary shrink-0 disabled:opacity-60"
             >
               {joiningClass ? (
                 <>
@@ -216,22 +217,25 @@ export default function StudentDashboard() {
       </div>
 
       {/* Classrooms List Section */}
-      <div className="space-y-3">
+      <div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="font-display text-xl font-bold">Kelasku</h2>
+            <h2 className="font-display text-2xl font-semibold">Kelasku</h2>
             <p className="text-xs text-[var(--wood-text)]/65 sm:text-sm">
               Daftar kelas yang kamu ikuti. Tombol masuk game muncul otomatis saat guru memulai sesi.
             </p>
           </div>
-          <div className="inline-flex items-center gap-2 rounded-lg border border-[#e2cfb0] bg-white px-2.5 py-1 text-xs font-semibold text-[var(--wood-text)]/75">
-            <span className="h-2 w-2 rounded-full bg-green-600" />
+          <div className="inline-flex items-center gap-2 rounded-full border border-[#e8d5b0] bg-white/80 px-3 py-1 text-xs font-semibold text-[var(--wood-text)]/75">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+            </span>
             Sinkronisasi Otomatis
           </div>
         </div>
 
         {loading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[1, 2, 3].map((n) => (
               <div key={n} className="card-panel space-y-4">
                 <div className="flex items-center justify-between gap-2 animate-pulse">
@@ -249,14 +253,17 @@ export default function StudentDashboard() {
             ))}
           </div>
         ) : classrooms.length === 0 ? (
-          <div className="card-panel py-10 text-center">
-            <h3 className="font-display text-lg font-bold">Belum Ada Kelas</h3>
+          <div className="card-panel mt-4 py-10 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--cream-soft)] text-2xl">
+              🏫
+            </div>
+            <h3 className="mt-3 font-display text-lg font-semibold">Belum Ada Kelas</h3>
             <p className="mx-auto mt-1 max-w-md text-sm text-[var(--wood-text)]/65">
               Kamu belum tergabung di kelas mana pun. Minta kode kelas 6 karakter ke gurumu lalu masukkan pada kolom di atas.
             </p>
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {classrooms.map((c) => {
               const activeRooms =
                 c.activeRooms && c.activeRooms.length > 0
@@ -269,52 +276,59 @@ export default function StudentDashboard() {
               return (
                 <div
                   key={c.id}
-                  className={`card-panel flex flex-col justify-between gap-4 transition-colors ${
-                    hasActive ? 'border-[var(--green-success)] bg-white' : ''
+                  className={`card-panel flex flex-col justify-between gap-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl ${
+                    hasActive
+                      ? 'border-[var(--green-success)] bg-gradient-to-b from-white to-green-50/40 ring-2 ring-[var(--green-success)]/25'
+                      : ''
                   }`}
                 >
                   <div>
                     <div className="flex items-start justify-between gap-2">
-                      <h3 className="font-display text-lg font-bold">{c.name}</h3>
+                      <h3 className="font-display text-lg font-bold sm:text-xl">{c.name}</h3>
                       {hasActive ? (
-                        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-green-100 px-2.5 py-0.5 text-xs font-bold text-green-800">
-                          <span className="h-1.5 w-1.5 rounded-full bg-green-600" />
+                        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-1 text-xs font-bold text-green-800">
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-green-600" />
                           Game Aktif
                         </span>
                       ) : (
-                        <span className="inline-flex shrink-0 items-center rounded-lg bg-[var(--cream-soft)] px-2.5 py-0.5 text-xs font-semibold text-[var(--wood-text)]/75">
+                        <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--cream-soft)] px-2.5 py-0.5 text-xs font-semibold text-[var(--wood-text)]/70">
                           {c.grade}
                         </span>
                       )}
                     </div>
 
-                    <p className="mt-1 text-xs font-semibold text-[var(--wood-text)]/70">
-                      {c.subject} · {c.grade}
-                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs font-semibold text-[var(--wood-text)]/75">
+                      <span className="rounded-lg bg-[var(--cream-soft)]/80 px-2.5 py-1">
+                        📘 {c.subject}
+                      </span>
+                      <span className="rounded-lg bg-[var(--cream-soft)]/80 px-2.5 py-1">
+                        🎓 {c.grade}
+                      </span>
+                    </div>
                   </div>
 
                   {hasActive ? (
-                    <div className="space-y-2 border-t border-black/10 pt-3">
+                    <div className="space-y-2.5 border-t border-green-900/10 pt-3.5">
                       {activeRooms.map((r) => {
                         const isJoining = joiningRoomId === r.id;
                         return (
                           <div
                             key={r.id}
-                            className="flex flex-col gap-2 rounded-xl border border-green-200 bg-green-50/50 p-2.5 sm:flex-row sm:items-center sm:justify-between"
+                            className="flex flex-col gap-2.5 rounded-2xl border border-green-200 bg-white/90 p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
                           >
                             <div className="min-w-0">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-green-800">
-                                Sesi Berlangsung
+                              <div className="text-[11px] font-bold uppercase tracking-wider text-green-700">
+                                Sesi Sedang Berlangsung
                               </div>
                               <div className="truncate font-display text-sm font-bold text-[var(--wood-dark)]" title={r.name}>
-                                {r.name}
+                                🎮 {r.name}
                               </div>
                             </div>
                             <button
                               type="button"
                               onClick={() => onJoinRoom(r)}
                               disabled={Boolean(joiningRoomId)}
-                              className="btn-primary !px-3.5 !py-1.5 text-xs shrink-0"
+                              className="btn-primary !rounded-xl !px-4 !py-2 text-sm shrink-0 disabled:opacity-70"
                             >
                               {isJoining ? (
                                 <>
@@ -322,7 +336,7 @@ export default function StudentDashboard() {
                                   <span>Masuk...</span>
                                 </>
                               ) : (
-                                <span>Join Room</span>
+                                <span>▶ Join Room</span>
                               )}
                             </button>
                           </div>
@@ -331,8 +345,8 @@ export default function StudentDashboard() {
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 border-t border-black/5 pt-3 text-xs text-[var(--wood-text)]/55">
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-gray-300" />
-                      <span>Menunggu guru memulai sesi game</span>
+                      <span className="inline-block h-2 w-2 rounded-full bg-gray-300" />
+                      <span>Menunggu guru memulai sesi game...</span>
                     </div>
                   )}
                 </div>

@@ -7,7 +7,6 @@ import { ok, handleError } from '@/server/middleware/http';
 export async function GET(req: NextRequest) {
   try {
     const teacher = await requireRole('teacher');
-    const isAdmin = teacher.role === 'admin';
     const { searchParams } = new URL(req.url);
     const filters = {
       search: searchParams.get('search') ?? undefined,
@@ -15,8 +14,8 @@ export async function GET(req: NextRequest) {
       difficulty: searchParams.get('difficulty') ?? undefined,
     };
     const [questions, categories] = await Promise.all([
-      listQuestions(teacher.id, filters, isAdmin),
-      listCategories(teacher.id, isAdmin),
+      listQuestions(teacher.id, filters),
+      listCategories(teacher.id),
     ]);
     return ok({ questions, categories });
   } catch (err) {
@@ -27,14 +26,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const teacher = await requireRole('teacher');
-    const isAdmin = teacher.role === 'admin';
-    const rawBody = await req.json();
-    const input = questionSchema.parse(rawBody);
-    const creatorId =
-      isAdmin && typeof rawBody?.teacherId === 'string' && rawBody.teacherId.trim()
-        ? rawBody.teacherId.trim()
-        : teacher.id;
-    const question = await createQuestion(creatorId, input);
+    const input = questionSchema.parse(await req.json());
+    const question = await createQuestion(teacher.id, input);
     return ok({ question }, 201);
   } catch (err) {
     return handleError(err);

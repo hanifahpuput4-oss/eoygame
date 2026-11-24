@@ -1,12 +1,9 @@
 /** @type {import('next').NextConfig} */
-const isProd = process.env.NODE_ENV === 'production';
-
 const nextConfig = {
   reactStrictMode: false,
   swcMinify: true,
   compress: true,
   poweredByHeader: false,
-  deploymentId: isProd ? undefined : `dev_${Date.now()}`,
   experimental: {
     optimizePackageImports: ['lucide-react'],
   },
@@ -17,9 +14,7 @@ const nextConfig = {
         headers: [
           {
             key: 'Cache-Control',
-            value: isProd
-              ? 'public, max-age=31536000, immutable'
-              : 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            value: 'public, max-age=31536000, immutable',
           },
         ],
       },

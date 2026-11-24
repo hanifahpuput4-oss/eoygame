@@ -6,20 +6,12 @@ import DashboardLoader from '@/components/dashboard/dashboard-loader';
 
 type LevelRow = {
   id: string;
-  teacherId: string;
   name: string;
   description: string;
   difficulty: 'easy' | 'medium' | 'hard';
   mapConfig: string;
   completionRequirement: number;
   questionIds: string[];
-};
-
-type TeacherOption = {
-  id: string;
-  username: string;
-  fullName: string;
-  role: string;
 };
 
 type QuestionRow = {
@@ -37,7 +29,6 @@ type QuestionRow = {
 
 type SubjectGroup = {
   key: string;
-  teacherId: string;
   subjectName: string;
   grade: string;
   objectives: {
@@ -85,24 +76,14 @@ function parseMapMeta(lvl: LevelRow): { subjectName: string; grade: string; obje
 export default function SubjectsManagementPage() {
   const [levels, setLevels] = useState<LevelRow[]>(() => getCachedData<LevelRow[]>('teacher:levels') ?? []);
   const [questions, setQuestions] = useState<QuestionRow[]>(() => getCachedData<QuestionRow[]>('teacher:questions') ?? []);
-  const [teachers, setTeachers] = useState<TeacherOption[]>(() => getCachedData<TeacherOption[]>('teacher:teachers') ?? []);
-  const [isAdmin, setIsAdmin] = useState<boolean>(() => Boolean(getCachedData<boolean>('teacher:isAdmin')));
-  const [currentUserId, setCurrentUserId] = useState<string>('');
-  const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('all');
   const [loading, setLoading] = useState(() => getCachedData<LevelRow[]>('teacher:levels') === null);
 
-  const [newSubject, setNewSubject] = useState({ subjectName: '', grade: '', firstObjective: '', teacherId: '' });
+  const [newSubject, setNewSubject] = useState({ subjectName: '', grade: '', firstObjective: '' });
   const [selectedSubjectKey, setSelectedSubjectKey] = useState<string>('');
   const [selectedLevelId, setSelectedLevelId] = useState<string>('');
 
-  const [editingSubjectGroup, setEditingSubjectGroup] = useState<SubjectGroup | null>(null);
-  const [editSubjectForm, setEditSubjectForm] = useState({ subjectName: '', grade: '', teacherId: '' });
-  const [savingSubjectEdit, setSavingSubjectEdit] = useState(false);
-
   const [newObjectiveName, setNewObjectiveName] = useState('');
   const [newObjectiveDesc, setNewObjectiveDesc] = useState('');
-  const [editingObjectiveId, setEditingObjectiveId] = useState<string | null>(null);
-  const [editObjectiveForm, setEditObjectiveForm] = useState({ objectiveName: '', description: '' });
 
   const [qForm, setQForm] = useState({
     content: '',
@@ -130,22 +111,10 @@ export default function SubjectsManagementPage() {
         const data = await res.json();
         const lv = data.levels ?? [];
         const qs = data.questions ?? [];
-        const tc = Array.isArray(data.teachers) ? data.teachers : [];
-        const adm = Boolean(data.isAdmin);
-        const uid = typeof data.currentUserId === 'string' ? data.currentUserId : '';
         setLevels(lv);
         setQuestions(qs);
-        setTeachers(tc);
-        setIsAdmin(adm);
-        setCurrentUserId(uid);
-        setNewSubject((prev) => ({
-          ...prev,
-          teacherId: prev.teacherId || uid || tc[0]?.id || '',
-        }));
         setCachedData('teacher:levels', lv);
         setCachedData('teacher:questions', qs);
-        setCachedData('teacher:teachers', tc);
-        setCachedData('teacher:isAdmin', adm);
       }
     } finally {
       setLoading(false);
@@ -155,34 +124,22 @@ export default function SubjectsManagementPage() {
   useEffect(() => {
     const cachedLevels = getPersistedCache<LevelRow[]>('teacher:levels');
     const cachedQuestions = getPersistedCache<QuestionRow[]>('teacher:questions');
-    const cachedTeachers = getPersistedCache<TeacherOption[]>('teacher:teachers');
-    const cachedIsAdmin = getPersistedCache<boolean>('teacher:isAdmin');
     if (cachedLevels) {
       setLevels(cachedLevels);
       setLoading(false);
     }
     if (cachedQuestions) setQuestions(cachedQuestions);
-    if (cachedTeachers) setTeachers(cachedTeachers);
-    if (typeof cachedIsAdmin === 'boolean') setIsAdmin(cachedIsAdmin);
     load();
   }, [load]);
 
-  const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers]);
-
   const subjectGroups = useMemo<SubjectGroup[]>(() => {
     const map = new Map<string, SubjectGroup>();
-    const visibleLevels =
-      isAdmin && selectedTeacherFilter !== 'all'
-        ? levels.filter((lvl) => lvl.teacherId === selectedTeacherFilter)
-        : levels;
-    for (const lvl of visibleLevels) {
+    for (const lvl of levels) {
       const meta = parseMapMeta(lvl);
-      const ownerId = lvl.teacherId || '';
-      const key = `${ownerId}__${meta.subjectName}__${meta.grade}`;
+      const key = `${meta.subjectName}__${meta.grade}`;
       if (!map.has(key)) {
         map.set(key, {
           key,
-          teacherId: ownerId,
           subjectName: meta.subjectName,
           grade: meta.grade,
           objectives: [],
@@ -194,7 +151,7 @@ export default function SubjectsManagementPage() {
       });
     }
     return Array.from(map.values());
-  }, [levels, isAdmin, selectedTeacherFilter]);
+  }, [levels]);
 
   useEffect(() => {
     if (subjectGroups.length === 0) {
@@ -229,10 +186,6 @@ export default function SubjectsManagementPage() {
     const objectiveName = newSubject.firstObjective.trim() || 'Tujuan Pembelajaran 1';
     if (!subjectName || !grade) return;
 
-    const targetTeacherId = isAdmin
-      ? newSubject.teacherId || (selectedTeacherFilter !== 'all' ? selectedTeacherFilter : currentUserId)
-      : currentUserId;
-
     const res = await fetch('/api/levels', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -244,7 +197,6 @@ export default function SubjectsManagementPage() {
         rewardConfig: { stars: 3 },
         mapConfig: { subjectName, grade, objectiveName },
         questionIds: [],
-        ...(isAdmin && targetTeacherId ? { teacherId: targetTeacherId } : {}),
       }),
     });
     const data = await res.json();
@@ -252,18 +204,11 @@ export default function SubjectsManagementPage() {
       setStatusMsg({ type: 'err', text: data.error ?? 'Gagal menambah mapel' });
       return;
     }
-    const createdOwnerId = data.level?.teacherId || targetTeacherId || '';
-    setNewSubject((prev) => ({ ...prev, subjectName: '', grade: '', firstObjective: '' }));
+    setNewSubject({ subjectName: '', grade: '', firstObjective: '' });
     await load();
-    setSelectedSubjectKey(`${createdOwnerId}__${subjectName}__${grade}`);
+    setSelectedSubjectKey(`${subjectName}__${grade}`);
     if (data.level?.id) setSelectedLevelId(data.level.id);
-    const ownerInfo = teacherMap.get(createdOwnerId);
-    setStatusMsg({
-      type: 'ok',
-      text: `Mapel "${subjectName} (${grade})" berhasil dibuat${
-        isAdmin && ownerInfo ? ` untuk guru ${ownerInfo.fullName} (@${ownerInfo.username})` : ''
-      }.`,
-    });
+    setStatusMsg({ type: 'ok', text: `Mapel "${subjectName} (${grade})" berhasil dibuat.` });
   }
 
   async function onCreateObjective(e: React.FormEvent) {
@@ -288,7 +233,6 @@ export default function SubjectsManagementPage() {
           objectiveName,
         },
         questionIds: [],
-        ...(isAdmin && activeSubject.teacherId ? { teacherId: activeSubject.teacherId } : {}),
       }),
     });
     const data = await res.json();
@@ -301,132 +245,6 @@ export default function SubjectsManagementPage() {
     await load();
     if (data.level?.id) setSelectedLevelId(data.level.id);
     setStatusMsg({ type: 'ok', text: `Tujuan pembelajaran "${objectiveName}" berhasil ditambahkan.` });
-  }
-
-  function startEditSubjectGroup(g: SubjectGroup) {
-    setEditingSubjectGroup(g);
-    setEditSubjectForm({ subjectName: g.subjectName, grade: g.grade, teacherId: g.teacherId });
-  }
-
-  async function onSaveEditSubjectGroup(e: React.FormEvent) {
-    e.preventDefault();
-    if (!editingSubjectGroup) return;
-    const nextSubjectName = editSubjectForm.subjectName.trim();
-    const nextGrade = editSubjectForm.grade.trim();
-    const nextTeacherId = isAdmin && editSubjectForm.teacherId ? editSubjectForm.teacherId : editingSubjectGroup.teacherId;
-    if (!nextSubjectName || !nextGrade) return;
-
-    setSavingSubjectEdit(true);
-    setStatusMsg(null);
-    try {
-      await Promise.all(
-        editingSubjectGroup.objectives.map((obj) =>
-          fetch(`/api/levels/${obj.level.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: `${nextSubjectName} (${nextGrade}) - ${obj.objectiveName}`,
-              description: obj.level.description,
-              difficulty: obj.level.difficulty,
-              completionRequirement: Math.max(1, obj.level.questionIds.length),
-              rewardConfig: { stars: 3 },
-              mapConfig: {
-                subjectName: nextSubjectName,
-                grade: nextGrade,
-                objectiveName: obj.objectiveName,
-              },
-              questionIds: obj.level.questionIds,
-              ...(isAdmin && nextTeacherId ? { teacherId: nextTeacherId } : {}),
-            }),
-          }),
-        ),
-      );
-      setEditingSubjectGroup(null);
-      await load();
-      setSelectedSubjectKey(`${nextTeacherId}__${nextSubjectName}__${nextGrade}`);
-      setStatusMsg({
-        type: 'ok',
-        text: `Mata Pelajaran & Kelas berhasil diperbarui menjadi "${nextSubjectName} (${nextGrade})".`,
-      });
-    } catch {
-      setStatusMsg({ type: 'err', text: 'Gagal memperbarui Mata Pelajaran & Kelas' });
-    } finally {
-      setSavingSubjectEdit(false);
-    }
-  }
-
-  async function onDeleteSubjectGroup(g: SubjectGroup) {
-    if (
-      !confirm(
-        `Hapus Mata Pelajaran "${g.subjectName} (${g.grade})"? Seluruh ${g.objectives.length} Tujuan Pembelajaran di dalamnya akan ikut terhapus.`,
-      )
-    ) {
-      return;
-    }
-    setStatusMsg(null);
-    const idsToDelete = new Set(g.objectives.map((o) => o.level.id));
-    const prevLevels = levels;
-    setLevels((prev) => prev.filter((l) => !idsToDelete.has(l.id)));
-    try {
-      const results = await Promise.all(
-        g.objectives.map((o) => fetch(`/api/levels/${o.level.id}`, { method: 'DELETE' })),
-      );
-      if (results.some((r) => !r.ok)) {
-        setLevels(prevLevels);
-        await load();
-        setStatusMsg({ type: 'err', text: 'Sebagian tujuan pembelajaran gagal dihapus' });
-        return;
-      }
-      await load();
-      setStatusMsg({ type: 'ok', text: `Mata Pelajaran "${g.subjectName} (${g.grade})" berhasil dihapus.` });
-    } catch {
-      setLevels(prevLevels);
-      setStatusMsg({ type: 'err', text: 'Gagal menghapus Mata Pelajaran & Kelas' });
-    }
-  }
-
-  function startEditObjective(obj: { level: LevelRow; objectiveName: string }) {
-    setEditingObjectiveId(obj.level.id);
-    setEditObjectiveForm({
-      objectiveName: obj.objectiveName,
-      description: obj.level.description || '',
-    });
-  }
-
-  async function onSaveEditObjective(e: React.FormEvent) {
-    e.preventDefault();
-    if (!editingObjectiveId || !activeSubject) return;
-    const targetObj = activeSubject.objectives.find((o) => o.level.id === editingObjectiveId);
-    if (!targetObj) return;
-    const nextObjectiveName = editObjectiveForm.objectiveName.trim();
-    if (!nextObjectiveName) return;
-
-    setStatusMsg(null);
-    const res = await fetch(`/api/levels/${targetObj.level.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: `${activeSubject.subjectName} (${activeSubject.grade}) - ${nextObjectiveName}`,
-        description: editObjectiveForm.description.trim(),
-        difficulty: targetObj.level.difficulty,
-        completionRequirement: Math.max(1, targetObj.level.questionIds.length),
-        rewardConfig: { stars: 3 },
-        mapConfig: {
-          subjectName: activeSubject.subjectName,
-          grade: activeSubject.grade,
-          objectiveName: nextObjectiveName,
-        },
-        questionIds: targetObj.level.questionIds,
-      }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setStatusMsg({ type: 'err', text: data.error ?? 'Gagal memperbarui tujuan pembelajaran' });
-      return;
-    }
-    setEditingObjectiveId(null);
-    await load();
-    setStatusMsg({ type: 'ok', text: `Tujuan pembelajaran "${nextObjectiveName}" berhasil diperbarui.` });
   }
 
   async function onDeleteObjective(levelId: string, label: string) {
@@ -461,7 +279,6 @@ export default function SubjectsManagementPage() {
         { label: 'D', content: qForm.optionD.trim() },
         { label: 'E', content: qForm.optionE.trim() },
       ],
-      ...(!editingQuestionId && isAdmin && activeSubject.teacherId ? { teacherId: activeSubject.teacherId } : {}),
     };
 
     const res = await fetch(editingQuestionId ? `/api/questions/${editingQuestionId}` : '/api/questions', {
@@ -641,42 +458,17 @@ export default function SubjectsManagementPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-bold sm:text-3xl">Manajemen Mapel &amp; Soal</h1>
-          <p className="mt-1 text-sm text-[var(--wood-text)]/70">
-            Kelola Mata Pelajaran beserta Kelas, tambahkan Tujuan Pembelajaran (Kategori Soal), lalu input atau import soal beserta kunci jawabannya.
-          </p>
-        </div>
-        {isAdmin && (
-          <div className="w-full sm:w-72">
-            <label className="label-field">Filter / Target Guru Pengampu</label>
-            <select
-              className="input-field font-semibold"
-              value={selectedTeacherFilter}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedTeacherFilter(val);
-                if (val !== 'all') {
-                  setNewSubject((prev) => ({ ...prev, teacherId: val }));
-                }
-              }}
-            >
-              <option value="all">Semua Guru ({teachers.length} akun)</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.fullName} (@{t.username}){t.role === 'admin' ? ' — Admin' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+      <div>
+        <h1 className="font-display text-3xl font-bold">Manajemen Mapel & Soal</h1>
+        <p className="mt-1 text-sm text-[var(--wood-text)]/70">
+          Kelola Mata Pelajaran beserta Kelas, tambahkan Tujuan Pembelajaran (Kategori Soal), lalu input atau import soal sekaligus beserta kunci jawabannya.
+        </p>
       </div>
 
       {statusMsg && (
         <div
           role="status"
-          className={`rounded-xl px-4 py-3 text-sm font-semibold ${
+          className={`rounded-2xl px-4 py-3 text-sm font-bold ${
             statusMsg.type === 'ok' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'
           }`}
         >
@@ -686,32 +478,8 @@ export default function SubjectsManagementPage() {
 
       {/* STEP 1: Tambah / Pilih Mapel */}
       <section className="card-panel space-y-4">
-        <div className="border-b border-black/10 pb-3">
-          <h2 className="font-display text-lg font-bold">1. Mata Pelajaran &amp; Kelas</h2>
-        </div>
-
-        <form
-          onSubmit={onCreateSubject}
-          className={`grid gap-3.5 sm:grid-cols-2 ${isAdmin ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}
-        >
-          {isAdmin && (
-            <div className="sm:col-span-2 lg:col-span-1">
-              <label className="label-field">Guru Pengampu</label>
-              <select
-                className="input-field"
-                required
-                value={newSubject.teacherId}
-                onChange={(e) => setNewSubject({ ...newSubject, teacherId: e.target.value })}
-              >
-                <option value="">Pilih guru...</option>
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.fullName} (@{t.username})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+        <h2 className="font-display text-xl font-bold">1. Mata Pelajaran & Kelas</h2>
+        <form onSubmit={onCreateSubject} className="grid gap-3 md:grid-cols-4">
           <div>
             <label className="label-field">Nama Mata Pelajaran</label>
             <input
@@ -752,171 +520,53 @@ export default function SubjectsManagementPage() {
         {loading ? (
           <DashboardLoader label="Memuat daftar mata pelajaran & soal..." compact />
         ) : subjectGroups.length === 0 ? (
-          <p className="py-4 text-sm text-[var(--wood-text)]/60">
+          <p className="text-sm text-[var(--wood-text)]/60">
             Belum ada mata pelajaran. Tambahkan mapel baru pada form di atas.
           </p>
         ) : (
-          <div className="grid gap-3 pt-1 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="flex flex-wrap gap-2 pt-2">
             {subjectGroups.map((g) => {
               const active = g.key === selectedSubjectKey;
-              const owner = teacherMap.get(g.teacherId);
               return (
-                <div
+                <button
                   key={g.key}
+                  type="button"
                   onClick={() => {
                     setSelectedSubjectKey(g.key);
                     setSelectedLevelId(g.objectives[0]?.level.id ?? '');
                   }}
-                  className={`flex cursor-pointer items-start justify-between gap-3 rounded-xl border p-3.5 text-left transition ${
+                  className={`rounded-2xl border-2 px-4 py-2.5 text-left transition ${
                     active
-                      ? 'border-[var(--navy-panel)] bg-[var(--navy-panel)] text-white shadow-sm'
-                      : 'border-[#e2cfb0] bg-white text-[var(--wood-text)] hover:border-[var(--navy-panel)]/40'
+                      ? 'border-[var(--navy-panel)] bg-[var(--navy-panel)] text-white shadow'
+                      : 'border-black/10 bg-white/80 text-[var(--wood-text)] hover:border-black/30'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <div className="truncate font-display text-base font-bold">{g.subjectName}</div>
-                    <div className={`mt-0.5 text-xs ${active ? 'text-white/80' : 'text-[var(--wood-text)]/70'}`}>
-                      {g.grade} · {g.objectives.length} Tujuan Pembelajaran
-                    </div>
-                    {isAdmin && owner && (
-                      <div
-                        className={`mt-1 truncate text-xs font-semibold ${
-                          active ? 'text-[var(--yellow-accent)]' : 'text-[var(--wood-dark)]'
-                        }`}
-                      >
-                        Guru: {owner.fullName} (@{owner.username})
-                      </div>
-                    )}
+                  <div className="font-display text-base font-bold">{g.subjectName}</div>
+                  <div className={`text-xs ${active ? 'text-white/80' : 'text-[var(--wood-text)]/70'}`}>
+                    {g.grade} · {g.objectives.length} Tujuan Pembelajaran
                   </div>
-                  <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      title={`Edit ${g.subjectName} (${g.grade})`}
-                      onClick={() => startEditSubjectGroup(g)}
-                      className={`rounded-lg px-2.5 py-1 text-xs font-bold transition ${
-                        active
-                          ? 'bg-white/15 text-white hover:bg-white/25'
-                          : 'bg-[var(--cream-soft)] text-[var(--wood-text)] hover:bg-black/10'
-                      }`}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      title={`Hapus ${g.subjectName} (${g.grade})`}
-                      onClick={() => onDeleteSubjectGroup(g)}
-                      className={`rounded-lg px-2.5 py-1 text-xs font-bold transition ${
-                        active
-                          ? 'bg-red-500/85 text-white hover:bg-red-500'
-                          : 'bg-red-100 text-red-700 hover:bg-red-200'
-                      }`}
-                    >
-                      Hapus
-                    </button>
-                  </div>
-                </div>
+                </button>
               );
             })}
           </div>
-        )}
-
-        {editingSubjectGroup && (
-          <form
-            onSubmit={onSaveEditSubjectGroup}
-            className="mt-3 space-y-3 rounded-xl border border-[#dcc8a6] bg-[var(--cream-bg)] p-4"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-base font-bold">
-                Edit Mata Pelajaran &amp; Kelas: {editingSubjectGroup.subjectName} ({editingSubjectGroup.grade})
-              </h3>
-              <button
-                type="button"
-                className="rounded-lg bg-black/10 px-2.5 py-1 text-xs font-bold"
-                onClick={() => setEditingSubjectGroup(null)}
-              >
-                ✕
-              </button>
-            </div>
-            <div className={`grid gap-3 sm:grid-cols-2 ${isAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
-              {isAdmin && (
-                <div>
-                  <label className="label-field">Guru Pengampu</label>
-                  <select
-                    className="input-field"
-                    required
-                    value={editSubjectForm.teacherId}
-                    onChange={(e) => setEditSubjectForm({ ...editSubjectForm, teacherId: e.target.value })}
-                  >
-                    {teachers.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.fullName} (@{t.username})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div>
-                <label className="label-field">Nama Mata Pelajaran</label>
-                <input
-                  className="input-field"
-                  required
-                  value={editSubjectForm.subjectName}
-                  onChange={(e) => setEditSubjectForm({ ...editSubjectForm, subjectName: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="label-field">Kelas / Tingkat</label>
-                <input
-                  className="input-field"
-                  required
-                  value={editSubjectForm.grade}
-                  onChange={(e) => setEditSubjectForm({ ...editSubjectForm, grade: e.target.value })}
-                />
-              </div>
-              <div className="flex items-end gap-2">
-                <button
-                  type="submit"
-                  disabled={savingSubjectEdit}
-                  className="btn-primary flex-1"
-                >
-                  {savingSubjectEdit ? 'Menyimpan...' : 'Simpan'}
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setEditingSubjectGroup(null)}
-                >
-                  Batal
-                </button>
-              </div>
-            </div>
-          </form>
         )}
       </section>
 
       {/* STEP 2: Tujuan Pembelajaran di dalam Mapel terpilih */}
       {activeSubject && (
         <section className="card-panel space-y-4">
-          <div className="border-b border-black/10 pb-3">
-            <h2 className="font-display text-lg font-bold">
-              2. Tujuan Pembelajaran / Kategori Soal ({activeSubject.subjectName} - {activeSubject.grade})
-            </h2>
-            <p className="mt-0.5 text-xs text-[var(--wood-text)]/70">
-              {isAdmin && teacherMap.get(activeSubject.teacherId) ? (
-                <>
-                  Guru Pengampu:{' '}
-                  <strong>
-                    {teacherMap.get(activeSubject.teacherId)?.fullName} (@
-                    {teacherMap.get(activeSubject.teacherId)?.username})
-                  </strong>{' '}
-                  ·{' '}
-                </>
-              ) : null}
-              Satu mata pelajaran dapat memiliki banyak tujuan pembelajaran. Pilih salah satu untuk mengelola soalnya.
-            </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-xl font-bold">
+                2. Tujuan Pembelajaran / Kategori Soal ({activeSubject.subjectName} - {activeSubject.grade})
+              </h2>
+              <p className="text-xs text-[var(--wood-text)]/70">
+                Satu mata pelajaran dapat memiliki banyak tujuan pembelajaran. Pilih salah satu untuk mengelola soalnya.
+              </p>
+            </div>
           </div>
 
-          <form onSubmit={onCreateObjective} className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+          <form onSubmit={onCreateObjective} className="grid gap-3 md:grid-cols-3">
             <div>
               <label className="label-field">Nama Tujuan Pembelajaran / Kategori</label>
               <input
@@ -936,93 +586,46 @@ export default function SubjectsManagementPage() {
                 onChange={(e) => setNewObjectiveDesc(e.target.value)}
               />
             </div>
-            <div className="flex items-end sm:col-span-2 lg:col-span-1">
+            <div className="flex items-end">
               <button type="submit" className="btn-secondary w-full">
                 + Tambah Tujuan Pembelajaran
               </button>
             </div>
           </form>
 
-          {editingObjectiveId && (
-            <form
-              onSubmit={onSaveEditObjective}
-              className="grid gap-3 rounded-xl border border-[#dcc8a6] bg-[var(--cream-bg)] p-4 sm:grid-cols-2 lg:grid-cols-3"
-            >
-              <div>
-                <label className="label-field">Edit Nama Tujuan Pembelajaran</label>
-                <input
-                  className="input-field"
-                  required
-                  value={editObjectiveForm.objectiveName}
-                  onChange={(e) =>
-                    setEditObjectiveForm({ ...editObjectiveForm, objectiveName: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <label className="label-field">Edit Keterangan</label>
-                <input
-                  className="input-field"
-                  value={editObjectiveForm.description}
-                  onChange={(e) =>
-                    setEditObjectiveForm({ ...editObjectiveForm, description: e.target.value })
-                  }
-                />
-              </div>
-              <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-1">
-                <button type="submit" className="btn-primary flex-1">
-                  Simpan Perubahan
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setEditingObjectiveId(null)}
-                >
-                  Batal
-                </button>
-              </div>
-            </form>
-          )}
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-3">
             {activeSubject.objectives.map((obj) => {
               const isSelected = obj.level.id === selectedLevelId;
               return (
                 <div
                   key={obj.level.id}
                   onClick={() => setSelectedLevelId(obj.level.id)}
-                  className={`cursor-pointer rounded-xl border p-3.5 transition ${
+                  className={`cursor-pointer rounded-2xl border-2 p-4 transition ${
                     isSelected
-                      ? 'border-[var(--orange-primary)] bg-[#fff7e8] ring-1 ring-[var(--orange-primary)]/40'
-                      : 'border-[#e2cfb0] bg-white hover:border-[var(--navy-panel)]/35'
+                      ? 'border-[var(--orange-cta)] bg-[#fff6e5] shadow-sm'
+                      : 'border-black/10 bg-white/70 hover:border-black/25'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <span className="inline-block rounded-md bg-[var(--yellow-accent)] px-2 py-0.5 text-xs font-bold text-[var(--wood-dark)]">
+                    <div>
+                      <span className="rounded-lg bg-[var(--yellow-accent)] px-2 py-0.5 text-xs font-bold">
                         {obj.level.questionIds.length} Soal
                       </span>
-                      <h3 className="mt-1.5 truncate font-display text-base font-bold">{obj.objectiveName}</h3>
+                      <h3 className="mt-1.5 font-display text-lg font-bold">{obj.objectiveName}</h3>
                       {obj.level.description && (
                         <p className="mt-0.5 text-xs text-[var(--wood-text)]/70">{obj.level.description}</p>
                       )}
                     </div>
-                    <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        className="rounded-lg bg-[var(--cream-soft)] px-2.5 py-1 text-xs font-bold hover:bg-black/10"
-                        onClick={() => startEditObjective(obj)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-lg bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
-                        onClick={() => onDeleteObjective(obj.level.id, obj.objectiveName)}
-                      >
-                        Hapus
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="rounded-lg bg-red-100 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteObjective(obj.level.id, obj.objectiveName);
+                      }}
+                    >
+                      Hapus
+                    </button>
                   </div>
                 </div>
               );
@@ -1034,50 +637,50 @@ export default function SubjectsManagementPage() {
       {/* STEP 3: Kelola & Import Soal di Tujuan Pembelajaran Terpilih */}
       {activeSubject && activeObjective && (
         <section className="card-panel space-y-5">
-          <div className="flex flex-col gap-3 border-b border-black/10 pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 pb-3">
             <div>
-              <h2 className="font-display text-lg font-bold">
+              <h2 className="font-display text-xl font-bold">
                 3. Daftar Soal: {activeObjective.objectiveName}
               </h2>
-              <p className="mt-0.5 text-xs text-[var(--wood-text)]/70">
-                Jumlah soal di sini ({activeQuestions.length} soal) menentukan jumlah kotak tanda tanya (?) di map game.
+              <p className="text-xs text-[var(--wood-text)]/70">
+                Jumlah soal di sini ({activeQuestions.length} soal) menentukan jumlah kotak tanda tanya (?) yang tersebar di map game.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                className="btn-secondary"
+                className="btn-secondary !px-4 !py-2 text-sm"
                 onClick={downloadTemplateCsv}
               >
-                Unduh Template CSV
+                ⬇ Download Template Dummy CSV
               </button>
               <button
                 type="button"
-                className="btn-primary"
+                className="btn-primary !px-4 !py-2 text-sm"
                 onClick={() => setImportOpen((v) => !v)}
               >
-                {importOpen ? 'Tutup Import Soal' : 'Import Soal CSV'}
+                📥 {importOpen ? 'Tutup Import Soal' : 'Import Soal Cepat'}
               </button>
             </div>
           </div>
 
           {importOpen && (
-            <form onSubmit={onRunImport} className="space-y-3 rounded-xl border border-[#dcc8a6] bg-[var(--cream-bg)] p-4">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <form onSubmit={onRunImport} className="rounded-2xl border-2 border-dashed border-[var(--navy-panel)]/40 bg-[#f8f3e8] p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h3 className="font-display text-base font-bold">Import Soal &amp; Kunci Jawaban (Opsi A–E)</h3>
-                  <p className="mt-0.5 text-xs text-[var(--wood-text)]/75">
-                    Format tiap baris: <code className="rounded bg-black/10 px-1.5 py-0.5 font-mono">Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Opsi E;Kunci;Poin;Pembahasan</code>
+                  <h3 className="font-display text-lg font-bold">Import Soal + Kunci Jawaban (5 Opsi A-E)</h3>
+                  <p className="text-xs text-[var(--wood-text)]/75">
+                    Format tiap baris: <code className="rounded bg-black/10 px-1.5 py-0.5 font-mono">Pertanyaan;Opsi A;Opsi B;Opsi C;Opsi D;Opsi E;Kunci (A/B/C/D/E);Poin;Pembahasan</code>
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="cursor-pointer rounded-lg bg-[var(--navy-panel)] px-3 py-1.5 text-xs font-bold text-white hover:bg-[var(--navy-deep)]">
+                <div className="flex items-center gap-2">
+                  <label className="cursor-pointer rounded-xl bg-[var(--navy-panel)] px-3 py-1.5 text-xs font-bold text-white hover:opacity-90">
                     Pilih File CSV / TXT
                     <input type="file" accept=".csv,.txt" className="hidden" onChange={onUploadCsvFile} />
                   </label>
                   <button
                     type="button"
-                    className="rounded-lg bg-black/10 px-3 py-1.5 text-xs font-bold hover:bg-black/15"
+                    className="rounded-xl bg-black/10 px-3 py-1.5 text-xs font-bold"
                     onClick={() => setImportText(DUMMY_CSV_TEMPLATE)}
                   >
                     Isi Contoh Dummy
@@ -1094,10 +697,10 @@ export default function SubjectsManagementPage() {
               />
 
               <div className="flex justify-end gap-2">
-                <button type="button" className="btn-secondary" onClick={() => setImportOpen(false)}>
+                <button type="button" className="rounded-xl bg-black/10 px-4 py-2 text-sm font-bold" onClick={() => setImportOpen(false)}>
                   Batal
                 </button>
-                <button type="submit" className="btn-success" disabled={importing}>
+                <button type="submit" className="btn-success !px-5 !py-2 text-sm" disabled={importing}>
                   {importing ? 'Mengimport...' : 'Proses Import Soal'}
                 </button>
               </div>
@@ -1105,7 +708,7 @@ export default function SubjectsManagementPage() {
           )}
 
           {/* Form Tambah Soal Manual */}
-          <form onSubmit={onSaveQuestion} className="space-y-3.5 rounded-xl border border-[#e2cfb0] bg-[var(--cream-bg)]/45 p-4">
+          <form onSubmit={onSaveQuestion} className="space-y-3 rounded-2xl bg-white/60 p-4 border border-black/10">
             <h3 className="font-display text-base font-bold">
               {editingQuestionId ? 'Edit Soal' : 'Tambah Soal Manual'}
             </h3>
@@ -1126,7 +729,7 @@ export default function SubjectsManagementPage() {
                 const fieldKey = `option${lbl}` as 'optionA' | 'optionB' | 'optionC' | 'optionD' | 'optionE';
                 return (
                   <div key={lbl} className={`flex items-center gap-2${lbl === 'E' ? ' md:col-span-2' : ''}`}>
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--navy-panel)] font-display text-sm font-bold text-white">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--navy-panel)] font-display text-sm font-bold text-white">
                       {lbl}
                     </span>
                     <input
@@ -1136,7 +739,7 @@ export default function SubjectsManagementPage() {
                       onChange={(e) => setQForm({ ...qForm, [fieldKey]: e.target.value })}
                       placeholder={`Pilihan ${lbl}`}
                     />
-                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--cream-soft)] px-2.5 py-2 text-xs font-bold">
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1 rounded-lg bg-[var(--cream-soft)] px-2.5 py-1.5 text-xs font-bold">
                       <input
                         type="radio"
                         name="correctAnswer"
@@ -1150,7 +753,7 @@ export default function SubjectsManagementPage() {
               })}
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-3">
               <div>
                 <label className="label-field">Poin</label>
                 <input
@@ -1162,7 +765,7 @@ export default function SubjectsManagementPage() {
                   onChange={(e) => setQForm({ ...qForm, points: Number(e.target.value) })}
                 />
               </div>
-              <div className="sm:col-span-2">
+              <div className="md:col-span-2">
                 <label className="label-field">Pembahasan Singkat (Opsional)</label>
                 <input
                   className="input-field"
@@ -1173,14 +776,14 @@ export default function SubjectsManagementPage() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button type="submit" className="btn-primary">
+            <div className="flex gap-2">
+              <button type="submit" className="btn-primary !px-5 !py-2 text-sm">
                 {editingQuestionId ? 'Simpan Perubahan Soal' : '+ Tambah Soal'}
               </button>
               {editingQuestionId && (
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className="btn-secondary !px-4 !py-2 text-sm"
                   onClick={() => {
                     setEditingQuestionId(null);
                     setQForm({
@@ -1205,34 +808,34 @@ export default function SubjectsManagementPage() {
           {/* Daftar Soal */}
           {activeQuestions.length === 0 ? (
             <p className="py-4 text-center text-sm text-[var(--wood-text)]/60">
-              Belum ada soal di tujuan pembelajaran ini. Tambahkan manual atau gunakan tombol <strong>Import Soal CSV</strong>.
+              Belum ada soal di tujuan pembelajaran ini. Tambahkan manual atau gunakan tombol <strong>Import Soal Cepat</strong>.
             </p>
           ) : (
             <div className="space-y-2.5">
               {activeQuestions.map((q, idx) => (
                 <div
                   key={q.id}
-                  className="flex flex-col gap-3 rounded-xl border border-[#e2cfb0] bg-white p-3.5 sm:flex-row sm:items-start sm:justify-between"
+                  className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-black/10 bg-white/85 p-3.5"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                      <span className="rounded-md bg-[var(--navy-panel)] px-2 py-0.5 font-bold text-white">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="rounded-lg bg-[var(--navy-panel)] px-2 py-0.5 font-bold text-white">
                         Kotak #{idx + 1}
                       </span>
-                      <span className="rounded-md bg-green-100 px-2 py-0.5 font-bold text-green-800">
+                      <span className="rounded-lg bg-green-100 px-2 py-0.5 font-bold text-green-800">
                         Kunci: {q.correctAnswer}
                       </span>
-                      <span className="rounded-md bg-[var(--cream-soft)] px-2 py-0.5 font-semibold">
+                      <span className="rounded-lg bg-[var(--cream-soft)] px-2 py-0.5 font-semibold">
                         +{q.points} Poin
                       </span>
                     </div>
-                    <p className="mt-1.5 text-sm font-bold">{q.content}</p>
+                    <p className="mt-1.5 font-bold">{q.content}</p>
                     {q.options.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs text-[var(--wood-text)]/80">
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-[var(--wood-text)]/80">
                         {q.options.map((o) => (
                           <span
                             key={o.label}
-                            className={`rounded-md px-2 py-0.5 ${
+                            className={`rounded-lg px-2 py-0.5 ${
                               o.label === q.correctAnswer ? 'bg-green-100 font-bold text-green-900' : 'bg-black/5'
                             }`}
                           >
@@ -1242,10 +845,10 @@ export default function SubjectsManagementPage() {
                       </div>
                     )}
                   </div>
-                  <div className="flex shrink-0 gap-1.5">
+                  <div className="flex gap-1.5">
                     <button
                       type="button"
-                      className="rounded-lg bg-[var(--cream-soft)] px-2.5 py-1.5 text-xs font-bold hover:bg-black/10"
+                      className="rounded-xl bg-[var(--cream-soft)] px-3 py-1.5 text-xs font-bold"
                       onClick={() => {
                         setEditingQuestionId(q.id);
                         const getOpt = (l: string) => q.options.find((o) => o.label === l)?.content ?? '';
@@ -1266,7 +869,7 @@ export default function SubjectsManagementPage() {
                     </button>
                     <button
                       type="button"
-                      className="rounded-lg bg-red-100 px-2.5 py-1.5 text-xs font-bold text-red-700 hover:bg-red-200"
+                      className="rounded-xl bg-red-100 px-3 py-1.5 text-xs font-bold text-red-700"
                       onClick={() => onDeleteQuestion(q.id)}
                     >
                       Hapus

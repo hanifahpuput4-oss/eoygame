@@ -1,30 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Camera } from '@/game-engine/camera/camera';
-import { updatePlayerPhysics, updateStageEntities, canShooterHitTarget, type Player, type Projectile, type BossProjectile, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
-import { drawWorld, drawPlatforms, drawEnemies, drawPowerUps, drawProjectiles, drawCat, drawBosses, drawBossProjectiles, type BubbleEntry } from '@/game-engine/entities/render';
-import {
-  PHYSICS,
-  PLATFORMS,
-  SPAWN_POINTS,
-  WORLD,
-  generateQuestionBlocks,
-  getStageBasePlatforms,
-  createStageEnemies,
-  createStagePowerUps,
-  createStageBosses,
-  type Platform,
-  type StageBoss,
-  type StageEnemy,
-  type StagePowerUp,
-} from '@/game-engine/maps/world';
+import { updatePlayerPhysics, type Player, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
+import { drawWorld, drawPlatforms, drawCat, type BubbleEntry } from '@/game-engine/entities/render';
+import { PHYSICS, PLATFORMS, SPAWN_POINTS, WORLD, generateQuestionBlocks, type Platform } from '@/game-engine/maps/world';
 import { soundEngine } from '@/game-engine/audio/sound-engine';
-import { WEAPONS, JAIL_FREEZE_MS, parseWeaponType, parseColorArg, type PlayerColors } from '@/game-engine/physics/weapons';
-import { useAblyRoom, type ObstacleEvent, type RoomCommandEvent } from '@/features/multiplayer/use-ably-room';
-import type { useAblyRoom as useAblyRoomType } from '@/features/multiplayer/use-ably-room';
-type AblyRoomApi = ReturnType<typeof useAblyRoom>;
+import { useAblyRoom } from '@/features/multiplayer/use-ably-room';
 import { clearCachedData } from '@/lib/client-cache';
 import '../game.css';
 
@@ -55,10 +38,8 @@ const HUD_CONTROLS_STORAGE_KEY = 'llys_hud_controls_v1';
 type RoomPlayer = {
   userId: string;
   username: string;
-  fullName?: string | null;
   avatar: string;
   role?: string;
-  stage?: number;
   lastX?: number;
   lastY?: number;
   lastFacing?: number;
@@ -69,8 +50,6 @@ type RoomPlayer = {
   deathStartedAt?: number;
   burnUntil?: number;
   score?: number;
-  tag?: string | null;
-  originalFullName?: string | null;
 };
 
 type RoomData = {
@@ -79,56 +58,11 @@ type RoomData = {
   name: string;
   code: string;
   status: string;
-  settings?: { stageCount?: number };
   players: RoomPlayer[];
-  level: { id: string; name: string; subject?: string; mapConfig?: string } | null;
+  level: { id: string; name: string } | null;
 };
 
-function resolveTotalStages(room: RoomData | null): number {
-  const configured = Number(room?.settings?.stageCount);
-  if (Number.isFinite(configured) && configured >= 1) {
-    return Math.min(10, Math.max(1, Math.round(configured)));
-  }
-  return 4;
-}
-
-function getStageQuestions<T>(allQuestions: T[], stage: number, totalStages: number): T[] {
-  if (totalStages <= 1 || allQuestions.length === 0) return allQuestions;
-  const perStage = Math.ceil(allQuestions.length / totalStages);
-  const startIdx = Math.max(0, (stage - 1) * perStage);
-  return allQuestions.slice(startIdx, startIdx + perStage);
-}
-
-function getRoomSubjectTitle(room: RoomData | null): string {
-  if (!room) return 'Arena llysSmart';
-  if (room.level?.subject?.trim()) return room.level.subject.trim();
-  if (room.level?.mapConfig) {
-    try {
-      const parsed = JSON.parse(room.level.mapConfig);
-      if (parsed && typeof parsed.subjectName === 'string' && parsed.subjectName.trim()) {
-        return parsed.subjectName.trim();
-      }
-    } catch {
-      // fallback below
-    }
-  }
-  if (room.level?.name) {
-    const clean = room.level.name.split(/\s*\(|\s*-/)[0]?.trim();
-    if (clean) return clean;
-  }
-  return room.name?.split(/\s*\(|\s*-/)[0]?.trim() || 'Arena llysSmart';
-}
-
-type ChatMsg = {
-  seq?: number;
-  id: string;
-  userId?: string;
-  senderName: string;
-  senderFullName?: string;
-  role?: string;
-  text: string;
-  createdAt: string;
-};
+type ChatMsg = { seq?: number; id: string; userId?: string; senderName: string; text: string; createdAt: string };
 
 type Question = {
   id: string;
@@ -136,32 +70,9 @@ type Question = {
   points: number;
   timeLimit: number;
   options: { label: string; content: string }[];
-  correctAnswer?: string;
 };
 
 const CHIP_COLORS = ['blue', 'pink', 'green', 'yellow', 'purple'] as const;
-const OPTION_DISPLAY_LABELS = ['A', 'B', 'C', 'D', 'E'] as const;
-
-function shuffleQuestionOptions(q: Question, seedStr: string): Question {
-  const opts = [...(q.options ?? [])];
-  if (opts.length <= 1) return q;
-  let h = 2166136261 >>> 0;
-  const fullSeed = `${seedStr}:${q.id}`;
-  for (let i = 0; i < fullSeed.length; i += 1) {
-    h ^= fullSeed.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  for (let i = opts.length - 1; i > 0; i -= 1) {
-    h ^= h << 13;
-    h ^= h >>> 17;
-    h ^= h << 5;
-    const j = (h >>> 0) % (i + 1);
-    const tmp = opts[i];
-    opts[i] = opts[j];
-    opts[j] = tmp;
-  }
-  return { ...q, options: opts };
-}
 
 function chipColor(seed: string) {
   let h = 0;
@@ -201,7 +112,7 @@ export default function GamePage() {
   const playersRef = useRef<Map<string, Player>>(new Map());
   const myIdRef = useRef<string>('');
   const keysRef = useRef({ left: false, right: false, jump: false });
-  const draggingRef = useRef<{ active: boolean; x: number; y: number; moved: boolean }>({ active: false, x: 0, y: 0, moved: false });
+  const draggingRef = useRef<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
   const lastSentRef = useRef(0);
   const chatBoxRef = useRef<HTMLDivElement>(null);
 
@@ -210,13 +121,6 @@ export default function GamePage() {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [myRole, setMyRole] = useState('student');
-  const myRoleRef = useRef('student');
-  myRoleRef.current = myRole;
-  const isStaff = myRole === 'teacher' || myRole === 'admin';
-  const isStaffRole = (r?: string | null) => r === 'teacher' || r === 'admin';
-  const [exitNotice, setExitNotice] = useState<'kicked' | 'deleted' | null>(null);
-  const exitNoticeRef = useRef<'kicked' | 'deleted' | null>(null);
-  const manualLeaveRef = useRef(false);
   const [chatMinimized, setChatMinimized] = useState(true);
   const [leaderboardMinimized, setLeaderboardMinimized] = useState(true);
 
@@ -226,7 +130,6 @@ export default function GamePage() {
   const [panelOffsets, setPanelOffsets] = useState<Record<string, { x: number; y: number }>>({});
   const panelDragRef = useRef<{ key: string; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null);
   const [kickModalOpen, setKickModalOpen] = useState(false);
-  const [rejoinRequests, setRejoinRequests] = useState<{ userId: string; username: string; requestedAt: number }[]>([]);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingControlsLayout, setEditingControlsLayout] = useState(false);
   const [hudControls, setHudControls] = useState<HudControlsConfig>(DEFAULT_HUD_CONTROLS);
@@ -237,41 +140,11 @@ export default function GamePage() {
   const [sfxVolume, setSfxVolume] = useState(0.75);
   const [answeredQuestionIds, setAnsweredQuestionIds] = useState<string[]>([]);
   const answeredIdsRef = useRef<Set<string>>(new Set());
-  const answerResultsRef = useRef<Map<string, boolean | 'assisted'>>(new Map());
+  const answerResultsRef = useRef<Map<string, boolean>>(new Map());
   const [correctCount, setCorrectCount] = useState(0);
   const [levelQuestions, setLevelQuestions] = useState<Question[]>([]);
   const levelQuestionsRef = useRef<Question[]>([]);
   const questionBlocksRef = useRef<Platform[]>([]);
-  const [currentStage, setCurrentStage] = useState(1);
-  const currentStageRef = useRef(1);
-  const [totalStages, setTotalStages] = useState(10);
-  const totalStagesRef = useRef(10);
-  const stagePlatformsRef = useRef<Platform[]>(getStageBasePlatforms(1));
-  const stageEnemiesRef = useRef<StageEnemy[]>(createStageEnemies(1));
-  const stagePowerUpsRef = useRef<StagePowerUp[]>(createStagePowerUps(1));
-  const stageBossesRef = useRef<StageBoss[]>(createStageBosses(1));
-  const bossDiedBannerRef = useRef<Set<number>>(new Set());
-  const projectilesRef = useRef<Projectile[]>([]);
-  const bossProjectilesRef = useRef<BossProjectile[]>([]);
-  const lastShotAtRef = useRef<number>(0);
-  const [ammoCount, setAmmoCount] = useState<number>(0);
-  const [isGodMode, setIsGodMode] = useState(false);
-  const isGodModeRef = useRef(false);
-  const [mirrorTarget, setMirrorTarget] = useState<string | null>(null);
-  const mirrorTargetRef = useRef<{ userId: string; username: string } | 'all' | null>(null);
-  // Posisi terakhir admin yang mengikat tali saya (untuk respawn & leash lintas stage)
-  const meAdminAnchorRef = useRef<{ x: number; y: number } | null>(null);
-  const meAdminFacingRef = useRef<1 | -1>(1);
-  // Ref ini dipakai sync loop untuk minta status jawaban si target mirror (bukan jawaban staff sendiri)
-  const mirrorFetchTargetRef = useRef<string | null>(null);
-  const [stageBanner, setStageBanner] = useState<string | null>(null);
-  const stageBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Helper notif dengan auto-close: semua banner otomatis hilang, ga ada yang nyangkut
-  const showBanner = useCallback((msg: string, ms = 4000) => {
-    setStageBanner(msg);
-    if (stageBannerTimerRef.current) clearTimeout(stageBannerTimerRef.current);
-    stageBannerTimerRef.current = setTimeout(() => setStageBanner(null), ms);
-  }, []);
   const [scores, setScores] = useState<Record<string, number>>({});
   const [question, setQuestion] = useState<Question | null>(null);
   const questionRef = useRef<Question | null>(null);
@@ -283,11 +156,9 @@ export default function GamePage() {
   const seenMsgIdsRef = useRef<Set<string>>(new Set());
   const chatCursorRef = useRef<number>(-1);
   const myUsernameRef = useRef<string>('');
-  const myFullNameRef = useRef<string>('');
   const sessionIdRef = useRef<string>('');
   const lastSyncedPosRef = useRef<{ x: number; y: number; facing: number }>({ x: -9999, y: -9999, facing: 1 });
   const hasLeftRef = useRef(false);
-  const justKickedInSessionRef = useRef(false);
   const chatMinimizedRef = useRef(chatMinimized);
   const [unreadCount, setUnreadCount] = useState(0);
   const ablyEnabled = true;
@@ -295,10 +166,8 @@ export default function GamePage() {
   function ingestRemotePlayerSnapshot(rp: {
     id: string;
     username: string;
-    fullName?: string;
     avatar: string;
     role?: string;
-    stage?: number;
     x: number;
     y: number;
     vx?: number;
@@ -308,11 +177,6 @@ export default function GamePage() {
     isDying?: boolean;
     deathStartedAt?: number;
     burnUntil?: number;
-    jailedUntil?: number;
-    gun?: string;
-    tag?: string;
-    colors?: PlayerColors;
-    ropedById?: string | null;
   }) {
     if (!rp.id || rp.id === myIdRef.current) return;
     const nowPerf = performance.now();
@@ -326,28 +190,11 @@ export default function GamePage() {
       existing.vx = pvx;
       existing.vy = pvy;
       existing.facing = rp.facing;
-      if (rp.username) existing.username = rp.username;
-      if (rp.fullName) existing.fullName = rp.fullName;
-      if (typeof rp.stage === 'number') existing.stage = rp.stage;
       if (typeof rp.onGround === 'boolean') existing.onGround = rp.onGround;
       if (typeof rp.isDying === 'boolean') existing.isDying = rp.isDying;
       if (rp.deathStartedAt !== undefined) existing.deathStartedAt = rp.deathStartedAt;
       if (rp.burnUntil !== undefined) existing.burnUntil = rp.burnUntil;
       if (rp.role) existing.role = rp.role;
-      if (rp.jailedUntil !== undefined) existing.jailedUntil = rp.jailedUntil;
-      if (rp.gun !== undefined) existing.gun = rp.gun;
-      if (rp.tag !== undefined) existing.tag = rp.tag;
-      if (rp.colors !== undefined) existing.colors = rp.colors;
-      if (rp.ropedById !== undefined) existing.ropedById = rp.ropedById;
-      else if (rp.ropedById === null) {
-        existing.ropedById = null;
-        existing.adminAnchor = undefined;
-        existing.adminFacing = undefined;
-      }
-      if (existing.ropedById === null) {
-        existing.adminAnchor = undefined;
-        existing.adminFacing = undefined;
-      }
 
       if (!existing.snapshots) existing.snapshots = [];
       const snaps = existing.snapshots;
@@ -369,14 +216,11 @@ export default function GamePage() {
       }
       existing.lastPacketAt = nowWall;
     } else {
-      const resolvedFullName = rp.fullName || roomRef.current?.players?.find((pl) => pl.userId === rp.id)?.fullName || undefined;
       playersRef.current.set(rp.id, {
         id: rp.id,
         username: rp.username,
-        fullName: resolvedFullName,
         avatar: rp.avatar,
         role: rp.role,
-        stage: rp.stage ?? 1,
         x: rp.x,
         y: rp.y,
         targetX: rp.x,
@@ -388,11 +232,6 @@ export default function GamePage() {
         isDying: rp.isDying,
         deathStartedAt: rp.deathStartedAt,
         burnUntil: rp.burnUntil,
-        jailedUntil: rp.jailedUntil,
-        gun: rp.gun,
-        tag: rp.tag,
-        colors: rp.colors,
-        ropedById: rp.ropedById,
         avgInterval: 24,
         snapshots: [{ x: rp.x, y: rp.y, vx: pvx, vy: pvy, time: nowPerf }],
         lastPacketAt: nowWall,
@@ -400,725 +239,25 @@ export default function GamePage() {
     }
   }
 
-  function triggerForcedExit(reason: 'kicked' | 'deleted') {
-    if (manualLeaveRef.current) return;
-    if (exitNoticeRef.current === 'deleted' || exitNoticeRef.current === reason) return;
-    if (reason === 'kicked' && isStaffRole(myRoleRef.current)) return;
-    exitNoticeRef.current = reason;
-    hasLeftRef.current = true;
-    keysRef.current.left = false;
-    keysRef.current.right = false;
-    keysRef.current.jump = false;
-    questionRef.current = null;
-    setQuestion(null);
-    setFeedback(null);
-    const me = playersRef.current.get(myIdRef.current);
-    if (me) {
-      me.vx = 0;
-      me.vy = 0;
-    }
-    setExitNotice(reason);
-  }
-
-  function applyStage(
-    nextStage: number,
-    opts?: {
-      respawnPlayer?: boolean;
-      showToast?: boolean;
-      seedId?: string;
-      allQuestions?: Question[];
-      totalStg?: number;
-      persistCheckpoint?: boolean;
-      force?: boolean;
-    },
-  ) {
-    const tStg = opts?.totalStg ?? totalStagesRef.current;
-    const stg = Math.max(1, Math.min(tStg, nextStage));
-
-    // Siswa tidak dapat melompati stage tanpa menyelesaikan soal stage sebelumnya
-    // (kecuali force: misalnya ditarik tali admin lintas stage)
-    if (!opts?.force && !isStaff && stg > currentStageRef.current) {
-      const allQsForCheck = opts?.allQuestions ?? levelQuestionsRef.current;
-      const curStageQs = getStageQuestions(allQsForCheck, currentStageRef.current, tStg);
-      const isCleared = curStageQs.length > 0 && curStageQs.every((q) => answeredIdsRef.current.has(q.id));
-      if (!isCleared) {
-        return;
-      }
-    }
-
-    currentStageRef.current = stg;
-    setCurrentStage(stg);
-    stagePlatformsRef.current = getStageBasePlatforms(stg);
-    stageEnemiesRef.current = createStageEnemies(stg);
-    stagePowerUpsRef.current = createStagePowerUps(stg);
-    stageBossesRef.current = createStageBosses(stg);
-    bossDiedBannerRef.current.delete(stg);
-    projectilesRef.current = [];
-    {
-      const meNow = playersRef.current.get(myIdRef.current);
-      if (!meNow || !meNow.gun) {
-        setAmmoCount(0);
-      }
-    }
-
-    const allQs = opts?.allQuestions ?? levelQuestionsRef.current;
-    const stageQs = getStageQuestions(allQs, stg, tStg);
-    const uid = opts?.seedId || myIdRef.current || 'anon';
-
-    // Default Guru & Admin: kotak soal bersih/hilang total, kecuali sedang mirror!
-    if (isStaffRole(myRoleRef.current) && !mirrorTargetRef.current) {
-      questionBlocksRef.current = [];
-    } else {
-      const mirror = mirrorTargetRef.current;
-      const seedUserId = mirror && mirror !== 'all' ? mirror.userId : uid;
-      questionBlocksRef.current = generateQuestionBlocks(
-        stageQs.map((q) => q.id),
-        `${seedUserId}:${roomId}:s${stg}`,
-        stg,
-      );
-    }
-
-    if (opts?.persistCheckpoint !== false && uid && roomId) {
-      try {
-        window.localStorage.setItem(`llys_stage_${roomId}_${uid}`, String(stg));
-      } catch {
-        // ignore storage error
-      }
-    }
-
-    const me = playersRef.current.get(myIdRef.current);
-    if (me) {
-      me.stage = stg;
-      if (opts?.respawnPlayer) {
-        me.x = me.spawnX ?? 120;
-        me.y = me.spawnY ?? 600;
-        me.vx = 0;
-        me.vy = 0;
-        me.onGround = false;
-        me.ridingPlatform = null;
-        me.isDying = false;
-        me.deathStartedAt = undefined;
-        me.burnUntil = undefined;
-      } else if (me.isDying) {
-        // Pindah stage tanpa respawn eksplisit (misalnya ditarik tali admin lintas stage):
-        // pastikan state death di-reset supaya tidak infinite respawn.
-        me.isDying = false;
-        me.deathStartedAt = undefined;
-        me.burnUntil = undefined;
-      }
-      if (ably.connected) {
-        ably.publishPosition({
-          id: me.id,
-          username: me.username,
-          avatar: me.avatar,
-          role: myRole,
-          stage: stg,
-          x: me.x,
-          y: me.y,
-          vx: me.vx,
-          vy: me.vy,
-          facing: me.facing,
-          onGround: me.onGround,
-          isDying: me.isDying,
-          deathStartedAt: me.deathStartedAt,
-          burnUntil: me.burnUntil,
-          tag: me.tag,
-          colors: me.colors,
-        });
-      }
-    }
-
-    if (opts?.showToast) {
-      soundEngine.playAnswerCorrect();
-      const label =
-        stg === 10
-          ? `👑 STAGE 10/${tStg}: Menara Final Boss — Kuasai Void & Jadi Legenda! (${stageQs.length} Soal)`
-          : stg === 9
-            ? `🦠 STAGE 9/${tStg}: Sarang Virus — Hancurkan Sarang & Bertahan Hidup! (${stageQs.length} Soal)`
-            : stg === 8
-              ? `🏜️ STAGE 8/${tStg}: Gurun Reruntuhan — Lolos dari Pasir & Jurang! (${stageQs.length} Soal)`
-              : stg === 7
-                ? `❄️ STAGE 7/${tStg}: Samudra Es — Awas Licin & Retakkan Es! (${stageQs.length} Soal)`
-                : stg === 6
-                  ? `⚙️ STAGE 6/${tStg}: Kota Roda Gigi — Hindari Mesin & Gir Berputar! (${stageQs.length} Soal)`
-                  : stg === 5
-                    ? `🌿 STAGE 5/${tStg}: Hutan Neon Biolumin — Jelajahi Rimba & Kumpulkan Power-Up! (${stageQs.length} Soal)`
-                    : stg === 4
-                      ? `⚡ STAGE 4/${tStg}: Galaksi Cyber — Ambil Power-Up & Tembak Lawan Monster Virus! (${stageQs.length} Soal)`
-                      : stg === 3
-                        ? `🔥 STAGE 3/${tStg}: Kastil Magma — Waspada Lahar Panas, Lift Vulkanik & Monster Virus! (${stageQs.length} Soal)`
-                        : stg === 2
-                          ? `🌅 STAGE 2/${tStg}: Menara Sunset — Awas Pijakan Rapuh, Lift & Patroli Virus! (${stageQs.length} Soal)`
-                          : `🏞️ STAGE 1/${tStg}: Lembah Kampus — Jawab Semua Soal untuk Buka Gerbang! (${stageQs.length} Soal)`;
-      const bossLabel = createStageBosses(stg)[0];
-      showBanner(bossLabel ? `${label} ⚔️ BOSS: ${bossLabel.name} — Tembak sampai mati untuk dapat kunci!` : label, 4200);
-    }
-  }
-
-  function handleRejoinApproved() {
-    if (exitNoticeRef.current !== 'kicked') return;
-    exitNoticeRef.current = null;
-    hasLeftRef.current = false;
-    justKickedInSessionRef.current = false;
-    setExitNotice(null);
-    answeredIdsRef.current.clear();
-    answerResultsRef.current.clear();
-    setAnsweredQuestionIds([]);
-    setCorrectCount(0);
-    questionRef.current = null;
-    setQuestion(null);
-    setFeedback(null);
-    // Guru/Admin selalu mulai dengan mirror OFF saat rejoin
-    mirrorTargetRef.current = null;
-    setMirrorTarget(null);
-    questionBlocksRef.current = [];
-    if (myIdRef.current) {
-      setScores((prev) => ({ ...prev, [myIdRef.current]: 0 }));
-      const shuffleSeed = `${myIdRef.current}:${roomId}:${Date.now()}`;
-      setLevelQuestions((prev) => {
-        const next = prev.map((q) => shuffleQuestionOptions(q, shuffleSeed));
-        levelQuestionsRef.current = next;
-        applyStage(1, {
-          respawnPlayer: true,
-          showToast: true,
-          seedId: myIdRef.current,
-          allQuestions: next,
-        });
-        return next;
-      });
-    }
-  }
-
-  function applyLiveRoomStatus(nextStatus: string) {
-    if (!nextStatus) return;
-    if (nextStatus === 'deleted') {
-      if (isStaffRole(myRoleRef.current)) {
-        manualLeaveRef.current = true;
-        hasLeftRef.current = true;
-        router.replace('/dashboard/teacher/rooms');
-      } else {
-        triggerForcedExit('deleted');
-      }
-      return;
-    }
-    if (nextStatus === 'completed') {
-      manualLeaveRef.current = true;
-      hasLeftRef.current = true;
-      router.replace(isStaffRole(myRoleRef.current) ? '/dashboard/teacher/rooms' : '/dashboard/student');
-      return;
-    }
-    if (nextStatus === 'paused') {
-      keysRef.current.left = false;
-      keysRef.current.right = false;
-      keysRef.current.jump = false;
-      const me = playersRef.current.get(myIdRef.current);
-      if (me) {
-        me.vx = 0;
-        me.vy = 0;
-      }
-    }
-    if (roomRef.current) {
-      roomRef.current = { ...roomRef.current, status: nextStatus };
-    }
-    setRoom((prev) => (prev && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev));
-  }
-
-  const pendingObstacleUploadRef = useRef<ObstacleEvent | null>(null);
-
-  const applyObstacleEvent = useCallback((evt: ObstacleEvent) => {
-    const curStg = currentStageRef.current;
-    if (evt.stg !== curStg) return;
-    if (evt.op === 'crumble') {
-      const plat = stagePlatformsRef.current[evt.idx];
-      if (plat && plat.type === 'crumble') {
-        plat.crumbleStartedAt = evt.at;
-      }
-    } else if (evt.op === 'stomp') {
-      const enemy = stageEnemiesRef.current.find((e) => e.id === evt.id);
-      if (enemy) {
-        enemy.stompedUntil = Math.max(enemy.stompedUntil ?? 0, evt.until);
-      }
-    } else if (evt.op === 'powerup') {
-      const pu = stagePowerUpsRef.current.find((p) => p.id === evt.id);
-      if (pu) {
-        pu.collectedUntil = Math.max(pu.collectedUntil ?? 0, evt.until);
-      }
-    } else if (evt.op === 'shoot') {
-      if (projectilesRef.current.some((pr) => pr.id === evt.pid)) return;
-      projectilesRef.current.push({
-        id: evt.pid,
-        x: evt.x,
-        y: evt.y,
-        vx: evt.vx,
-        shooterId: evt.shooterId ?? 'remote',
-        stage: evt.stg,
-        createdAt: Date.now(),
-        kind: evt.gun ? 'admin-round' : 'blaster',
-        damage: evt.dmg,
-        length: evt.len,
-        thickness: evt.thk,
-        color: evt.color,
-        glow: evt.glow,
-        weapon: evt.weapon as Projectile['weapon'],
-        shooterRole: evt.shooterRole,
-      });
-      soundEngine.playShoot();
-    } else if (evt.op === 'boss_hit') {
-      const b = stageBossesRef.current.find((x) => x.id === evt.bid);
-      if (b && b.alive) {
-        b.hp = Math.max(0, b.hp - evt.dmg);
-        b.hitFlashUntil = Date.now() + 120;
-        if (b.hp <= 0) b.alive = false;
-      }
-    } else if (evt.op === 'boss_spit') {
-      if (bossProjectilesRef.current.some((bp) => bp.id === evt.pid)) return;
-      bossProjectilesRef.current.push({
-        id: evt.pid,
-        x: evt.x,
-        y: evt.y,
-        vx: evt.vx,
-        vy: evt.vy,
-        bossId: evt.bid,
-        stage: evt.stg,
-        createdAt: Date.now(),
-      });
-      soundEngine.playShoot();
-    } else if (evt.op === 'boss_died') {
-      for (const b of stageBossesRef.current) b.alive = false;
-      if (!bossDiedBannerRef.current.has(evt.stg)) {
-        bossDiedBannerRef.current.add(evt.stg);
-        soundEngine.playPowerUp();
-        showBanner('🔑 Boss dikalahkan! Kunci didapat, gerbang terbuka!', 4200);
-      }
-    }
-  }, []);
-
-  const applyIncomingCommand = useCallback((cmd: RoomCommandEvent) => {
-    const isTarget = 'targetId' in cmd && (cmd.targetId === 'all' || cmd.targetId === myIdRef.current);
-    if (cmd.op === 'god') {
-      const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) {
-        targetP.isGodMode = cmd.value;
-      }
-      if (isTarget) {
-        isGodModeRef.current = cmd.value;
-        setIsGodMode(cmd.value);
-        const me = playersRef.current.get(myIdRef.current);
-        if (me) me.isGodMode = cmd.value;
-        if (cmd.value) {
-          soundEngine.playPowerUp();
-          showBanner('👑 GOD MODE DIAKTIFKAN! Kamu kebal rintangan map (duri/monster/lahar).');
-        } else {
-          showBanner('🛡️ God Mode telah dinonaktifkan.');
-        }
-      }
-    } else if (cmd.op === 'teleport') {
-      if (isTarget) {
-        if (typeof cmd.stage === 'number' && cmd.stage !== currentStageRef.current) {
-          applyStage(cmd.stage, { respawnPlayer: true, showToast: true });
-        } else if (typeof cmd.x === 'number' && typeof cmd.y === 'number') {
-          const me = playersRef.current.get(myIdRef.current);
-          if (me) {
-            me.x = cmd.x;
-            me.y = cmd.y;
-            me.vx = 0;
-            me.vy = 0;
-          }
-          soundEngine.playBounce();
-          showBanner('🌀 Kamu diteleportasikan oleh Guru/Admin!');
-        }
-      }
-    } else if (cmd.op === 'reset') {
-      if (isTarget) {
-        answeredIdsRef.current.clear();
-        answerResultsRef.current.clear();
-        setAnsweredQuestionIds([]);
-        setCorrectCount(0);
-        questionRef.current = null;
-        setQuestion(null);
-        setQuestionMinimized(false);
-        setSelected('');
-        if (myIdRef.current) {
-          setScores((prev) => ({ ...prev, [myIdRef.current]: 0 }));
-          try {
-            window.localStorage.setItem(`llys_stage_${roomId}_${myIdRef.current}`, '1');
-          } catch { }
-        }
-        applyStage(1, { respawnPlayer: true, showToast: true });
-        soundEngine.playDeath();
-        showBanner('🔄 Jawaban & Progres kamu telah di-reset ke Stage 1 oleh Guru/Admin.');
-      }
-      if (isStaff && mirrorTargetRef.current) {
-        const curM = mirrorTargetRef.current;
-        if (cmd.targetId === 'all' || (curM !== 'all' && curM.userId === cmd.targetId)) {
-          answerResultsRef.current.clear();
-          const curStg = currentStageRef.current;
-          const stageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
-          const seedUserId = curM !== 'all' ? curM.userId : (myIdRef.current || 'anon');
-          questionBlocksRef.current = generateQuestionBlocks(
-            stageQs.map((q) => q.id),
-            `${seedUserId}:${roomId}:s${curStg}`,
-            curStg,
-          );
-        }
-      }
-    } else if (cmd.op === 'assist_answer') {
-      if (isTarget) {
-        answeredIdsRef.current.add(cmd.qid);
-        answerResultsRef.current.set(cmd.qid, 'assisted');
-        setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
-        setCorrectCount(answeredIdsRef.current.size);
-        soundEngine.playAnswerCorrect();
-        showBanner('⭐ Soal sudah dibantu jawab');
-      }
-    } else if (cmd.op === 'gun') {
-      const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) {
-        if (cmd.value && cmd.weapon) {
-          const spec = WEAPONS[cmd.weapon as keyof typeof WEAPONS];
-          if (spec) {
-            targetP.gun = cmd.weapon;
-            targetP.blasterAmmo = Infinity;
-            if (cmd.weapon === 'ice') {
-              targetP.frozenUntil = undefined;
-              targetP.frozenDeathAt = undefined;
-              targetP.stunnedUntil = undefined;
-            }
-            if (cmd.weapon === 'stunt') {
-              targetP.frozenUntil = undefined;
-              targetP.frozenDeathAt = undefined;
-              targetP.stunnedUntil = undefined;
-            }
-          }
-        } else {
-          targetP.gun = null;
-          targetP.blasterAmmo = 0;
-          targetP.blasterUntil = 0;
-        }
-      }
-      if (isTarget && cmd.value && cmd.weapon) {
-        const spec = WEAPONS[cmd.weapon as keyof typeof WEAPONS];
-        if (spec) {
-          setAmmoCount(Infinity);
-          showBanner(cmd.weapon === 'ice' ? `🧊 ${spec.label} diberikan! (beku musuh jadi es, terdorong, lalu mati)` : cmd.weapon === 'stunt' ? `⚡ ${spec.label} diberikan! (musuh terkejut listrik, diam, lalu mati)` : `🔫 ${spec.label} diberikan! (peluru unlimited)`);
-          soundEngine.playPowerUp();
-        }
-      }
-    } else if (cmd.op === 'jail') {
-      const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) {
-        targetP.jailedUntil = cmd.value ? Date.now() + JAIL_FREEZE_MS : undefined;
-        if (!cmd.value) targetP.vx = 0;
-      }
-      if (isTarget) {
-        const me = playersRef.current.get(myIdRef.current);
-        if (me) me.jailedUntil = targetP?.jailedUntil;
-        showBanner(cmd.value ? '⛓️ Kamu dibekukan oleh Admin selama 15 detik!' : '⛓️ Bekukanmu dilepas.');
-        if (cmd.value) soundEngine.playBurn();
-      }
-    } else if (cmd.op === 'cosmetics') {
-      const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) {
-        if (cmd.tag !== undefined) targetP.tag = cmd.tag || undefined;
-        if (cmd.colors) {
-          targetP.colors = { ...(targetP.colors ?? {}) };
-          if (cmd.colors.body !== undefined) targetP.colors.body = cmd.colors.body || undefined;
-          if (cmd.colors.tag !== undefined) targetP.colors.tag = cmd.colors.tag || undefined;
-          if (cmd.colors.nick !== undefined) targetP.colors.nick = cmd.colors.nick || undefined;
-        }
-      }
-      if (isTarget) {
-        const me = playersRef.current.get(myIdRef.current);
-        if (me) {
-          if (cmd.tag !== undefined) me.tag = cmd.tag || undefined;
-          if (cmd.colors) {
-            me.colors = { ...(me.colors ?? {}) };
-            if (cmd.colors.body !== undefined) me.colors.body = cmd.colors.body || undefined;
-            if (cmd.colors.tag !== undefined) me.colors.tag = cmd.colors.tag || undefined;
-            if (cmd.colors.nick !== undefined) me.colors.nick = cmd.colors.nick || undefined;
-          }
-        }
-      }
-    } else if (cmd.op === 'cmd_access') {
-      // Admin / Guru broadcast siapa aja yang di-enable / di-disable cmd access-nya
-      if (cmd.targetId === 'all') {
-        if (cmd.value) {
-          cmdEnabledUsersRef.current.add('__ALL_STUDENTS__');
-          if (myRoleRef.current === 'student' && myIdRef.current) {
-            cmdEnabledUsersRef.current.add(myIdRef.current);
-          }
-          for (const p of playersRef.current.values()) {
-            if (p.role === 'student' || (!p.role && p.id !== myIdRef.current)) {
-              cmdEnabledUsersRef.current.add(p.id);
-            }
-          }
-        } else {
-          cmdEnabledUsersRef.current.clear();
-        }
-      } else {
-        if (cmd.value) {
-          cmdEnabledUsersRef.current.add(cmd.targetId);
-        } else {
-          cmdEnabledUsersRef.current.delete(cmd.targetId);
-          cmdEnabledUsersRef.current.delete('__ALL_STUDENTS__');
-        }
-      }
-    } else if (cmd.op === 'rope') {
-      // Selalu update map lokal (walau target belum ada di map, siapkan entry-nya),
-      // supaya /untake rope all benar-benar melepas tali di SEMUA client (bukan hanya admin).
-      const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) {
-        targetP.ropedById = cmd.value ? (cmd.byId ?? 'admin') : null;
-        if (!cmd.value) {
-          targetP.adminAnchor = undefined;
-          targetP.adminFacing = undefined;
-        }
-      } else if (!cmd.value) {
-        // Target tidak ada di map (misalnya baru rejoin): tetap tandai via presence players
-        for (const p of playersRef.current.values()) {
-          if (p.id === cmd.targetId) {
-            p.ropedById = null;
-            p.adminAnchor = undefined;
-            p.adminFacing = undefined;
-          }
-        }
-      }
-      if (cmd.targetId === myIdRef.current) {
-        const me = playersRef.current.get(myIdRef.current);
-        if (me) {
-          me.ropedById = cmd.value ? (cmd.byId ?? 'admin') : null;
-          if (!cmd.value) {
-            me.adminAnchor = undefined;
-            me.adminFacing = undefined;
-            meAdminAnchorRef.current = null;
-          }
-        }
-        if (cmd.value) {
-          showBanner(`🪢 Kamu diikat oleh ${cmd.byName || 'Admin'}! Ikuti kemana pun admin pergi.`);
-          soundEngine.playPowerUp();
-        } else {
-          showBanner('🪢 Tali kamu dilepas oleh Admin.');
-        }
-      }
-    } else if (cmd.op === 'rope_all_clear') {
-      // Admin menjalankan /untake rope all: pastikan SEMUA tali di semua player lepas
-      for (const p of playersRef.current.values()) {
-        p.ropedById = null;
-        p.adminAnchor = undefined;
-        p.adminFacing = undefined;
-      }
-      meAdminAnchorRef.current = null;
-      const me = playersRef.current.get(myIdRef.current);
-      if (me) me.ropedById = null;
-      showBanner('🪢 Semua tali dilepas oleh Admin.');
-    } else if (cmd.op === 'change_nick') {
-      // Admin ganti nickname (persist di DB, seperti tag): berlaku lintas rejoin & room lain
-      const newName = (cmd.value || '').trim().slice(0, 20);
-      const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) {
-        if (!targetP.originalFullName) targetP.originalFullName = targetP.fullName || targetP.username;
-        targetP.username = newName || targetP.username;
-        targetP.fullName = newName || targetP.fullName;
-      }
-      if (isTarget) {
-        const me = playersRef.current.get(myIdRef.current);
-        if (me && newName) {
-          if (!me.originalFullName) me.originalFullName = me.fullName || myFullNameRef.current || me.username;
-          me.username = newName;
-          me.fullName = newName;
-        }
-        if (newName) {
-          myUsernameRef.current = newName;
-          try { window.localStorage.setItem('llys_custom_nick', newName); } catch { }
-          showBanner(`🏷️ Nickname kamu diganti Admin jadi "${newName}".`);
-          soundEngine.playPowerUp();
-        }
-      }
-    } else if (cmd.op === 'skip_stage') {
-      if (cmd.targetId === myIdRef.current) {
-        for (const qid of cmd.qids) {
-          answeredIdsRef.current.add(qid);
-          answerResultsRef.current.set(qid, 'assisted');
-        }
-        setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
-        setCorrectCount(answeredIdsRef.current.size);
-        soundEngine.playAnswerCorrect();
-        showBanner('⏭️ Soal tersisa di stage ini ditandai selesai oleh Admin! Silakan lanjut ke stage berikutnya.', 5000);
-      }
-    } else if (cmd.op === 'hit') {
-      const shooterRole =
-        cmd.shooterRole ??
-        playersRef.current.get(cmd.by)?.role ??
-        (cmd.by === myIdRef.current ? myRoleRef.current : undefined);
-      const shooterName =
-        playersRef.current.get(cmd.by)?.username ??
-        (shooterRole === 'admin' ? 'Admin' : shooterRole === 'teacher' ? 'Guru' : 'Player');
-
-      if (cmd.targetId === myIdRef.current) {
-        const me = playersRef.current.get(myIdRef.current);
-        if (me && !me.isDying && !me.ropedById) {
-          if (canShooterHitTarget(shooterRole, me.role)) {
-            if (cmd.weapon === 'ice') {
-              me.isDying = false;
-              me.frozenUntil = Date.now() + 1200;
-              me.frozenDeathAt = Date.now() + 1200;
-              me.frozenByShooterId = cmd.by;
-              me.frozenByWeapon = 'ice';
-              me.vx = me.x < (projectilesRef.current.find((r) => r.shooterId === cmd.by)?.x ?? me.x) ? -4 : 4;
-              me.vy = -3.5;
-              showBanner(`🧊 Kamu dibekukan oleh ${shooterName}!`);
-            } else if (cmd.weapon === 'stunt') {
-              me.isDying = false;
-              me.frozenUntil = Date.now() + 1200;
-              me.frozenDeathAt = Date.now() + 1200;
-              me.stunnedUntil = Date.now() + 1200;
-              me.frozenByShooterId = cmd.by;
-              me.frozenByWeapon = 'stunt';
-              me.vx = 0;
-              me.vy = 0;
-              showBanner(`⚡ Kamu terkena kejutan listrik dari ${shooterName}!`);
-            } else {
-              me.isDying = true;
-              me.deathStartedAt = Date.now();
-              me.vx = 0;
-              me.vy = -13.2;
-              soundEngine.playDeath();
-              showBanner(`💥 Kamu ditembak oleh ${shooterName}! (-${cmd.dmg ?? 1})`);
-            }
-          }
-        }
-      } else {
-        // Remote player: update efek visual di player lain juga
-        const target = playersRef.current.get(cmd.targetId);
-        if (target && !target.isDying && !target.ropedById) {
-          if (canShooterHitTarget(shooterRole, target.role)) {
-            if (cmd.weapon === 'ice') {
-              target.isDying = false;
-              target.frozenUntil = Date.now() + 1200;
-              target.frozenDeathAt = Date.now() + 1200;
-              target.frozenByShooterId = cmd.by;
-              target.frozenByWeapon = 'ice';
-              target.vx = target.x < (projectilesRef.current.find((r) => r.shooterId === cmd.by)?.x ?? target.x) ? -4 : 4;
-              target.vy = -3.5;
-            } else if (cmd.weapon === 'stunt') {
-              target.isDying = false;
-              target.frozenUntil = Date.now() + 1200;
-              target.frozenDeathAt = Date.now() + 1200;
-              target.stunnedUntil = Date.now() + 1200;
-              target.frozenByShooterId = cmd.by;
-              target.frozenByWeapon = 'stunt';
-              target.vx = 0;
-              target.vy = 0;
-            } else {
-              target.isDying = true;
-              target.deathStartedAt = Date.now();
-              target.vx = 0;
-              target.vy = -13.2;
-            }
-          }
-        }
-      }
-    }
-  }, [applyStage]);
-
-  const ablyRef = useRef<AblyRoomApi | null>(null);
   const ably = useAblyRoom(roomId, ablyEnabled, {
     onDirectMove: (rp) => {
-      ingestRemotePlayerSnapshot({ ...rp, gun: rp.gun ?? undefined, tag: rp.tag ?? undefined, colors: rp.colors ?? undefined });
+      ingestRemotePlayerSnapshot(rp);
     },
     onDirectLeave: (uid, kicked) => {
-      if (uid === myIdRef.current || uid === 'me') {
-        if (kicked && !manualLeaveRef.current && !isStaffRole(myRoleRef.current)) {
-          justKickedInSessionRef.current = true;
-          triggerForcedExit('kicked');
+      if (uid === myIdRef.current) {
+        if (kicked) {
+          alert('Anda dikeluarkan dari ruang oleh guru.');
+          router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
         }
         return;
       }
       playersRef.current.delete(uid);
       setRoom((prev) => (prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== uid) } : prev));
     },
-    onObstacleEvent: applyObstacleEvent,
-    onCommandEvent: applyIncomingCommand,
   });
-  ablyRef.current = ably;
-
-  const fireLaser = useCallback(() => {
-    const me = playersRef.current.get(myIdRef.current);
-    if (!me || exitNoticeRef.current || roomRef.current?.status === 'paused') return;
-    const now = Date.now();
-    const ammo = me.blasterAmmo ?? 0;
-    const until = me.blasterUntil ?? 0;
-    if (me.gun && until > 0 && until <= now) {
-      me.gun = null;
-      me.blasterAmmo = 0;
-      setAmmoCount(0);
-      return;
-    }
-    if (ammo <= 0) {
-      return;
-    }
-    const gunSpec = me.gun ? WEAPONS[me.gun as keyof typeof WEAPONS] : undefined;
-    const cooldown = gunSpec?.cooldownMs ?? 160;
-    if (now - lastShotAtRef.current < cooldown) {
-      return;
-    }
-    lastShotAtRef.current = now;
-    me.blasterAmmo = ammo - 1;
-    if (me.blasterAmmo <= 0 && gunSpec) {
-      me.gun = null;
-    }
-    setAmmoCount(me.blasterAmmo);
-    soundEngine.playShoot();
-
-    const facing = me.facing ?? 1;
-    const projId = `proj_${myIdRef.current}_${now}`;
-    const pX = facing === 1 ? me.x + 36 : me.x;
-    const pY = me.y + 20;
-    const pVx = facing * (gunSpec?.speed ?? 14);
-    const curStg = currentStageRef.current;
-
-    const proj: Projectile = {
-      id: projId,
-      x: pX,
-      y: pY,
-      vx: pVx,
-      shooterId: myIdRef.current,
-      stage: curStg,
-      createdAt: now,
-      kind: gunSpec ? 'admin-round' : 'blaster',
-      damage: gunSpec?.damage,
-      color: gunSpec?.color,
-      glow: gunSpec?.glow,
-      length: gunSpec?.length,
-      thickness: gunSpec?.thickness,
-      weapon: me.gun as Projectile['weapon'],
-      shooterRole: myRoleRef.current,
-    };
-    projectilesRef.current.push(proj);
-
-    const shootEvt = {
-      op: 'shoot' as const,
-      stg: curStg,
-      pid: projId,
-      x: pX,
-      y: pY,
-      vx: pVx,
-      len: gunSpec?.length,
-      thk: gunSpec?.thickness,
-      color: gunSpec?.color,
-      glow: gunSpec?.glow,
-      gun: me.gun ?? undefined,
-      dmg: gunSpec?.damage,
-      weapon: me.gun as Projectile['weapon'],
-      shooterRole: myRoleRef.current,
-      shooterId: myIdRef.current,
-    };
-    ably.publishObstacle(shootEvt);
-    pendingObstacleUploadRef.current = shootEvt;
-  }, [ably]);
 
   function notifyLeaveRoom() {
-    if (hasLeftRef.current || exitNoticeRef.current || !roomId) return;
+    if (hasLeftRef.current || !roomId) return;
     hasLeftRef.current = true;
     const payload = JSON.stringify({ roomId });
     try {
@@ -1134,31 +273,29 @@ export default function GamePage() {
       headers: { 'Content-Type': 'application/json' },
       body: payload,
       keepalive: true,
-    }).catch(() => { });
+    }).catch(() => {});
   }
 
   function handleSessionReplaced() {
-    manualLeaveRef.current = true;
     hasLeftRef.current = true;
     clearCachedData();
     window.location.replace('/login?reason=session_replaced');
   }
 
   function handleLeaveGame() {
-    manualLeaveRef.current = true;
     notifyLeaveRoom();
-    router.push(isStaff ? '/dashboard/teacher/rooms' : '/dashboard/student');
+    router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
   }
 
   useEffect(() => {
     hasLeftRef.current = false;
-    manualLeaveRef.current = false;
     const onUnload = () => notifyLeaveRoom();
     window.addEventListener('pagehide', onUnload);
     window.addEventListener('beforeunload', onUnload);
     return () => {
       window.removeEventListener('pagehide', onUnload);
       window.removeEventListener('beforeunload', onUnload);
+      notifyLeaveRoom();
     };
   }, [roomId]);
 
@@ -1275,10 +412,6 @@ export default function GamePage() {
         return;
       }
       if (!res.ok) {
-        if (res.status === 404) {
-          triggerForcedExit('deleted');
-          return;
-        }
         setError('Ruang tidak ditemukan');
         return;
       }
@@ -1289,12 +422,7 @@ export default function GamePage() {
       const r: RoomData = data.room;
       myIdRef.current = p.id;
       myUsernameRef.current = p.username;
-      myRoleRef.current = p.role;
       setMyRole(p.role);
-
-      if (Array.isArray(data.rejoinRequests)) {
-        setRejoinRequests(data.rejoinRequests);
-      }
 
       if (typeof data.sessionId === 'string' && data.sessionId) {
         sessionIdRef.current = data.sessionId;
@@ -1302,33 +430,26 @@ export default function GamePage() {
       if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
         chatCursorRef.current = data.chatCursor;
       }
-      if (!data.kicked) {
-        if (data.answerResults && typeof data.answerResults === 'object') {
-          for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean | 'assisted'>)) {
-            answerResultsRef.current.set(qid, okAns === 'assisted' ? 'assisted' : Boolean(okAns));
-          }
-        }
-        if (Array.isArray(data.answeredQuestionIds)) {
-          for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
-          const list = Array.from(answeredIdsRef.current);
-          setAnsweredQuestionIds(list);
-          setCorrectCount(list.length);
+      if (data.answerResults && typeof data.answerResults === 'object') {
+        for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
+          answerResultsRef.current.set(qid, Boolean(okAns));
         }
       }
+      if (Array.isArray(data.answeredQuestionIds)) {
+        for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
+        const list = Array.from(answeredIdsRef.current);
+        setAnsweredQuestionIds(list);
+        setCorrectCount(list.length);
+      }
 
-      if (r.status === 'completed' || (!isStaffRole(p.role) && r.status !== 'in_progress' && r.status !== 'paused')) {
-        router.replace(isStaffRole(p.role) ? '/dashboard/teacher/rooms' : '/dashboard/student');
+      if (r.status === 'completed' || (p.role !== 'teacher' && r.status !== 'in_progress')) {
+        router.replace(p.role === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
         return;
       }
 
-      if (isStaffRole(p.role)) {
-        mirrorTargetRef.current = null;
-        setMirrorTarget(null);
-      }
       setRoom(r);
       roomRef.current = r;
       const myEntry = (r.players ?? []).find((pl: RoomPlayer) => pl.userId === p.id);
-      myFullNameRef.current = p.fullName || myEntry?.fullName || '';
 
       for (const pl of r.players ?? []) {
         const isMe = pl.userId === p.id;
@@ -1339,10 +460,8 @@ export default function GamePage() {
           playersRef.current.set(pl.userId, {
             id: pl.userId,
             username: pl.username,
-            fullName: pl.fullName || undefined,
             avatar: pl.avatar,
             role: isMe ? p.role : pl.role,
-            stage: pl.stage ?? 1,
             x: px,
             y: py,
             spawnX: spawn.x,
@@ -1361,10 +480,8 @@ export default function GamePage() {
         playersRef.current.set(p.id, {
           id: p.id,
           username: p.username,
-          fullName: p.fullName || myEntry?.fullName || undefined,
           avatar: p.avatar,
           role: p.role,
-          stage: myEntry?.stage ?? 1,
           x: myEntry?.lastX ?? spawn.x,
           y: myEntry?.lastY ?? spawn.y,
           spawnX: spawn.x,
@@ -1376,84 +493,29 @@ export default function GamePage() {
         });
       }
 
-      // Muat tag & warna kustom yang tersimpan (persist untuk diri sendiri)
-      try {
-        const meP = playersRef.current.get(p.id);
-        if (meP) {
-          const savedTag = window.localStorage.getItem('llys_custom_tag');
-          if (savedTag) meP.tag = savedTag;
-          const savedColors = window.localStorage.getItem('llys_custom_colors');
-          if (savedColors) {
-            const parsed = JSON.parse(savedColors) as PlayerColors;
-            meP.colors = {
-              body: parsed.body || undefined,
-              tag: parsed.tag || undefined,
-              nick: parsed.nick || undefined,
-            };
-          }
-
-        }
-      } catch { }
-
-      const rawQs: Question[] = data.questions ?? [];
-      const shuffleSeed = `${p.id}:${roomId}:${Date.now()}`;
-      const qs: Question[] = rawQs.map((q) => shuffleQuestionOptions(q, shuffleSeed));
-      setLevelQuestions(qs);
-      levelQuestionsRef.current = qs;
-
-      const tStg = resolveTotalStages(r);
-      totalStagesRef.current = tStg;
-      setTotalStages(tStg);
-
-      let initialStage = 1;
-      try {
-        const savedStage = Number(window.localStorage.getItem(`llys_stage_${roomId}_${p.id}`));
-        if (Number.isFinite(savedStage) && savedStage >= 1 && savedStage <= tStg) {
-          initialStage = savedStage;
-        }
-      } catch {
-        // ignore storage read error
-      }
-      if (tStg > 1 && qs.length > 0 && answeredIdsRef.current.size > 0) {
-        const s1Qs = getStageQuestions(qs, 1, tStg);
-        const s1Cleared = s1Qs.length > 0 && s1Qs.every((q) => answeredIdsRef.current.has(q.id));
-        if (s1Cleared && initialStage < 2) {
-          initialStage = 2;
-        }
-      }
-
-      applyStage(initialStage, {
-        respawnPlayer: false,
-        showToast: false,
-        seedId: p.id,
-        allQuestions: qs,
-        totalStg: tStg,
-      });
-
       const meInit = playersRef.current.get(p.id);
-      if (meInit && !data.kicked) {
-        meInit.stage = initialStage;
+      if (meInit) {
         ably.publishPosition({
           id: meInit.id,
           username: meInit.username,
           avatar: meInit.avatar,
           role: p.role,
-          stage: initialStage,
           x: meInit.x,
           y: meInit.y,
           vx: 0,
           vy: 0,
           facing: meInit.facing,
           onGround: meInit.onGround,
-          tag: meInit.tag,
-          colors: meInit.colors,
-          ropedById: meInit.ropedById ?? undefined,
         });
       }
 
-      if (data.kicked && !isStaffRole(p.role)) {
-        triggerForcedExit('kicked');
-      }
+      const qs: Question[] = data.questions ?? [];
+      setLevelQuestions(qs);
+      levelQuestionsRef.current = qs;
+      questionBlocksRef.current = generateQuestionBlocks(
+        qs.map((q) => q.id),
+        `${p.id}:${roomId}`,
+      );
     }
 
     init();
@@ -1637,29 +699,13 @@ export default function GamePage() {
         existing.targetX = rp.x;
         existing.targetY = rp.y;
         existing.facing = rp.facing;
-        if (rp.username) existing.username = rp.username;
-        if ((rp as any).fullName) existing.fullName = (rp as any).fullName;
-        if (typeof rp.stage === 'number') existing.stage = rp.stage;
         if (rp.role) existing.role = rp.role;
-        const rpTag = (rp as any).tag;
-        if (rpTag !== undefined) existing.tag = rpTag;
-        const rpColors = (rp as any).colors;
-        if (rpColors !== undefined) existing.colors = rpColors;
-        const rpRoped = (rp as any).ropedById;
-        if (rpRoped !== undefined) existing.ropedById = rpRoped ?? null;
-        if (existing.ropedById === null) {
-          existing.adminAnchor = undefined;
-          existing.adminFacing = undefined;
-        }
       } else {
-        const resolvedFullName = (rp as any).fullName || roomRef.current?.players?.find((pl) => pl.userId === rp.id)?.fullName || undefined;
         playersRef.current.set(rp.id, {
           id: rp.id,
           username: rp.username,
-          fullName: resolvedFullName,
           avatar: rp.avatar,
           role: rp.role,
-          stage: rp.stage ?? 1,
           x: rp.x,
           y: rp.y,
           targetX: rp.x,
@@ -1668,11 +714,6 @@ export default function GamePage() {
           vy: 0,
           facing: rp.facing,
           onGround: false,
-          ropedById: (rp as any).ropedById ?? null,
-          adminAnchor: undefined,
-          adminFacing: undefined,
-          tag: (rp as any).tag,
-          colors: (rp as any).colors,
         });
       }
     }
@@ -1680,12 +721,6 @@ export default function GamePage() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent, down: boolean) {
-      if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))) {
-        keysRef.current.left = false;
-        keysRef.current.right = false;
-        keysRef.current.jump = false;
-        return;
-      }
       const target = e.target as HTMLElement | null;
       const active = document.activeElement as HTMLElement | null;
       const isTyping =
@@ -1703,27 +738,6 @@ export default function GamePage() {
         keysRef.current.jump = down;
         if (down) e.preventDefault();
       }
-      if (['f', 'F', 'x', 'X', 'e', 'E', 'j', 'J'].includes(e.key) && down) {
-        fireLaser();
-      }
-      if (e.key === '/' && down) {
-        if (!isStaffRole(myRoleRef.current)) return;
-        e.preventDefault();
-        keysRef.current.left = false;
-        keysRef.current.right = false;
-        keysRef.current.jump = false;
-        setPanelsHidden(false);
-        setChatMinimized(false);
-        chatMinimizedRef.current = false;
-        setChatInput('/');
-        setTimeout(() => {
-          const inputEl = document.getElementById('mp-chat-input') as HTMLInputElement | null;
-          if (inputEl) {
-            inputEl.focus();
-            inputEl.setSelectionRange(1, 1);
-          }
-        }, 30);
-      }
     }
     const kd = (e: KeyboardEvent) => onKey(e, true);
     const ku = (e: KeyboardEvent) => onKey(e, false);
@@ -1733,7 +747,7 @@ export default function GamePage() {
       window.removeEventListener('keydown', kd);
       window.removeEventListener('keyup', ku);
     };
-  }, [fireLaser]);
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1837,7 +851,7 @@ export default function GamePage() {
           const smoothY = 1 - Math.pow(1 - 0.48, dtScale);
           p.y += dy * smoothY;
         }
-        for (const plat of stagePlatformsRef.current) {
+        for (const plat of PLATFORMS) {
           if (
             plat.type === 'fire' &&
             p.x + PLAYER_W > plat.x &&
@@ -1849,335 +863,44 @@ export default function GamePage() {
             break;
           }
         }
-        if (p.ropedById) p.burnUntil = undefined;
       }
-
-      // Auto-break rope HANYA jika admin (pemilik tali) benar-benar sudah pergi / DC.
-      // CATATAN: admin pindah stage TIDAK memutus tali, malah memaksa player terikut.
-      for (const p of playersRef.current.values()) {
-        if (!p.ropedById) continue;
-        const owner = playersRef.current.get(p.ropedById);
-        if (!owner || owner.isDying || !ably.connected) {
-          p.ropedById = null;
-          if (p.id === myIdRef.current) {
-            showBanner('🪢 Tali kamu terlepas (admin pergi / disconnect).');
-          }
-        } else {
-          // Simpan posisi admin sebagai anchor respawn untuk physics.ts
-          p.adminAnchor = { x: owner.x, y: owner.y };
-          p.adminFacing = owner.facing;
-          if (p.id === myIdRef.current) {
-            meAdminAnchorRef.current = { x: owner.x, y: owner.y };
-            meAdminFacingRef.current = owner.facing;
-          }
-        }
-      }
-
-      // Tali kaku (rigid leash) lintas stage: jika stage admin != stage player diikat,
-      // TELEPORT paksa player ke belakang admin (tali "menarik" lintas stage).
-      if (me && me.ropedById && !me.isDying) {
-        const owner = playersRef.current.get(me.ropedById);
-        if (owner && !owner.isDying && (owner.stage ?? 1) !== (me.stage ?? 1)) {
-          applyStage(owner.stage ?? 1, { respawnPlayer: false, showToast: false, force: true });
-          const side = owner.facing === 1 ? -1 : 1;
-          me.x = owner.x + side * 60;
-          me.y = owner.y;
-          me.vx = 0;
-          me.vy = 0;
-          me.isDying = false;
-          me.deathStartedAt = undefined;
-          me.burnUntil = undefined;
-          soundEngine.playBounce();
-        }
-      }
-
-      // Rope drag: tali kaku (rigid leash), jarak fixed dari admin, player gabisa kabur
-      const leashLen = 70;
-      const applyLeash = (target: Player, ax: number, ay: number, afacing: number) => {
-        const side = afacing === 1 ? -1 : 1;
-        const tx = ax + side * 60;
-        const ty = ay;
-        const dx = target.x - tx;
-        const dy = target.y - ty;
-        const dist = Math.hypot(dx, dy);
-        if (dist > leashLen) {
-          const s = leashLen / dist;
-          target.x = tx + dx * s;
-          target.y = ty + dy * s;
-        }
-        target.vx = 0;
-        target.vy = 0;
-        target.facing = afacing === 1 ? 1 : -1;
-      };
-      if (me && !me.isDying) {
-        for (const p of playersRef.current.values()) {
-          if (p.id === myIdRef.current) continue;
-          if (p.ropedById !== myIdRef.current) continue;
-          if ((p.stage ?? 1) !== (me.stage ?? 1)) continue;
-          if (p.isDying) continue;
-          applyLeash(p, me.x, me.y, me.facing);
-        }
-      }
-      // Leash di sisi player yang diikat: clamp posisi sendiri realtime (biar ga nimbrung di client sendiri)
-      if (me && me.ropedById && !me.isDying) {
-        const owner = playersRef.current.get(me.ropedById);
-        // Boleh beda stage: leash tetap jalan (cross-stage dipindah paksa di blok atas).
-        if (owner && !owner.isDying && (owner.stage ?? 1) === (me.stage ?? 1)) {
-          applyLeash(me, owner.x, owner.y, owner.facing);
-        } else if (owner && !owner.isDying && meAdminAnchorRef.current) {
-          // Beda stage: clamp ke anchor admin supaya tidak drift jauh sebelum applyStage memindahkan
-          applyLeash(me, meAdminAnchorRef.current.x, meAdminAnchorRef.current.y, meAdminFacingRef.current ?? owner.facing);
-        }
-      }
-
-      const syncedNow = ably.getSyncedServerTime();
-      updateStageEntities(
-        stagePlatformsRef.current,
-        stageEnemiesRef.current,
-        dtScale,
-        syncedNow,
-        stagePowerUpsRef.current,
-        projectilesRef.current,
-        (projId, enemyId) => {
-          soundEngine.playZap();
-          const curStg = currentStageRef.current;
-          const stompEvt = {
-            op: 'stomp' as const,
-            stg: curStg,
-            id: enemyId,
-            until: Date.now() + 9000,
-          };
-          applyObstacleEvent(stompEvt);
-          ably.publishObstacle(stompEvt);
-          pendingObstacleUploadRef.current = stompEvt;
-        },
-        stageBossesRef.current,
-        (projId, bossId) => {
-          soundEngine.playZap();
-          const b = stageBossesRef.current.find((x) => x.id === bossId);
-          const curStg = currentStageRef.current;
-          if (!b) return;
-          const wasAlive = b.alive;
-          const hitEvt = {
-            op: 'boss_hit' as const,
-            stg: curStg,
-            bid: bossId,
-            dmg: 1,
-          };
-          applyObstacleEvent(hitEvt);
-          ably.publishObstacle(hitEvt);
-          pendingObstacleUploadRef.current = hitEvt;
-          if (wasAlive && !b.alive && !bossDiedBannerRef.current.has(curStg)) {
-            const dieEvt = { op: 'boss_died' as const, stg: curStg };
-            applyObstacleEvent(dieEvt);
-            ably.publishObstacle(dieEvt);
-            pendingObstacleUploadRef.current = dieEvt;
-          }
-        },
-        bossProjectilesRef.current,
-        (spit) => {
-          const curStg = currentStageRef.current;
-          const evt = {
-            op: 'boss_spit' as const,
-            stg: curStg,
-            bid: spit.bid,
-            pid: spit.pid,
-            x: spit.x,
-            y: spit.y,
-            vx: spit.vx,
-            vy: spit.vy,
-          };
-          applyObstacleEvent(evt);
-          ably.publishObstacle(evt);
-        },
-        (playerId, bossId) => {
-          const victim = playersRef.current.get(playerId);
-          if (!victim) return;
-          const now = Date.now();
-          victim.isDying = true;
-          victim.deathStartedAt = now;
-          victim.vx = 0;
-          victim.vy = -13.2;
-          victim.onGround = false;
-          victim.ridingPlayerId = null;
-          victim.lastCarrierX = undefined;
-          victim.ridingPlatform = null;
-          soundEngine.playDeath();
-          void bossId;
-        },
-        Array.from(playersRef.current.values()),
-      );
-
-      const curStage = currentStageRef.current;
-      const tStages = totalStagesRef.current;
-      const curStageQs = getStageQuestions(levelQuestionsRef.current, curStage, tStages);
-      const stageTotal = curStageQs.length;
-      let stageAnswered = 0;
-      for (const sq of curStageQs) {
-        if (answeredIdsRef.current.has(sq.id)) stageAnswered += 1;
-      }
-      const bossAlive = stageBossesRef.current.some((b) => b.alive);
-      const isGateUnlocked = isStaff || (stageTotal > 0 && stageAnswered >= stageTotal && !bossAlive);
 
       const dynBlocks: Platform[] = questionBlocksRef.current.map((b) => {
         const qid = b.questionId ?? '';
         const res = answerResultsRef.current.get(qid);
-        const type = res === 'assisted' ? 'qblock-assisted' : res === true ? 'qblock-correct' : res === false ? 'qblock-wrong' : 'qblock';
+        const type = res === true ? 'qblock-correct' : res === false ? 'qblock-wrong' : 'qblock';
         return { ...b, type };
       });
 
-      const isStudentPaused = room?.status === 'paused' && !isStaff;
-      const isQuestionModalBusy = !isStaff && Boolean(questionRef.current && !answeredIdsRef.current.has(questionRef.current.id));
-      if (isQuestionModalBusy) {
-        keysRef.current.left = false;
-        keysRef.current.right = false;
-        keysRef.current.jump = false;
-      }
-      if (
-        me &&
-        !exitNoticeRef.current &&
-        !isStudentPaused &&
-        (isStaff || room?.status === 'in_progress' || room?.status === 'waiting')
-      ) {
+      if (me && (room?.status === 'in_progress' || room?.status === 'waiting')) {
         updatePlayerPhysics(
           me,
-          isQuestionModalBusy ? { left: false, right: false, jump: false } : keysRef.current,
+          keysRef.current,
           playersRef.current.values(),
           dynBlocks,
           (qid) => {
-            if (!isStaff) {
-              if (answeredIdsRef.current.has(qid)) return;
-              if (questionRef.current && !answeredIdsRef.current.has(questionRef.current.id)) {
-                setQuestionMinimized(false);
-                return;
-              }
-              const found = levelQuestionsRef.current.find((q) => q.id === qid);
-              if (found) {
-                keysRef.current.left = false;
-                keysRef.current.right = false;
-                keysRef.current.jump = false;
-                me.vx = 0;
-                soundEngine.playQuestionOpen();
-                questionRef.current = found;
-                setQuestion(found);
-                setQuestionMinimized(false);
-                setSelected('');
-              }
-            } else if (mirrorTargetRef.current) {
-              const res = answerResultsRef.current.get(qid);
-              if (res === true || res === 'assisted') return;
-              const found = levelQuestionsRef.current.find((q) => q.id === qid);
-              if (found) {
-                keysRef.current.left = false;
-                keysRef.current.right = false;
-                keysRef.current.jump = false;
-                me.vx = 0;
-                soundEngine.playQuestionOpen();
-                questionRef.current = found;
-                setQuestion(found);
-                setQuestionMinimized(false);
-                setSelected('');
-              }
+            if (myRole === 'teacher') return;
+            if (answeredIdsRef.current.has(qid)) return;
+            if (questionRef.current?.id === qid) {
+              setQuestionMinimized(false);
+              return;
+            }
+            const found = levelQuestionsRef.current.find((q) => q.id === qid);
+            if (found) {
+              soundEngine.playQuestionOpen();
+              questionRef.current = found;
+              setQuestion(found);
+              setQuestionMinimized(false);
+              setSelected('');
             }
           },
           dtScale,
           (soundEvt) => {
-            if (isQuestionModalBusy) return;
             if (soundEvt === 'jump') soundEngine.playJump();
             else if (soundEvt === 'bounce') soundEngine.playBounce();
             else if (soundEvt === 'burn') soundEngine.playBurn();
             else if (soundEvt === 'death') soundEngine.playDeath();
           },
-          {
-            basePlatforms: stagePlatformsRef.current,
-            enemies: stageEnemiesRef.current,
-            powerUps: stagePowerUpsRef.current,
-            bosses: stageBossesRef.current,
-            isGateUnlocked,
-            isStaff,
-            onObstacleEvent: (evt) => {
-              applyObstacleEvent(evt);
-              ably.publishObstacle(evt);
-              pendingObstacleUploadRef.current = evt;
-            },
-            onCollectPowerUp: () => {
-              soundEngine.playPowerUp();
-              setAmmoCount(10);
-            },
-            onEnterGate: () => {
-              if (currentStageRef.current < totalStagesRef.current) {
-                applyStage(currentStageRef.current + 1, {
-                  respawnPlayer: true,
-                  showToast: true,
-                });
-              }
-            },
-            playerRounds: projectilesRef.current
-              .map((r) => ({
-                id: r.id,
-                x: r.x,
-                y: r.y,
-                vx: r.vx,
-                shooterId: r.shooterId,
-                damage: r.damage,
-                len: r.length,
-                w: r.thickness,
-                h: r.thickness,
-                weapon: (r as Projectile & { weapon?: string }).weapon,
-                shooterRole: r.shooterRole ?? playersRef.current.get(r.shooterId)?.role,
-              })),
-            myPlayerId: myIdRef.current,
-            onPlayerHitByRound: (victimId, shooterId, dmg, weapon, projId) => {
-              if (projId && weapon !== 'megalaser') {
-                const idx = projectilesRef.current.findIndex((r) => r.id === projId);
-                if (idx !== -1) projectilesRef.current.splice(idx, 1);
-              }
-              const shooterRole =
-                shooterId === myIdRef.current
-                  ? myRoleRef.current
-                  : projectilesRef.current.find((r) => r.shooterId === shooterId)?.shooterRole ??
-                    playersRef.current.get(shooterId)?.role ??
-                    'student';
-              const victim = playersRef.current.get(victimId);
-              if (victim && !canShooterHitTarget(shooterRole, victim.role)) return;
-
-              if (victimId === myIdRef.current) {
-                const me = playersRef.current.get(myIdRef.current);
-                if (me && !me.isDying && !me.ropedById) {
-                  const shooterName =
-                    playersRef.current.get(shooterId)?.username ??
-                    (shooterRole === 'admin' ? 'Admin' : shooterRole === 'teacher' ? 'Guru' : 'Player');
-                  if (weapon === 'ice') {
-                    me.isDying = false;
-                    me.frozenUntil = Date.now() + 1200;
-                    me.frozenDeathAt = Date.now() + 1200;
-                    me.frozenByShooterId = shooterId;
-                    me.frozenByWeapon = 'ice';
-                    me.vx = me.x < (projectilesRef.current.find((r) => r.shooterId === shooterId)?.x ?? me.x) ? -4 : 4;
-                    me.vy = -3.5;
-                    showBanner(`🧊 Kamu dibekukan oleh ${shooterName}!`);
-                  } else if (weapon === 'stunt') {
-                    me.isDying = false;
-                    me.frozenUntil = Date.now() + 1200;
-                    me.frozenDeathAt = Date.now() + 1200;
-                    me.stunnedUntil = Date.now() + 1200;
-                    me.frozenByShooterId = shooterId;
-                    me.frozenByWeapon = 'stunt';
-                    me.vx = 0;
-                    me.vy = 0;
-                    showBanner(`⚡ Kamu terkena kejutan listrik dari ${shooterName}!`);
-                  } else {
-                    me.isDying = true;
-                    me.deathStartedAt = Date.now();
-                    me.vx = 0;
-                    me.vy = -13.2;
-                    soundEngine.playDeath();
-                    showBanner(`💥 Kamu ditembak oleh ${shooterName}! (-${dmg ?? 1})`);
-                  }
-                }
-              }
-              ably.publishCommand({ op: 'hit', targetId: victimId, by: shooterId, dmg, weapon, shooterRole });
-            },          },
         );
       }
 
@@ -2211,7 +934,6 @@ export default function GamePage() {
             username: me.username,
             avatar: me.avatar,
             role: myRole,
-            stage: curStage,
             x: me.x,
             y: me.y,
             vx: isMovingNow ? me.vx : 0,
@@ -2221,10 +943,6 @@ export default function GamePage() {
             isDying: me.isDying,
             deathStartedAt: me.deathStartedAt,
             burnUntil: me.burnUntil,
-            jailedUntil: me.jailedUntil,
-            gun: me.gun ?? undefined,
-            tag: me.tag,
-            colors: me.colors,
           });
         }
       }
@@ -2236,45 +954,11 @@ export default function GamePage() {
       ctx.save();
       camera.applyTransform(ctx);
 
-      drawWorld(ctx, {
-        stage: curStage,
-        totalStages: tStages,
-        stageAnswered,
-        stageTotal,
-        isGateUnlocked,
-        bossAlive: stageBossesRef.current.some((b) => b.alive),
-      });
-      drawPlatforms(ctx, [...stagePlatformsRef.current, ...dynBlocks], curStage);
-      drawEnemies(ctx, stageEnemiesRef.current, syncedNow);
-      drawBosses(ctx, stageBossesRef.current, syncedNow);
-      drawBossProjectiles(ctx, bossProjectilesRef.current, syncedNow);
-      drawPowerUps(ctx, stagePowerUpsRef.current, syncedNow);
-      drawProjectiles(ctx, projectilesRef.current, syncedNow);
-
-      // Render tali: garis putus-putus admin <-> player yang diikat (terlihat di semua client)
-      for (const p of playersRef.current.values()) {
-        if (!p.ropedById) continue;
-        const owner = playersRef.current.get(p.ropedById);
-        if (!owner) continue;
-        if ((p.stage ?? 1) !== (owner.stage ?? 1)) continue;
-        if ((p.stage ?? 1) !== curStage) continue;
-        ctx.save();
-        ctx.setLineDash([8, 6]);
-        ctx.strokeStyle = '#a97b4f';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(owner.x + PLAYER_W / 2, owner.y + PLAYER_H / 2);
-        ctx.lineTo(p.x + PLAYER_W / 2, p.y + PLAYER_H / 2);
-        ctx.stroke();
-        ctx.restore();
-      }
+      drawWorld(ctx);
+      drawPlatforms(ctx, [...PLATFORMS, ...dynBlocks]);
 
       for (const p of playersRef.current.values()) {
-        const pStage = p.stage ?? 1;
-        if (pStage !== curStage) continue;
-
         const role = p.id === myIdRef.current ? myRole : (p.role ?? (room?.hostId === p.id ? 'teacher' : 'student'));
-        const displayName = p.fullName?.trim() || p.username;
         drawCat(
           ctx,
           p.x,
@@ -2283,24 +967,10 @@ export default function GamePage() {
           PLAYER_H,
           p.avatar,
           p.facing,
-          displayName,
+          p.username,
           role,
           bubblesRef.current.get(p.id) ?? null,
-          {
-            isDying: p.isDying,
-            deathStartedAt: p.deathStartedAt,
-            burnUntil: p.burnUntil,
-            blasterAmmo: p.blasterAmmo,
-            blasterUntil: p.blasterUntil,
-            jailedUntil: p.jailedUntil,
-            gun: p.gun,
-            tag: p.tag,
-            colors: p.colors,
-            isGodMode: p.isGodMode || (p.id === myIdRef.current && isGodModeRef.current),
-            frozenUntil: p.frozenUntil,
-            stunnedUntil: p.stunnedUntil,
-            velocity: { vx: p.vx, vy: p.vy },
-          },
+          { isDying: p.isDying, deathStartedAt: p.deathStartedAt, burnUntil: p.burnUntil },
         );
       }
 
@@ -2324,153 +994,56 @@ export default function GamePage() {
     if (ably.connected) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
-    let lastUploadX = -9999;
-    let lastUploadY = -9999;
-    let lastUploadVx = 0;
-    let lastUploadVy = 0;
-    let lastUploadFacing = 1;
-    let lastUploadDying = false;
-    let lastHeartbeatAt = 0;
 
     async function posLoop() {
       if (!active || ably.connected) return;
       const tStart = performance.now();
-      let didSendMove = false;
       try {
         const me = playersRef.current.get(myIdRef.current);
         if (me && myIdRef.current) {
-          const nowMs = Date.now();
-          const isMoving = Math.abs(me.vx) > 0.04 || Math.abs(me.vy) > 0.04;
-          const wasMoving = Math.abs(lastUploadVx) > 0.04 || Math.abs(lastUploadVy) > 0.04;
-          const justStopped = !isMoving && wasMoving;
-          const moved =
-            justStopped ||
-            Math.abs(me.x - lastUploadX) > 0.3 ||
-            Math.abs(me.y - lastUploadY) > 0.3 ||
-            me.facing !== lastUploadFacing ||
-            Boolean(me.isDying) !== lastUploadDying;
-
-          // Saat diam, gunakan SSE push stream untuk menerima gerakan player lain secara real-time,
-          // dan hanya kirim heartbeat /api/pos setiap 1400ms agar bandwidth Cloudflare/4G 100% hemat!
-          const pendingObs = pendingObstacleUploadRef.current;
-          if (pendingObs) pendingObstacleUploadRef.current = null;
-
-          if (moved || pendingObs || nowMs - lastHeartbeatAt >= 1400) {
-            didSendMove = moved;
-            lastHeartbeatAt = nowMs;
-            lastUploadX = me.x;
-            lastUploadY = me.y;
-            lastUploadVx = isMoving ? me.vx : 0;
-            lastUploadVy = isMoving ? me.vy : 0;
-            lastUploadFacing = me.facing;
-            lastUploadDying = Boolean(me.isDying);
-
-            const postPayload: Record<string, unknown> = moved
-              ? {
-                r: roomId,
-                u: me.id,
-                un: me.username,
-                fn: myFullNameRef.current || me.fullName || undefined,
-                av: me.avatar,
-                rl: myRole,
-                stg: currentStageRef.current,
-                x: Math.round(me.x * 10) / 10,
-                y: Math.round(me.y * 10) / 10,
-                vx: isMoving ? Math.round(me.vx * 100) / 100 : 0,
-                vy: isMoving ? Math.round(me.vy * 100) / 100 : 0,
-                f: me.facing,
-                g: me.onGround ? 1 : 0,
-                d: me.isDying ? 1 : 0,
-                ds: me.deathStartedAt,
-                b: me.burnUntil,
-                j: me.jailedUntil,
-                gn: me.gun ?? undefined,
-                tg: me.tag,
-                cl: me.colors,
-              }
-              : {
-                r: roomId,
-                u: me.id,
-              };
-            if (pendingObs) {
-              postPayload.obstacle = pendingObs;
-            }
-
-            const res = await fetch('/api/pos', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(postPayload),
-            });
-            if (res.ok && active) {
-              const rtt = Math.max(1, Math.round((performance.now() - tStart) * 0.42));
-              ably.setPingMs((prev) => (prev <= 5 ? rtt : Math.round(prev * 0.6 + rtt * 0.4)));
-              const data = await res.json();
-              if (typeof data.st === 'number') {
-                ably.setServerTimeOffset(Math.round(data.st + rtt / 2 - Date.now()));
-              }
-              if (data.obstacles && typeof data.obstacles === 'object') {
-                const obs = data.obstacles as {
-                  crumbles?: { stage: number; idx: number; startedAt: number }[];
-                  stomps?: { stage: number; id: string; until: number }[];
-                  powerups?: { stage: number; id: string; until: number }[];
-                };
-                if (Array.isArray(obs.crumbles)) {
-                  for (const c of obs.crumbles) {
-                    applyObstacleEvent({ op: 'crumble', stg: c.stage, idx: c.idx, at: c.startedAt });
-                  }
-                }
-                if (Array.isArray(obs.stomps)) {
-                  for (const s of obs.stomps) {
-                    applyObstacleEvent({ op: 'stomp', stg: s.stage, id: s.id, until: s.until });
-                  }
-                }
-                if (Array.isArray(obs.powerups)) {
-                  for (const pu of obs.powerups) {
-                    applyObstacleEvent({ op: 'powerup', stg: pu.stage, id: pu.id, until: pu.until });
-                  }
-                }
-              }
-              if (data.roomDeleted || data.rs === 'deleted') {
-                active = false;
-                applyLiveRoomStatus('deleted');
-                return;
-              }
-              if (data.kicked && !isStaffRole(myRoleRef.current)) {
-                triggerForcedExit('kicked');
-                return;
-              }
-              if (!data.kicked && exitNoticeRef.current === 'kicked') {
-                handleRejoinApproved();
-              }
-              if (typeof data.rs === 'string' && data.rs) {
-                applyLiveRoomStatus(data.rs);
-              }
-              const peers = Array.isArray(data.p) ? data.p : [];
-              for (const rp of peers) {
-                const uid = typeof rp.u === 'string' ? rp.u : '';
-                if (!uid || uid === myIdRef.current) continue;
-                ingestRemotePlayerSnapshot({
-                  id: uid,
-                  username: typeof rp.un === 'string' ? rp.un : 'Player',
-                  fullName: typeof rp.fn === 'string' ? rp.fn : undefined,
-                  avatar: typeof rp.av === 'string' ? rp.av : 'cat-orange',
-                  role: typeof rp.rl === 'string' ? rp.rl : undefined,
-                  stage: typeof rp.stg === 'number' ? rp.stg : typeof rp.stage === 'number' ? rp.stage : 1,
-                  x: typeof rp.x === 'number' ? rp.x : 120,
-                  y: typeof rp.y === 'number' ? rp.y : 600,
-                  vx: typeof rp.vx === 'number' ? rp.vx : 0,
-                  vy: typeof rp.vy === 'number' ? rp.vy : 0,
-                  facing: rp.f === -1 ? -1 : 1,
-                  onGround: Boolean(rp.g),
-                  isDying: Boolean(rp.d),
-                  deathStartedAt: typeof rp.ds === 'number' ? rp.ds : undefined,
-                  burnUntil: typeof rp.b === 'number' ? rp.b : undefined,
-                  jailedUntil: typeof rp.j === 'number' ? rp.j : undefined,
-                  gun: typeof rp.gn === 'string' ? rp.gn : undefined,
-                  tag: typeof rp.tg === 'string' ? rp.tg : undefined,
-                  colors: (rp.cl as PlayerColors | undefined) ?? undefined,
-                });
-              }
+          const res = await fetch('/api/pos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              r: roomId,
+              u: me.id,
+              un: me.username,
+              av: me.avatar,
+              rl: myRole,
+              x: Math.round(me.x * 10) / 10,
+              y: Math.round(me.y * 10) / 10,
+              vx: Math.round(me.vx * 100) / 100,
+              vy: Math.round(me.vy * 100) / 100,
+              f: me.facing,
+              g: me.onGround ? 1 : 0,
+              d: me.isDying ? 1 : 0,
+              ds: me.deathStartedAt,
+              b: me.burnUntil,
+            }),
+          });
+          if (res.ok && active) {
+            const rtt = Math.max(1, Math.round(performance.now() - tStart));
+            ably.setPingMs(rtt);
+            const data = await res.json();
+            const peers = Array.isArray(data.p) ? data.p : [];
+            for (const rp of peers) {
+              const uid = typeof rp.u === 'string' ? rp.u : '';
+              if (!uid || uid === myIdRef.current) continue;
+              ingestRemotePlayerSnapshot({
+                id: uid,
+                username: typeof rp.un === 'string' ? rp.un : 'Player',
+                avatar: typeof rp.av === 'string' ? rp.av : 'cat-orange',
+                role: typeof rp.rl === 'string' ? rp.rl : undefined,
+                x: typeof rp.x === 'number' ? rp.x : 120,
+                y: typeof rp.y === 'number' ? rp.y : 600,
+                vx: typeof rp.vx === 'number' ? rp.vx : 0,
+                vy: typeof rp.vy === 'number' ? rp.vy : 0,
+                facing: rp.f === -1 ? -1 : 1,
+                onGround: Boolean(rp.g),
+                isDying: Boolean(rp.d),
+                deathStartedAt: typeof rp.ds === 'number' ? rp.ds : undefined,
+                burnUntil: typeof rp.b === 'number' ? rp.b : undefined,
+              });
             }
           }
         }
@@ -2479,7 +1052,7 @@ export default function GamePage() {
       } finally {
         if (active && !ably.connected) {
           const elapsed = performance.now() - tStart;
-          const waitMs = didSendMove ? Math.max(28, Math.round(55 - elapsed)) : 32;
+          const waitMs = Math.max(35, Math.round(55 - elapsed));
           timer = setTimeout(posLoop, waitMs);
         }
       }
@@ -2502,15 +1075,10 @@ export default function GamePage() {
         const payload: Record<string, unknown> = {
           roomId,
           chatCursor: chatCursorRef.current,
-          justKicked: justKickedInSessionRef.current,
         };
-        // Saat mirror siswa tertentu, minta status jawaban siswa itu agar warna kotak real-time
-        if (mirrorFetchTargetRef.current) {
-          payload.targetId = mirrorFetchTargetRef.current;
-        }
         // Saat WebSocket sudah terhubung, posisi sudah di-stream real-time & disimpan ke DB oleh ws-hub/pos,
-        // sehingga room-sync tidak perlu mengirim duplikat payload koordinat lagi.
-        if (me && !ably.connected) {
+      // sehingga room-sync tidak perlu mengirim duplikat payload koordinat lagi.
+      if (me && !ably.connected) {
           const rx = Math.round(me.x * 10) / 10;
           const ry = Math.round(me.y * 10) / 10;
           const prev = lastSyncedPosRef.current;
@@ -2545,22 +1113,6 @@ export default function GamePage() {
         }
         if (!res.ok || !active) return;
         const data = await res.json();
-        if (data.roomDeleted || data.room === null || data.room?.status === 'deleted') {
-          active = false;
-          applyLiveRoomStatus('deleted');
-          return;
-        }
-        if (data.kicked && !isStaffRole(myRoleRef.current)) {
-          triggerForcedExit('kicked');
-          return;
-        }
-        if (!data.kicked && exitNoticeRef.current === 'kicked') {
-          handleRejoinApproved();
-        }
-        if (Array.isArray(data.rejoinRequests)) {
-          setRejoinRequests(data.rejoinRequests);
-        }
-
         if (typeof data.sessionId === 'string' && data.sessionId) {
           sessionIdRef.current = data.sessionId;
         }
@@ -2587,20 +1139,15 @@ export default function GamePage() {
               if (p.lastY !== undefined) existing.targetY = p.lastY;
               if (p.lastFacing !== undefined) existing.facing = p.lastFacing as 1 | -1;
             }
-            if (p.username) existing.username = p.username;
-            if (p.fullName) existing.fullName = p.fullName;
             if (p.role) existing.role = p.role;
-            if (typeof p.stage === 'number') existing.stage = p.stage;
           } else {
             const px = p.lastX ?? 120;
             const py = p.lastY ?? 600;
             playersRef.current.set(p.userId, {
               id: p.userId,
               username: p.username,
-              fullName: p.fullName || undefined,
               avatar: p.avatar,
               role: p.role,
-              stage: p.stage ?? 1,
               x: px,
               y: py,
               targetX: px,
@@ -2614,27 +1161,21 @@ export default function GamePage() {
         }
         if (data.room?.status === 'completed') {
           active = false;
-          applyLiveRoomStatus('completed');
+          router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
           return;
-        }
-        if (typeof data.room?.status === 'string') {
-          applyLiveRoomStatus(data.room.status);
         }
         setRoom((prev) => {
           if (!prev) return prev;
           const statusChanged = data.room?.status && data.room.status !== prev.status;
           const playersChanged =
             prev.players.length !== serverPlayers.length ||
-            prev.players.some((pl, idx) => pl.userId !== serverPlayers[idx]?.userId) ||
-            prev.players.some((pl, idx) => pl.username !== serverPlayers[idx]?.username || pl.fullName !== serverPlayers[idx]?.fullName);
+            prev.players.some((pl, idx) => pl.userId !== serverPlayers[idx]?.userId);
           if (!statusChanged && !playersChanged) return prev;
-          const updated = {
+          return {
             ...prev,
             status: data.room?.status ?? prev.status,
             players: serverPlayers,
           };
-          roomRef.current = updated;
-          return updated;
         });
         if (typeof data.chatCursor === 'number' && data.chatCursor > chatCursorRef.current) {
           chatCursorRef.current = data.chatCursor;
@@ -2643,44 +1184,23 @@ export default function GamePage() {
           ingestMessages(data.messages);
         }
         if (data.answerResults && typeof data.answerResults === 'object') {
-          if (Array.isArray(data.answeredQuestionIds) && data.answeredQuestionIds.length === 0) {
-            answerResultsRef.current.clear();
-          } else {
-            for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean | 'assisted'>)) {
-              answerResultsRef.current.set(qid, okAns === 'assisted' ? 'assisted' : Boolean(okAns));
-            }
-          }
-        }
-        // Saat mirror siswa tertentu, jawaban yg masuk adalah milik siswa itu:
-        // refresh jawaban siswa yang sudah dihapus dari server (misal habis /reset)
-        if (mirrorFetchTargetRef.current && Array.isArray(data.answeredQuestionIds)) {
-          const serverSet = new Set(data.answeredQuestionIds as string[]);
-          for (const qid of Array.from(answerResultsRef.current.keys())) {
-            if (!serverSet.has(qid)) answerResultsRef.current.delete(qid);
+          for (const [qid, okAns] of Object.entries(data.answerResults as Record<string, boolean>)) {
+            answerResultsRef.current.set(qid, Boolean(okAns));
           }
         }
         if (Array.isArray(data.answeredQuestionIds)) {
-          if (data.answeredQuestionIds.length === 0) {
-            answeredIdsRef.current.clear();
-            setAnsweredQuestionIds([]);
-            setCorrectCount(0);
-          } else {
-            for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
-            setAnsweredQuestionIds((prev) => (prev.length === answeredIdsRef.current.size ? prev : Array.from(answeredIdsRef.current)));
-          }
+          for (const qid of data.answeredQuestionIds) answeredIdsRef.current.add(qid);
+          setAnsweredQuestionIds((prev) => (prev.length === answeredIdsRef.current.size ? prev : Array.from(answeredIdsRef.current)));
         }
         if (typeof data.correctCount === 'number') {
           setCorrectCount(data.correctCount);
-        }
-        if (Array.isArray(data.rejoinRequests)) {
-          setRejoinRequests(data.rejoinRequests);
         }
       } catch {
         // polling fallback failure is non-fatal
       } finally {
         // Saat WebSocket aktif, semua posisi/chat/skor/soal sudah real-time lewat WS,
         // sehingga room-sync cukup jalan setiap 4 detik sebagai heartbeat ringan (hemat bandwidth luar LAN 7x lipat!)
-        const syncInterval = ably.connected ? 12000 : 2500;
+        const syncInterval = ably.connected ? 4000 : 1500;
         if (active) timer = setTimeout(syncLoop, syncInterval);
       }
     }
@@ -2692,14 +1212,10 @@ export default function GamePage() {
   }, [ably.connected, roomId, levelQuestions]);
 
   useEffect(() => {
-    if (!ably.roomStatusEvent) return;
-    applyLiveRoomStatus(ably.roomStatusEvent);
-  }, [ably.roomStatusEvent]);
-
-  useEffect(() => {
-    if (!ably.rejoinRequestsEvent) return;
-    setRejoinRequests(ably.rejoinRequestsEvent);
-  }, [ably.rejoinRequestsEvent]);
+    if (ably.roomStatusEvent === 'completed') {
+      router.replace(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
+    }
+  }, [ably.roomStatusEvent, myRole, router]);
 
   useEffect(() => {
     if (!ably.scoreEvent) return;
@@ -2708,25 +1224,13 @@ export default function GamePage() {
 
   useEffect(() => {
     if (!ably.kickedPlayerId) return;
-    if (ably.kickedPlayerId === myIdRef.current || ably.kickedPlayerId === 'me') {
-      if (!manualLeaveRef.current && !isStaffRole(myRoleRef.current)) {
-        justKickedInSessionRef.current = true;
-        triggerForcedExit('kicked');
-      }
+    if (ably.kickedPlayerId === myIdRef.current) {
+      alert('Anda dikeluarkan dari ruang oleh guru.');
+      router.push(myRole === 'teacher' ? '/dashboard/teacher/rooms' : '/dashboard/student');
     } else {
       playersRef.current.delete(ably.kickedPlayerId);
-      setRoom((prev) =>
-        prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== ably.kickedPlayerId) } : prev,
-      );
     }
-  }, [ably.kickedPlayerId]);
-
-  useEffect(() => {
-    if (!ably.approvedPlayerId) return;
-    if (ably.approvedPlayerId === myIdRef.current || ably.approvedPlayerId === 'me') {
-      handleRejoinApproved();
-    }
-  }, [ably.approvedPlayerId]);
+  }, [ably.kickedPlayerId, myRole, router]);
 
   useEffect(() => {
     if (!chatMinimized) {
@@ -2742,48 +1246,17 @@ export default function GamePage() {
   }, [ably.chatMessages]);
 
   function onPointerDown(e: React.PointerEvent) {
-    draggingRef.current = { active: true, x: e.clientX, y: e.clientY, moved: false };
+    draggingRef.current = { active: true, x: e.clientX, y: e.clientY };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     setChatMinimized(true);
   }
   function onPointerMove(e: React.PointerEvent) {
     if (!draggingRef.current.active || !cameraRef.current) return;
-    const dx = e.clientX - draggingRef.current.x;
-    const dy = e.clientY - draggingRef.current.y;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) draggingRef.current.moved = true;
-    cameraRef.current.panBy(dx, dy);
-    draggingRef.current = { active: true, x: e.clientX, y: e.clientY, moved: draggingRef.current.moved };
+    cameraRef.current.panBy(e.clientX - draggingRef.current.x, e.clientY - draggingRef.current.y);
+    draggingRef.current = { active: true, x: e.clientX, y: e.clientY };
   }
-  function onPointerUp(e: React.PointerEvent) {
-    const wasDrag = draggingRef.current.moved;
+  function onPointerUp() {
     draggingRef.current.active = false;
-    // Admin: klik (bukan drag) langsung pada kotak soal untuk membukanya
-    if (
-      wasDrag ||
-      myRoleRef.current !== 'admin' ||
-      questionRef.current ||
-      questionBlocksRef.current.length === 0
-    )
-      return;
-    const canvas = canvasRef.current;
-    const cam = cameraRef.current;
-    if (!canvas || !cam) return;
-    const rect = canvas.getBoundingClientRect();
-    const worldX = (e.clientX - rect.left) / cam.zoom + cam.x;
-    const worldY = (e.clientY - rect.top) / cam.zoom + cam.y;
-    const hit = questionBlocksRef.current.find(
-      (b) => worldX >= b.x && worldX <= b.x + b.w && worldY >= b.y && worldY <= b.y + b.h,
-    );
-    if (!hit || !hit.questionId) return;
-    const res = answerResultsRef.current.get(hit.questionId);
-    if (res === true || res === 'assisted') return;
-    const found = levelQuestionsRef.current.find((q) => q.id === hit.questionId);
-    if (!found) return;
-    soundEngine.playQuestionOpen();
-    questionRef.current = found;
-    setQuestion(found);
-    setQuestionMinimized(false);
-    setSelected('');
   }
   function onWheel(e: React.WheelEvent) {
     e.preventDefault();
@@ -2825,14 +1298,7 @@ export default function GamePage() {
   }
 
   function touchControl(dir: 'left' | 'right' | 'jump', down: boolean) {
-    if (down) {
-      soundEngine.unlockAndStartBgm();
-    }
-    if (
-      editingControlsLayout ||
-      exitNoticeRef.current ||
-      (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))
-    ) {
+    if (editingControlsLayout) {
       keysRef.current.left = false;
       keysRef.current.right = false;
       keysRef.current.jump = false;
@@ -2878,922 +1344,11 @@ export default function GamePage() {
     controlDragRef.current = null;
   }
 
-  function addSystemChatMessage(text: string) {
-    const sysMsg: ChatMsg = {
-      id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      senderName: 'SYSTEM',
-      text,
-      createdAt: new Date().toISOString(),
-    };
-    ingestMessages([sysMsg]);
-  }
-
-  // Chat command access control (fitur /enable cmd & /disable cmd):
-  // - admin & guru: bisa pakai perintah, kontrol room
-  // - student: default tidak bisa. Kalau di-enable admin/guru via /enable cmd <user|all>,
-  //   bisa pakai cmd dengan target DIRI SENDIRI (me) saja (sementara di room tsb,
-  //   rejoin / refresh = akses otomatis hilang). /disable cmd <user|all> mencabut akses.
-  const cmdEnabledUsersRef = useRef<Set<string>>(new Set());
-  const isStudentCmdAllowed = (uid: string) =>
-    cmdEnabledUsersRef.current.has(uid) || cmdEnabledUsersRef.current.has('__ALL_STUDENTS__');
-  const isCmdAllowedFor = (role: string | undefined) =>
-    role === 'admin' || role === 'teacher' || (role === 'student' && isStudentCmdAllowed(myIdRef.current));
-
-  async function handleChatCommand(rawText: string) {
-    const isStaff = isStaffRole(myRoleRef.current);
-    const isAdmin = myRoleRef.current === 'admin';
-    const isTeacher = myRoleRef.current === 'teacher';
-
-    if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
-      // Siswa yang belum di-enable: ketik '/' dianggap chat biasa, tanpa pesan error
-      return;
-    }
-
-    const parts = rawText.slice(1).trim().split(/\s+/);
-    const cmd = parts[0]?.toLowerCase();
-    const arg1 = parts[1]?.toLowerCase();
-    const arg2 = parts[2]?.toLowerCase();
-
-    // Helper to find player by username or 'me'
-    const findPlayer = (nameQuery?: string) => {
-      if (!nameQuery) return null;
-      if (nameQuery === 'me') {
-        const myP = playersRef.current.get(myIdRef.current);
-        return myP ? { id: myIdRef.current, username: myUsernameRef.current || 'Me' } : null;
-      }
-      for (const p of playersRef.current.values()) {
-        if (p.username.toLowerCase() === nameQuery) {
-          return { id: p.id, username: p.username };
-        }
-      }
-      const foundInRoom = roomRef.current?.players?.find((pl) => pl.username.toLowerCase() === nameQuery);
-      if (foundInRoom) {
-        return { id: foundInRoom.userId, username: foundInRoom.username };
-      }
-      return null;
-    };
-
-    // Batasi target untuk non-admin:
-    // - student yang di-enable: cuman bisa target diri sendri
-    // - teacher: bebas target kecuali role admin
-    const resolveTarget = (targetQuery?: string) => {
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery || ''}' tidak ditemukan di room.`);
-        return null;
-      }
-      const targetRole = target.id === myIdRef.current
-        ? myRoleRef.current
-        : (playersRef.current.get(target.id)?.role ?? roomRef.current?.players?.find((pl) => pl.userId === target.id)?.role);
-      if (!isAdmin) {
-        if (target.id !== myIdRef.current && targetRole === 'admin') {
-          addSystemChatMessage('Tidak bisa menargetkan Administrator.');
-          return null;
-        }
-        if (myRoleRef.current === 'student' && target.id !== myIdRef.current) {
-          addSystemChatMessage('Kamu cuman bisa pakai perintah ke diri sendiri.');
-          return null;
-        }
-      }
-      return target;
-    };
-
-    // /enable cmd <target|all> & /disable cmd <target|all>: khusus Admin & Guru
-    if (cmd === 'enable' && arg1 === 'cmd') {
-      if (!isStaff) {
-        addSystemChatMessage('Perintah /enable cmd hanya untuk Guru dan Administrator.');
-        return;
-      }
-      const targetQuery = arg2;
-      if (!targetQuery) {
-        addSystemChatMessage('Format: /enable cmd <target|all>');
-        return;
-      }
-      if (targetQuery === 'all') {
-        cmdEnabledUsersRef.current.add('__ALL_STUDENTS__');
-        for (const p of playersRef.current.values()) {
-          const role = p.role ?? roomRef.current?.players?.find((pl) => pl.userId === p.id)?.role;
-          if (role === 'student' || (!role && p.id !== myIdRef.current)) {
-            cmdEnabledUsersRef.current.add(p.id);
-          }
-        }
-        if (roomRef.current?.players) {
-          for (const pl of roomRef.current.players) {
-            if (pl.role === 'student') cmdEnabledUsersRef.current.add(pl.userId);
-          }
-        }
-        ably.publishCommand({ op: 'cmd_access', targetId: 'all', value: true });
-        addSystemChatMessage('✅ Akses perintah chat DIAKTIFKAN untuk SEMUA siswa di room ini. Berlaku sementara sampai rejoin / di-disable.');
-        soundEngine.playPowerUp();
-        return;
-      }
-
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan di room.`);
-        return;
-      }
-      const targetRole = playersRef.current.get(target.id)?.role ?? roomRef.current?.players?.find((pl) => pl.userId === target.id)?.role;
-      if (targetRole === 'admin' || targetRole === 'teacher') {
-        addSystemChatMessage('Admin & guru sudah otomatis memiliki akses semua perintah.');
-        return;
-      }
-      cmdEnabledUsersRef.current.add(target.id);
-      ably.publishCommand({ op: 'cmd_access', targetId: target.id, value: true });
-      addSystemChatMessage(`✅ '${target.username}' sekarang bisa pakai perintah chat (khusus target diri sendiri). Berlaku sementara sampai rejoin / di-disable.`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    if ((cmd === 'disable' && arg1 === 'cmd') || (cmd === 'cmd' && arg1 === 'disable')) {
-      if (!isStaff) {
-        addSystemChatMessage('Perintah /disable cmd hanya untuk Guru dan Administrator.');
-        return;
-      }
-      const targetQuery = arg2;
-      if (!targetQuery) {
-        addSystemChatMessage('Format: /disable cmd <target|all>');
-        return;
-      }
-      if (targetQuery === 'all') {
-        cmdEnabledUsersRef.current.clear();
-        ably.publishCommand({ op: 'cmd_access', targetId: 'all', value: false });
-        addSystemChatMessage('⛔ Akses perintah chat untuk SEMUA siswa di room telah dicabut.');
-        soundEngine.playDeath();
-        return;
-      }
-
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan di room.`);
-        return;
-      }
-      const targetRole = playersRef.current.get(target.id)?.role ?? roomRef.current?.players?.find((pl) => pl.userId === target.id)?.role;
-      if (targetRole === 'admin' || targetRole === 'teacher') {
-        addSystemChatMessage('Akses perintah admin & guru tidak bisa dicabut.');
-        return;
-      }
-      cmdEnabledUsersRef.current.delete(target.id);
-      cmdEnabledUsersRef.current.delete('__ALL_STUDENTS__');
-      ably.publishCommand({ op: 'cmd_access', targetId: target.id, value: false });
-      addSystemChatMessage(`⛔ Akses perintah chat '${target.username}' telah dicabut.`);
-      soundEngine.playDeath();
-      return;
-    }
-
-    const ALL_COMMANDS: { prefix: string; usage: string; adminOnly?: boolean; staffOnly?: boolean; staffStrict?: boolean }[] = [
-      { prefix: 'cls', usage: '• /cls : Bersihkan seluruh chat di layar' },
-      { prefix: 'set', usage: '• /set god <user|me> : Aktifkan God Mode' },
-      { prefix: 'unset', usage: '• /unset god <user|me> : Nonaktifkan God Mode' },
-      { prefix: 'teleport', usage: '• /teleport <username> : Nyamperin player (pindah ke stage & posisinya)', adminOnly: true },
-      { prefix: 'teleport', usage: '• /teleport <user|me> me : Tarik player ke posisimu' },
-      { prefix: 'teleport', usage: `• /teleport <user|me> <stage> : Lempar player ke Stage tertentu (1-${totalStagesRef.current})` },
-      { prefix: 'teleport', usage: '• /teleport all me : Tarik SELURUH siswa ke posisimu', adminOnly: true },
-      { prefix: 'teleport', usage: '• /teleport all <stage> : Lempar SELURUH siswa ke Stage tertentu', adminOnly: true },
-      { prefix: 'mirror', usage: '• /mirror <username> : Tampilkan & bantu jawab kotak soal siswa', staffOnly: true },
-      { prefix: 'mirror', usage: '• /mirror all : Mode soal bonus untuk seluruh kelas', staffOnly: true },
-      { prefix: 'unset', usage: '• /unset mirror : Sembunyikan kembali kotak soal', staffOnly: true },
-      { prefix: 'reset', usage: '• /reset <user|me> : Reset jawaban & skor player ke Stage 1' },
-      { prefix: 'reset', usage: '• /reset all : Reset SEMUA jawaban 1 room ke Stage 1', adminOnly: true },
-      { prefix: 'spawn', usage: '• /spawn gun <minigun|laser|megalaser|ice|stunt> [user|me] : Beri senjata', staffOnly: true },
-      { prefix: 'jail', usage: '• /jail on|off [user|me] : Bekukan player selama 15 detik', staffOnly: true },
-      { prefix: 'change', usage: '• /change tag <user|me> <judul> : Ganti title tag di atas kepala', staffOnly: true },
-      { prefix: 'change', usage: '• /change color <user|me> body|tag|nick <warna> : Ganti warna', staffOnly: true },
-      { prefix: 'set', usage: '• /set nick <user|me> <nama> : Ganti nama player', staffOnly: true },
-      { prefix: 'unset', usage: '• /unset nick <user|me> : Balikin nama asli player', staffOnly: true },
-      { prefix: 'take', usage: '• /take rope <user|all> : Ikat player dengan tali (ikut admin & kebal rintangan)', adminOnly: true },
-      { prefix: 'untake', usage: '• /untake rope <user|all> : Lepas tali player', adminOnly: true },
-      { prefix: 'skip', usage: '• /skip stage <username|all|rope> : Tandai semua soal tersisa di stage siswa sebagai selesai', adminOnly: true },
-      { prefix: 'enable', usage: '• /enable cmd <target|all> : Izinkan siswa di room pakai perintah chat (sementara)', staffStrict: true },
-      { prefix: 'disable', usage: '• /disable cmd <target|all> : Cabut akses perintah chat siswa di room', staffStrict: true },
-    ];
-
-    if (cmd === 'help' || cmd === 'cmd') {
-      const sub = (arg1 || parts[1])?.toLowerCase();
-      if (sub && sub !== 'all') {
-        const matching = ALL_COMMANDS.filter((c) => {
-          if (c.adminOnly && !isAdmin) return false;
-          if (c.staffStrict && !isStaff) return false;
-          if (c.staffOnly && !isStaff && !isStudentCmdAllowed(myIdRef.current)) return false;
-          return c.prefix === sub || c.prefix.startsWith(sub);
-        });
-        if (matching.length > 0) {
-          addSystemChatMessage(`Format perintah /${sub}:`);
-          for (const m of matching) {
-            addSystemChatMessage(m.usage);
-          }
-          return;
-        }
-      }
-      // Ringkas: tidak banjir chat menjelaskan semuanya sekaligus
-      addSystemChatMessage('--- DAFTAR PERINTAH CHAT ---');
-      addSystemChatMessage('Ketik perintah untuk melihat format syntaxnya (contoh: /skip):');
-      addSystemChatMessage('• /set, /unset, /teleport, /mirror, /reset');
-      if (isAdmin || isStaff) {
-        addSystemChatMessage('• /spawn, /jail, /enable, /disable, /take, /untake');
-      }
-      if (isAdmin) {
-        addSystemChatMessage('• /skip');
-      }
-      addSystemChatMessage('• /change, /cls');
-      return;
-    }
-    if (cmd === 'cls' || cmd === 'clear') {
-      setChat([]);
-      seenMsgIdsRef.current.clear();
-      setUnreadCount(0);
-      return;
-    }
-
-    if (cmd === 'set' && arg1 === 'god') {
-      const targetQuery = arg2 || parts[2];
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      const p = playersRef.current.get(target.id);
-      if (p) p.isGodMode = true;
-      if (target.id === myIdRef.current) {
-        isGodModeRef.current = true;
-        setIsGodMode(true);
-      }
-      ably.publishCommand({ op: 'god', targetId: target.id, value: true, targetName: target.username });
-      addSystemChatMessage(`👑 God Mode DIAKTIFKAN untuk '${target.username}'. (Kebal & Infinite Laser)`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    if (cmd === 'unset' && arg1 === 'god') {
-      const targetQuery = arg2 || parts[2];
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      const p = playersRef.current.get(target.id);
-      if (p) p.isGodMode = false;
-      if (target.id === myIdRef.current) {
-        isGodModeRef.current = false;
-        setIsGodMode(false);
-      }
-      ably.publishCommand({ op: 'god', targetId: target.id, value: false, targetName: target.username });
-      addSystemChatMessage(`🛡️ God Mode DINONAKTIFKAN untuk '${target.username}'.`);
-      return;
-    }
-
-    if (cmd === 'teleport') {
-      const targetQuery = arg1;
-      const dest = arg2;
-
-      if (!targetQuery) {
-        addSystemChatMessage('Format salah. Contoh: /teleport bims, /teleport bims me, atau /teleport bims 2');
-        return;
-      }
-
-      // /teleport <username> : admin nyamperin player tersebut (ganti stage + posisi persis)
-      if (!dest) {
-        if (!isAdmin) {
-          addSystemChatMessage('Perintah /teleport hanya dapat digunakan oleh Administrator.');
-          return;
-        }
-        const target = resolveTarget(targetQuery);
-        if (!target) return;
-        const me = playersRef.current.get(myIdRef.current);
-        if (!me) {
-          addSystemChatMessage('Karaktermu belum siap, coba lagi.');
-          return;
-        }
-        const targetLive = playersRef.current.get(target.id);
-        const targetStage =
-          typeof targetLive?.stage === 'number' && targetLive.stage >= 1
-            ? targetLive.stage
-            : currentStageRef.current;
-        const targetX = targetLive?.x ?? 120;
-        const targetY = targetLive?.y ?? 600;
-        if (targetStage !== currentStageRef.current) {
-          applyStage(targetStage, { respawnPlayer: true, showToast: true });
-        }
-        me.x = targetX;
-        me.y = targetY;
-        me.vx = 0;
-        me.vy = 0;
-        me.stage = targetStage;
-        soundEngine.playBounce();
-        showBanner(`🌀 Teleport ke '${target.username}' (Stage ${targetStage}).`);
-        addSystemChatMessage(`Berhasil teleport ke '${target.username}' di Stage ${targetStage}.`);
-        return;
-      }
-
-      if (targetQuery === 'all') {
-        if (!isAdmin) {
-          addSystemChatMessage('Perintah /teleport all hanya dapat digunakan oleh Administrator.');
-          return;
-        }
-        if (dest === 'me') {
-          const me = playersRef.current.get(myIdRef.current);
-          ably.publishCommand({
-            op: 'teleport',
-            targetId: 'all',
-            stage: currentStageRef.current,
-            x: me?.x ?? 120,
-            y: me?.y ?? 600,
-          });
-          addSystemChatMessage(`Berhasil teleport SELURUH siswa ke posisimu di Stage ${currentStageRef.current}.`);
-        } else {
-          const stg = Number(dest);
-          if (stg >= 1 && stg <= totalStagesRef.current) {
-            ably.publishCommand({ op: 'teleport', targetId: 'all', stage: stg });
-            addSystemChatMessage(`Berhasil teleport SELURUH siswa ke Stage ${stg}.`);
-          } else {
-            addSystemChatMessage(`Nomor stage tidak valid (1-${totalStagesRef.current}).`);
-          }
-        }
-        soundEngine.playBounce();
-        return;
-      }
-
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-
-      if (dest === 'me') {
-        const me = playersRef.current.get(myIdRef.current);
-        ably.publishCommand({
-          op: 'teleport',
-          targetId: target.id,
-          stage: currentStageRef.current,
-          x: me?.x ?? 120,
-          y: me?.y ?? 600,
-        });
-        addSystemChatMessage(`Berhasil teleport '${target.username}' ke posisimu.`);
-      } else {
-        const stg = Number(dest);
-        if (stg >= 1 && stg <= totalStagesRef.current) {
-          ably.publishCommand({ op: 'teleport', targetId: target.id, stage: stg });
-          addSystemChatMessage(`Berhasil teleport '${target.username}' ke Stage ${stg}.`);
-        } else {
-          addSystemChatMessage(`Nomor stage tidak valid (1-${totalStagesRef.current}).`);
-        }
-      }
-      soundEngine.playBounce();
-      return;
-    }
-
-    if ((cmd === 'take' || cmd === 'untake') && arg1 === 'rope') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah rope hanya dapat digunakan oleh Administrator.');
-        return;
-      }
-      const wantRope = cmd === 'take';
-      const targetQuery = arg2;
-      if (!targetQuery) {
-        addSystemChatMessage(`Format salah. Contoh: /${cmd} rope bims atau /${cmd} rope all`);
-        return;
-      }
-      const me = playersRef.current.get(myIdRef.current);
-      if (!me) {
-        addSystemChatMessage('Karaktermu belum siap, coba lagi.');
-        return;
-      }
-      const targets: { id: string; username: string }[] = [];
-      if (targetQuery === 'all') {
-        for (const p of playersRef.current.values()) {
-          if (p.id === myIdRef.current) continue;
-          targets.push({ id: p.id, username: p.username });
-        }
-        if (wantRope && targets.length === 0) {
-          addSystemChatMessage('Tidak ada player untuk diikat.');
-          return;
-        }
-      } else {
-        const target = resolveTarget(targetQuery);
-        if (!target) return;
-        if (target.id === myIdRef.current) {
-          addSystemChatMessage('Tidak bisa mengikat diri sendiri. 🪢');
-          return;
-        }
-        targets.push(target);
-      }
-      if (!wantRope && targetQuery === 'all') {
-        // Paksa lepas SEMUA tali di semua client sekaligus (broadcast rope_all_clear).
-        // Ini menormalkan player yang mungkin sudah pergi / rejoin / pindah stage.
-        ably.publishCommand({ op: 'rope_all_clear' });
-        for (const p of playersRef.current.values()) {
-          p.ropedById = null;
-          p.adminAnchor = undefined;
-          p.adminFacing = undefined;
-        }
-        meAdminAnchorRef.current = null;
-        addSystemChatMessage('🪢 Semua tali dilepas, semua player dinormalkan.');
-        soundEngine.playBounce();
-        return;
-      }
-      for (const t of targets) {
-        const p = playersRef.current.get(t.id);
-        if (p) p.ropedById = wantRope ? myIdRef.current : null;
-        ably.publishCommand({
-          op: 'rope',
-          targetId: t.id,
-          value: wantRope,
-          byId: myIdRef.current,
-          byName: myUsernameRef.current || 'Admin',
-        });
-      }
-      const names = targets.map((t) => t.username).join(', ');
-      addSystemChatMessage(
-        wantRope
-          ? `🪢 Mengikat '${names}' dengan tali. Mereka akan mengikutimu & kebal rintangan.`
-          : `🪢 Melepas tali '${names}'.`,
-      );
-      if (wantRope) soundEngine.playPowerUp();
-      return;
-    }
-
-    if (cmd === 'skip') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah /skip stage hanya dapat digunakan oleh Administrator.');
-        return;
-      }
-      if (arg1 !== 'stage' || !arg2) {
-        addSystemChatMessage('Perintah tidak lengkap. Format:');
-        addSystemChatMessage('• /skip stage <username|all|rope> : Tandai semua soal tersisa di stage siswa sebagai selesai (tanpa poin). all = semua player di stage admin, rope = yang diikat tali.');
-        return;
-      }
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah /skip stage hanya dapat digunakan oleh Administrator.');
-        return;
-      }
-      const targetQuery = arg2;
-      if (!targetQuery) {
-        addSystemChatMessage('Format salah. Contoh: /skip stage najla, /skip stage all, atau /skip stage rope');
-        return;
-      }
-      // /skip stage rope: bypass SEMUA player yang sedang diikat tali oleh admin
-      if (targetQuery === 'rope') {
-        const targets: { id: string; username: string; stage: number }[] = [];
-        for (const p of playersRef.current.values()) {
-          if (p.id === myIdRef.current) continue;
-          if (p.ropedById !== myIdRef.current) continue;
-          targets.push({ id: p.id, username: p.username, stage: p.stage ?? 1 });
-        }
-        if (targets.length === 0) {
-          addSystemChatMessage('Tidak ada player yang sedang diikat tali. 🪢');
-          return;
-        }
-        try {
-          let totalMarked = 0;
-          for (const t of targets) {
-            const stageQs = getStageQuestions(levelQuestionsRef.current, t.stage, totalStagesRef.current);
-            if (stageQs.length === 0) continue;
-            const res = await fetch('/api/game/room-sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ roomId, targetId: t.id }),
-            });
-            const data = await res.json();
-            const serverSet = new Set<string>(Array.isArray(data?.answeredQuestionIds) ? data.answeredQuestionIds : []);
-            const unanswered = stageQs.filter((q) => !serverSet.has(q.id));
-            if (unanswered.length === 0) continue;
-            const qids = unanswered.map((q) => q.id);
-            await fetch('/api/game/skip-stage', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ roomId, targetId: t.id, stage: t.stage, questionIds: qids }),
-            });
-            ably.publishCommand({ op: 'skip_stage', targetId: t.id, qids, stage: t.stage });
-            totalMarked += qids.length;
-          }
-          addSystemChatMessage(`⏭️ Skip stage rope (${targets.length} player diikat): ${totalMarked} soal ditandai selesai (tanpa poin).`);
-          soundEngine.playPowerUp();
-        } catch {
-          addSystemChatMessage('Gagal skip stage rope, coba lagi.');
-        }
-        return;
-      }
-      // /skip stage all: bypass SEMUA player yang ada di stage yang sama dengan admin
-      if (targetQuery === 'all') {
-        const adminStage = currentStageRef.current;
-        const stageQs = getStageQuestions(levelQuestionsRef.current, adminStage, totalStagesRef.current);
-        if (stageQs.length === 0) {
-          addSystemChatMessage(`Tidak ada soal di stage ${adminStage}.`);
-          return;
-        }
-        const targets: { id: string; username: string }[] = [];
-        for (const p of playersRef.current.values()) {
-          if (p.id === myIdRef.current) continue;
-          if ((p.stage ?? 1) !== adminStage) continue;
-          targets.push({ id: p.id, username: p.username });
-        }
-        if (targets.length === 0) {
-          addSystemChatMessage(`Tidak ada player lain di stage ${adminStage}.`);
-          return;
-        }
-        try {
-          let totalMarked = 0;
-          for (const t of targets) {
-            const res = await fetch('/api/game/room-sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ roomId, targetId: t.id }),
-            });
-            const data = await res.json();
-            const serverSet = new Set<string>(Array.isArray(data?.answeredQuestionIds) ? data.answeredQuestionIds : []);
-            const unanswered = stageQs.filter((q) => !serverSet.has(q.id));
-            if (unanswered.length === 0) continue;
-            const qids = unanswered.map((q) => q.id);
-            await fetch('/api/game/skip-stage', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ roomId, targetId: t.id, stage: adminStage, questionIds: qids }),
-            });
-            ably.publishCommand({ op: 'skip_stage', targetId: t.id, qids, stage: adminStage });
-            totalMarked += qids.length;
-          }
-          addSystemChatMessage(`⏭️ Skip stage all (${targets.length} player di stage ${adminStage}): ${totalMarked} soal ditandai selesai (tanpa poin).`);
-          soundEngine.playPowerUp();
-        } catch {
-          addSystemChatMessage('Gagal skip stage all, coba lagi.');
-        }
-        return;
-      }
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      if (target.id === myIdRef.current) {
-        addSystemChatMessage('Tidak bisa skip stage diri sendiri.');
-        return;
-      }
-      const targetStage = playersRef.current.get(target.id)?.stage ?? currentStageRef.current;
-      const stageQs = getStageQuestions(levelQuestionsRef.current, targetStage, totalStagesRef.current);
-      if (stageQs.length === 0) {
-        addSystemChatMessage(`Tidak ada soal di stage ${targetStage}.`);
-        return;
-      }
-      try {
-        const res = await fetch('/api/game/room-sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId, targetId: target.id }),
-        });
-        const data = await res.json();
-        const serverSet = new Set<string>(Array.isArray(data?.answeredQuestionIds) ? data.answeredQuestionIds : []);
-        const unanswered = stageQs.filter((q) => !serverSet.has(q.id));
-        if (unanswered.length === 0) {
-          addSystemChatMessage(`Semua soal '${target.username}' di stage ${targetStage} sudah terjawab.`);
-          return;
-        }
-        const qids = unanswered.map((q) => q.id);
-        await fetch('/api/game/skip-stage', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId, targetId: target.id, stage: targetStage, questionIds: qids }),
-        });
-        ably.publishCommand({ op: 'skip_stage', targetId: target.id, qids, stage: targetStage });
-        addSystemChatMessage(`⏭️ Skip stage untuk '${target.username}': ${unanswered.length} soal ditandai selesai (tanpa poin). Gerbang terbuka, lanjut ke stage berikutnya!`);
-        soundEngine.playPowerUp();
-      } catch {
-        addSystemChatMessage('Gagal skip stage, coba lagi.');
-      }
-      return;
-    }
-
-    if (cmd === 'reset') {
-      const targetQuery = arg1;
-      if (!targetQuery) {
-        addSystemChatMessage('Format salah. Contoh: /reset bims atau /reset all');
-        return;
-      }
-      if (targetQuery === 'all') {
-        if (!isAdmin) {
-          addSystemChatMessage('Perintah /reset all hanya dapat digunakan oleh Administrator.');
-          return;
-        }
-        fetch('/api/game/reset-progress', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId, targetId: 'all' }),
-        }).catch(() => { });
-        ably.publishCommand({ op: 'reset', targetId: 'all' });
-        if (mirrorTargetRef.current) {
-          answerResultsRef.current.clear();
-          const curStg = currentStageRef.current;
-          const stageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
-          questionBlocksRef.current = generateQuestionBlocks(
-            stageQs.map((q) => q.id),
-            `all:${roomId}:s${curStg}`,
-            curStg,
-          );
-        }
-        addSystemChatMessage('Berhasil me-reset jawaban seluruh siswa ke Stage 1.');
-        soundEngine.playDeath();
-        return;
-      }
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      fetch('/api/game/reset-progress', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, targetId: target.id }),
-      }).catch(() => { });
-      ably.publishCommand({ op: 'reset', targetId: target.id });
-      const curMirror = mirrorTargetRef.current;
-      if (curMirror && (curMirror === 'all' || curMirror.userId === target.id)) {
-        answerResultsRef.current.clear();
-        const curStg = currentStageRef.current;
-        const stageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
-        questionBlocksRef.current = generateQuestionBlocks(
-          stageQs.map((q) => q.id),
-          `${target.id}:${roomId}:s${curStg}`,
-          curStg,
-        );
-      }
-      addSystemChatMessage(`Berhasil me-reset jawaban '${target.username}' ke Stage 1.`);
-      soundEngine.playDeath();
-      return;
-    }
-
-    if (cmd === 'mirror') {
-      const targetQuery = arg1;
-      if (!targetQuery) {
-        addSystemChatMessage('Format: /mirror <username> atau /mirror all');
-        return;
-      }
-      if (targetQuery === 'all') {
-        mirrorTargetRef.current = 'all';
-        mirrorFetchTargetRef.current = null;
-        answerResultsRef.current.clear();
-        setMirrorTarget('Seluruh Kelas (Bonus)');
-        const curStg = currentStageRef.current;
-        const curStageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
-        questionBlocksRef.current = generateQuestionBlocks(
-          curStageQs.map((q) => q.id),
-          `all:${roomId}:s${curStg}`,
-          curStg,
-        );
-        addSystemChatMessage('🔍 Mode Mirror ALL aktif! Kotak soal bonus sekelas dimunculkan di map.');
-        soundEngine.playPowerUp();
-        return;
-      }
-
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-
-      mirrorTargetRef.current = { userId: target.id, username: target.username };
-      mirrorFetchTargetRef.current = target.id;
-      setMirrorTarget(target.username);
-      const curStg = currentStageRef.current;
-      const curStageQs = getStageQuestions(levelQuestionsRef.current, curStg, totalStagesRef.current);
-      questionBlocksRef.current = generateQuestionBlocks(
-        curStageQs.map((q) => q.id),
-        `${target.id}:${roomId}:s${curStg}`,
-        curStg,
-      );
-      // Ambil status jawaban asli siswa ini: hijau = benar, merah = salah, biru = dibantuin, kuning = belum
-      answerResultsRef.current.clear();
-      fetch('/api/game/room-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, targetId: target.id }),
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => {
-          if (!d) return;
-          const results = (d.answerResults ?? {}) as Record<string, boolean | 'assisted'>;
-          for (const [qid, okAns] of Object.entries(results)) {
-            answerResultsRef.current.set(qid, okAns === 'assisted' ? 'assisted' : Boolean(okAns));
-          }
-        })
-        .catch(() => { });
-      addSystemChatMessage(`🔍 Mode Mirroring '${target.username}' aktif! Kotak soal siswa dimunculkan di map.`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    if (cmd === 'unset' && arg1 === 'mirror') {
-      mirrorTargetRef.current = null;
-      mirrorFetchTargetRef.current = null;
-      setMirrorTarget(null);
-      questionBlocksRef.current = [];
-      addSystemChatMessage('Mode Mirror dimatikan. Kotak soal disembunyikan kembali dari pandangan.');
-      soundEngine.playBounce();
-      return;
-    }
-
-    if (cmd === 'set' && arg1 === 'nick') {
-      // Format: /set nick <user|me> <nama baru>
-      const targetQuery = arg2 || 'me';
-      const newName = parts.slice(3).join(' ').trim();
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      if (!newName) {
-        addSystemChatMessage('Format: /set nick <user|me> <nama baru>');
-        return;
-      }
-      const nickValue = newName.slice(0, 20);
-      // Persist ke DB supaya rejoin / pindah room namanya tetap yang terakhir
-      fetch('/api/profile', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'admin-set-nick', targetId: target.id, username: nickValue }),
-      }).catch(() => { });
-      ably.publishCommand({ op: 'change_nick', targetId: target.id, value: nickValue });
-      // Update langsung di client admin (handler publish hanya berlaku di client target)
-      const pAdmin = playersRef.current.get(target.id);
-      if (pAdmin) {
-        pAdmin.username = nickValue;
-        pAdmin.fullName = nickValue;
-      }
-      addSystemChatMessage(`🏷️ Nama '${target.username}' diganti jadi "${nickValue}" (tersimpan permanen).`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    if (cmd === 'unset' && arg1 === 'nick') {
-      // Format: /unset nick <user|me>
-      const targetQuery = arg2 || 'me';
-      const target = resolveTarget(targetQuery) as { id: string; username: string; fullName?: string | null } | null;
-      if (!target) return;
-      const targetP = playersRef.current.get(target.id);
-      const originalName = (targetP?.originalFullName || target.fullName || target.username).trim().slice(0, 20);
-      // Persist ke DB: balikin username ke nama asli (fullName dari Siakad)
-      fetch('/api/profile', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'admin-set-nick', targetId: target.id, username: originalName }),
-      }).catch(() => { });
-      ably.publishCommand({ op: 'change_nick', targetId: target.id, value: originalName });
-      const pAdmin = playersRef.current.get(target.id);
-      if (pAdmin) {
-        pAdmin.username = originalName;
-        pAdmin.fullName = originalName;
-        pAdmin.originalFullName = null;
-      }
-      addSystemChatMessage(`🏷️ Nama '${target.username}' dikembalikan ke nama asli "${originalName}".`);
-      soundEngine.playBounce();
-      return;
-    }
-
-    if (cmd === 'spawn' && arg1 === 'gun') {
-      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
-        return;
-      }
-      const weaponType = parseWeaponType(parts[2]);
-      const targetQuery = parts[3]?.toLowerCase() || 'me';
-      if (!weaponType && parts[2] && ['none', 'off', 'unset'].includes(parts[2]?.toLowerCase() ?? '')) {
-        const target = resolveTarget(targetQuery);
-        if (!target) return;
-        const p = playersRef.current.get(target.id);
-        if (p) {
-          p.gun = null;
-          p.blasterAmmo = 0;
-          p.blasterUntil = 0;
-        }
-        ably.publishCommand({ op: 'gun', targetId: target.id, value: false });
-        addSystemChatMessage(`🔫 Senjata '${target.username}' dicabut.`);
-        return;
-      }
-      if (!weaponType) {
-        addSystemChatMessage('Format: /spawn gun <minigun|laser|megalaser|ice|stunt> [user|me]');
-        return;
-      }
-      const spec = WEAPONS[weaponType];
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      const p = playersRef.current.get(target.id);
-      if (p) {
-        p.gun = weaponType;
-        p.blasterAmmo = Infinity;
-      }
-      if (target.id === myIdRef.current) setAmmoCount(Infinity);
-      ably.publishCommand({ op: 'gun', targetId: target.id, value: true, weapon: weaponType });
-      addSystemChatMessage(`🔫 ${spec.label} diberikan ke '${target.username}' (peluru unlimited).`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    if (cmd === 'jail') {
-      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
-        return;
-      }
-      const turnOn = arg1 !== 'off';
-      if (arg1 !== 'on' && arg1 !== 'off') {
-        addSystemChatMessage('Format: /jail on [user|me] atau /jail off [user|me]');
-        return;
-      }
-      const targetQuery = parts[3]?.toLowerCase() || parts[2]?.toLowerCase() || 'me';
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      const p = playersRef.current.get(target.id);
-      if (p) p.jailedUntil = turnOn ? Date.now() + JAIL_FREEZE_MS : undefined;
-      ably.publishCommand({ op: 'jail', targetId: target.id, value: turnOn });
-      addSystemChatMessage(turnOn ? `⛓️ '${target.username}' dibekukan selama 15 detik.` : `⛓️ Bekukan '${target.username}' dilepas.`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    if (cmd === 'change' && arg1 === 'tag') {
-      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
-        return;
-      }
-      const targetQuery = arg2 || 'me';
-      const title = parts.slice(3).join(' ').trim();
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      const tagValue = title ? title.slice(0, 20) : undefined;
-      const p = playersRef.current.get(target.id);
-      if (p) p.tag = tagValue;
-      if (target.id === myIdRef.current) {
-        try {
-          if (tagValue) window.localStorage.setItem('llys_custom_tag', tagValue);
-          else window.localStorage.removeItem('llys_custom_tag');
-        } catch { }
-      }
-      ably.publishCommand({ op: 'cosmetics', targetId: target.id, tag: tagValue });
-      addSystemChatMessage(tagValue ? `🏷️ Tag '${target.username}' diubah jadi "${tagValue}".` : `🏷️ Tag '${target.username}' direset.`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    if (cmd === 'change' && arg1 === 'color') {
-      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
-        return;
-      }
-      const targetQuery = arg2 || 'me';
-      const channel = (parts[3]?.toLowerCase() || '') as 'body' | 'tag' | 'nick';
-      const colorRaw = parts.slice(4).join(' ');
-      if (!['body', 'tag', 'nick'].includes(channel) || !colorRaw) {
-        addSystemChatMessage('Format: /change color <user|me> body|tag|nick <warna>');
-        addSystemChatMessage('Warna: hex (#ff0000), nama (red), atau mode animasi: rgb, swap, spiral, spin, pulse, wave, strobe, candy, fire, ice, glitch, blink. Ketik none/reset buat balikin normal.');
-        return;
-      }
-      const target = resolveTarget(targetQuery);
-      if (!target) return;
-      let colorSpec: string | undefined;
-      if (colorRaw.toLowerCase() !== 'none' && colorRaw.toLowerCase() !== 'reset') {
-        const parsed = parseColorArg(colorRaw);
-        if (!parsed) {
-          addSystemChatMessage(`Warna '${colorRaw}' tidak dikenal. Pakai hex, nama warna, atau mode animasi (rgb, swap, spiral, spin, pulse, wave, strobe, candy, fire, ice, glitch, blink).`);
-          return;
-        }
-        colorSpec = parsed.value;
-      }
-      const p = playersRef.current.get(target.id);
-      if (p) {
-        p.colors = { ...(p.colors ?? {}) };
-        if (channel === 'body') p.colors.body = colorSpec;
-        else if (channel === 'tag') p.colors.tag = colorSpec;
-        else p.colors.nick = colorSpec;
-      }
-      if (target.id === myIdRef.current) {
-        try {
-          const meP = playersRef.current.get(myIdRef.current);
-          window.localStorage.setItem('llys_custom_colors', JSON.stringify(meP?.colors ?? {}));
-        } catch { }
-      }
-      ably.publishCommand({
-        op: 'cosmetics',
-        targetId: target.id,
-        colors: { [channel]: colorSpec },
-      });
-      addSystemChatMessage(colorSpec ? `🎨 ${channel} '${target.username}' diubah jadi ${colorSpec}.` : `🎨 ${channel} '${target.username}' direset.`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
-    // Jika user mengetik incomplete command (misal /take, /untake, /spawn, /set):
-    const matchingIncomplete = ALL_COMMANDS.filter((c) => {
-      if (c.adminOnly && !isAdmin) return false;
-      if (c.staffStrict && !isStaff) return false;
-      if (c.staffOnly && !isStaff && !isStudentCmdAllowed(myIdRef.current)) return false;
-      return c.prefix === cmd || c.prefix.startsWith(cmd);
-    });
-    if (matchingIncomplete.length > 0) {
-      addSystemChatMessage(`Perintah /${cmd} tidak lengkap. Format:`);
-      for (const m of matchingIncomplete) {
-        addSystemChatMessage(m.usage);
-      }
-      return;
-    }
-
-    addSystemChatMessage(`Perintah '/${cmd}' tidak dikenali. Ketik /help untuk melihat daftar perintah.`);
-  }
-
   async function sendChat(e: React.FormEvent) {
     e.preventDefault();
-    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))) return;
     const text = chatInput.trim();
     if (!text) return;
     setChatInput('');
-
-    if (text.toLowerCase() === '/cls' || text.toLowerCase() === '/clear') {
-      setChat([]);
-      seenMsgIdsRef.current.clear();
-      setUnreadCount(0);
-      return;
-    }
-
-    if (text.startsWith('/')) {
-      handleChatCommand(text);
-      return;
-    }
-
     if (myIdRef.current) {
       bubblesRef.current.set(myIdRef.current, { text, at: Date.now() });
     }
@@ -3819,24 +1374,12 @@ export default function GamePage() {
   // Hitung semua soal yang sudah dijawab oleh player (baik benar maupun salah) ke dalam progres misi
   const doneSteps = Math.min(Math.max(answeredQuestionIds.length, correctCount), totalSteps);
   const sortedPlayers = [...players].sort((a, b) => (scores[b.userId] ?? 0) - (scores[a.userId] ?? 0) || a.username.localeCompare(b.username));
-  const hasVisibleQuestion = Boolean(question && (!isStaff ? !answeredQuestionIds.includes(question.id) : Boolean(mirrorTargetRef.current)));
+  const hasVisibleQuestion = Boolean(question && myRole !== 'teacher' && !answeredQuestionIds.includes(question.id));
   const questionActive = hasVisibleQuestion;
   const allBottomMinimized = panelsHidden || !hasVisibleQuestion;
   const controlsPosClass = allBottomMinimized ? '' : ' mp-elevated';
 
-  async function togglePauseGame() {
-    if (!room) return;
-    const nextStatus = room.status === 'paused' ? 'in_progress' : 'paused';
-    applyLiveRoomStatus(nextStatus);
-    await fetch('/api/rooms/' + roomId, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus }),
-    });
-  }
-
   async function endGame() {
-    hasLeftRef.current = true;
     const res = await fetch('/api/rooms/' + roomId, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -3858,86 +1401,9 @@ export default function GamePage() {
       setRoom((prev) => (prev ? { ...prev, players: prev.players.filter((pl) => pl.userId !== playerId) } : prev));
     }
   }
-
-  async function kickAllPlayers() {
-    if (!confirm('Keluarkan semua siswa dari ruang permainan ini?')) return;
-    const res = await fetch('/api/game/kick-all', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const kickedSet = new Set<string>(Array.isArray(data.kickedIds) ? data.kickedIds : []);
-      for (const pid of kickedSet) {
-        playersRef.current.delete(pid);
-      }
-      setRoom((prev) =>
-        prev ? { ...prev, players: prev.players.filter((pl) => !kickedSet.has(pl.userId)) } : prev,
-      );
-    }
-  }
-
-  async function approveRejoin(playerId: string) {
-    setRejoinRequests((prev) => prev.filter((r) => r.userId !== playerId));
-    const res = await fetch('/api/game/approve-rejoin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, playerId }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setScores((prev) => ({ ...prev, [playerId]: 0 }));
-      if (Array.isArray(data.rejoinRequests)) {
-        setRejoinRequests(data.rejoinRequests);
-      }
-    }
-  }
-
-  async function rejectRejoin(playerId: string) {
-    setRejoinRequests((prev) => prev.filter((r) => r.userId !== playerId));
-    const res = await fetch('/api/game/reject-rejoin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, playerId }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.rejoinRequests)) {
-        setRejoinRequests(data.rejoinRequests);
-      }
-    }
-  }
   async function submitAnswer(e: React.FormEvent) {
     e.preventDefault();
-    if (exitNoticeRef.current || (roomRef.current?.status === 'paused' && !isStaffRole(myRoleRef.current))) return;
     if (!question || !selected || submitting) return;
-
-    if (isStaffRole(myRoleRef.current) && mirrorTargetRef.current) {
-      const answeredId = question.id;
-      const targetId = mirrorTargetRef.current === 'all' ? 'all' : mirrorTargetRef.current.userId;
-      const targetName = mirrorTargetRef.current === 'all' ? 'Seluruh Siswa' : mirrorTargetRef.current.username;
-
-      answerResultsRef.current.set(answeredId, 'assisted');
-      answeredIdsRef.current.add(answeredId);
-      setAnsweredQuestionIds(Array.from(answeredIdsRef.current));
-      setCorrectCount(answeredIdsRef.current.size);
-
-      ably.publishCommand({ op: 'assist_answer', targetId, qid: answeredId });
-      // Persist ke database supaya centang biru bertahan walau siswa rejoin
-      fetch('/api/game/assist-answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, targetId, questionId: answeredId, answer: selected }),
-      }).catch(() => { });
-      soundEngine.playAnswerCorrect();
-      showBanner(`🟦 Berhasil membantu soal untuk ${targetName}! (+0 Poin, Misi Tercatat)`, 4000);
-      setQuestion(null);
-      questionRef.current = null;
-      setSelected('');
-      return;
-    }
-
     setSubmitting(true);
     try {
       const answeredId = question.id;
@@ -3954,10 +1420,6 @@ export default function GamePage() {
         }),
       });
       const data = await res.json();
-      if (Array.isArray(data.rejoinRequests)) {
-        setRejoinRequests(data.rejoinRequests);
-      }
-
       if (typeof data.sessionId === 'string' && data.sessionId) {
         sessionIdRef.current = data.sessionId;
       }
@@ -3969,16 +1431,6 @@ export default function GamePage() {
         setAnsweredQuestionIds(nextAnsweredList);
         // Tambahkan progres misi baik jawaban benar maupun salah
         setCorrectCount(nextAnsweredList.length);
-        const curStg = currentStageRef.current;
-        const totStg = totalStagesRef.current;
-        const curStgQs = getStageQuestions(levelQuestionsRef.current, curStg, totStg);
-        if (curStgQs.length > 0 && curStgQs.every((q) => answeredIdsRef.current.has(q.id))) {
-          const msg =
-            curStg < totStg
-              ? `🔓 GERBANG STAGE ${curStg} TERBUKA! Pergi ke Pintu Ujung Kanan untuk Masuk Stage ${curStg + 1} ➜`
-              : `🏆 SEMUA SOAL STAGE ${curStg} SELESAI! Pergi ke Gerbang Finish di Ujung Kanan!`;
-          showBanner(msg, 5000);
-        }
         setSelected('');
         if (result.isCorrect) {
           soundEngine.playAnswerCorrect();
@@ -4040,435 +1492,300 @@ export default function GamePage() {
 
         <div className="mp-hud-layer">
           <div className="mp-topbar">
-            <div className="mp-top-left">
-              <div className="mp-brand-pill">
-                <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
-                  <rect x="4" y="12" width="40" height="24" rx="12" fill="#e8eefc" stroke="#233866" strokeWidth="3.5" />
-                  <path d="M15 20v8M11 24h8" stroke="#3b66c4" strokeWidth="3.2" strokeLinecap="round" />
-                  <circle cx="32" cy="21" r="2.5" fill="#ef4b5b" />
-                  <circle cx="36" cy="26" r="2.5" fill="#ffb03b" />
-                </svg>
-                <div className="mp-brand-text">
-                  <span className="mp-brand-name">llysSmart</span>
-                  <span className="mp-brand-sub">Let&apos;s Learn Your Skills</span>
-                </div>
-              </div>
-
-              {!panelsHidden && (
-                <button
-                  type="button"
-                  className="pause-btn mp-chat-top-btn"
-                  aria-pressed={!chatMinimized}
-                  aria-label={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
-                  title={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
-                  onClick={() => {
-                    soundEngine.playClick();
-                    setChatMinimized((prev) => !prev);
-                    setUnreadCount(0);
-                  }}
-                  onContextMenu={(e) => e.preventDefault()}
-                >
-                  <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"
-                      fill="#fff"
-                    />
-                    <circle cx="8.5" cy="11.5" r="1.3" fill="#6b3806" />
-                    <circle cx="12" cy="11.5" r="1.3" fill="#6b3806" />
-                    <circle cx="15.5" cy="11.5" r="1.3" fill="#6b3806" />
+              <div className="mp-top-left">
+                <div className="mp-brand-pill">
+                  <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true">
+                    <rect x="4" y="12" width="40" height="24" rx="12" fill="#e8eefc" stroke="#233866" strokeWidth="3.5" />
+                    <path d="M15 20v8M11 24h8" stroke="#3b66c4" strokeWidth="3.2" strokeLinecap="round" />
+                    <circle cx="32" cy="21" r="2.5" fill="#ef4b5b" />
+                    <circle cx="36" cy="26" r="2.5" fill="#ffb03b" />
                   </svg>
-                  {unreadCount > 0 && <span className="mp-chat-badge">{unreadCount}</span>}
-                </button>
-              )}
-            </div>
-
-            <div className="mp-center-stage-pill">
-              <div className="mp-stage-title">{getRoomSubjectTitle(room)}</div>
-              {totalStages > 1 && (
-                isStaff ? (
-                  <div className="mp-stage-switch-row" role="group" aria-label="Pilih Stage (Guru/Admin)">
-                    {Array.from({ length: totalStages }, (_, idx) => {
-                      const stgNum = idx + 1;
-                      const stgQs = getStageQuestions(levelQuestions, stgNum, totalStages);
-                      const stgAns = stgQs.filter((q) => answeredQuestionIds.includes(q.id)).length;
-                      const isCleared = stgQs.length > 0 && stgAns >= stgQs.length;
-                      return (
-                        <button
-                          key={stgNum}
-                          type="button"
-                          className={`mp-stage-chip-compact${currentStage === stgNum ? ' is-active' : ''}${isCleared ? ' is-cleared' : ''}`}
-                          title={`Stage ${stgNum} (${stgAns}/${stgQs.length} soal)`}
-                          onClick={() => {
-                            soundEngine.playClick();
-                            applyStage(stgNum, { respawnPlayer: true, showToast: true });
-                          }}
-                        >
-                          {stgNum}
-                        </button>
-                      );
-                    })}
+                  <div className="mp-brand-text">
+                    <span className="mp-brand-name">llysSmart</span>
+                    <span className="mp-brand-sub">Let&apos;s Learn Your Skills</span>
                   </div>
-                ) : (
-                  <div className="mp-stage-switch-row">
-                    <span className="mp-stage-badge-student">
-                      Stage {currentStage} / {totalStages}
-                    </span>
-                  </div>
-                )
-              )}
-            </div>
-
-            {mirrorTarget && isStaff && (
-              <div className="mirror-indicator-pill" role="status">
-                <span>🔍 Mirroring: <strong>{mirrorTarget}</strong></span>
-                <button
-                  type="button"
-                  className="mirror-close-btn"
-                  title="Tutup Mode Mirror (/unset mirror)"
-                  onClick={() => {
-                    mirrorTargetRef.current = null;
-                    mirrorFetchTargetRef.current = null;
-                    setMirrorTarget(null);
-                    questionBlocksRef.current = [];
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-
-            <div className="mp-top-right">
-              <div className="mp-timer-row">
-                <div
-                  className="mp-ping-pill"
-                  title={`Realtime Transport: ${ably.transportMode.toUpperCase()} (${ably.pingMs} ms)`}
-                  aria-label={`Ping ${ably.pingMs} ms`}
-                >
-                  <span className={`mp-ping-dot ${ably.pingMs <= 20 ? 'fast' : ably.pingMs <= 80 ? 'ok' : 'slow'}`} />
-                  <span>{ably.pingMs} ms</span>
                 </div>
-                {isStaff && (
-                  <div className="mp-teacher-actions">
-                    <button
-                      type="button"
-                      className={`pause-btn mp-staff-btn ${room?.status === 'paused' ? 'mp-staff-green' : 'mp-staff-blue'}`}
-                      aria-label={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
-                      title={room?.status === 'paused' ? 'Lanjutkan Game' : 'Jeda Game'}
-                      onClick={togglePauseGame}
-                    >
-                      {room?.status === 'paused' ? (
-                        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M8 5.5v13l11-6.5-11-6.5z" fill="#fff" />
-                        </svg>
-                      ) : (
-                        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-                          <rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
-                          <rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="#fff" />
-                        </svg>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      className="pause-btn mp-staff-btn mp-staff-blue mp-chat-top-btn"
-                      aria-label="Kelola Pemain"
-                      title="Kelola Pemain"
-                      onClick={() => {
-                        setKickModalOpen(true);
-                        fetch('/api/game/room-sync', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ roomId, chatCursor: chatCursorRef.current }),
-                        })
-                          .then((r) => (r.ok ? r.json() : null))
-                          .then((d) => {
-                            if (d && Array.isArray(d.rejoinRequests)) {
-                              setRejoinRequests(d.rejoinRequests);
-                            }
-                          })
-                          .catch(() => { });
-                      }}
-                    >
-                      <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="9" cy="8.5" r="3.2" fill="#fff" />
-                        <path
-                          d="M3.5 19c0-2.8 2.5-5 5.5-5s5.5 2.2 5.5 5"
-                          fill="none"
-                          stroke="#fff"
-                          strokeWidth="2.2"
-                          strokeLinecap="round"
-                        />
-                        <circle cx="16.8" cy="9.2" r="2.3" fill="#fff" opacity="0.92" />
-                        <path
-                          d="M15.8 14.3c2.4.3 4.4 2 4.4 4.4"
-                          fill="none"
-                          stroke="#fff"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                        />
+
+                {!panelsHidden && (
+                  <button
+                    type="button"
+                    className="pause-btn mp-chat-top-btn"
+                    aria-pressed={!chatMinimized}
+                    aria-label={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
+                    title={chatMinimized ? 'Buka Chat Room' : 'Tutup Chat Room'}
+                    onClick={() => {
+                      soundEngine.playClick();
+                      setChatMinimized((prev) => !prev);
+                      setUnreadCount(0);
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"
+                        fill="#fff"
+                      />
+                      <circle cx="8.5" cy="11.5" r="1.3" fill="#6b3806" />
+                      <circle cx="12" cy="11.5" r="1.3" fill="#6b3806" />
+                      <circle cx="15.5" cy="11.5" r="1.3" fill="#6b3806" />
+                    </svg>
+                    {unreadCount > 0 && <span className="mp-chat-badge">{unreadCount}</span>}
+                  </button>
+                )}
+              </div>
+
+              <div className="mp-center-stage-pill">
+                <div className="mp-stage-title">{room?.level?.name ?? room?.name ?? 'Arena llysSmart'}</div>
+                <div className="mp-step-dots" aria-label="Progres tantangan">
+                  {Array.from({ length: totalSteps }).map((_, i) => (
+                    <span key={i} className={`step-dot${i < doneSteps ? ' done' : ''}`} />
+                  ))}
+                </div>
+              </div>
+
+              <div className="mp-top-right">
+                <div className="mp-timer-row">
+                  <div
+                    className="mp-ping-pill"
+                    title={`Realtime Transport: ${ably.transportMode.toUpperCase()} (${ably.pingMs} ms)`}
+                    aria-label={`Ping ${ably.pingMs} ms`}
+                  >
+                    <span className={`mp-ping-dot ${ably.pingMs <= 20 ? 'fast' : ably.pingMs <= 80 ? 'ok' : 'slow'}`} />
+                    <span>{ably.pingMs} ms</span>
+                  </div>
+                  {myRole === 'teacher' && (
+                    <div className="mp-teacher-actions">
+                      <button
+                        type="button"
+                        className="btn-blue-action mp-menu-btn"
+                        onClick={() => setKickModalOpen(true)}
+                      >
+                        <span aria-hidden="true">👥</span> Pemain
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-orange-action mp-menu-btn"
+                        onClick={endGame}
+                      >
+                        <span aria-hidden="true">🏁</span> Akhiri
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="pause-btn"
+                    aria-pressed={settingsModalOpen}
+                    aria-label="Pengaturan Suara & Tombol"
+                    title="Pengaturan Suara & Tombol"
+                    onClick={() => {
+                      soundEngine.playClick();
+                      setSettingsModalOpen((v) => !v);
+                    }}
+                  >
+                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
+                        fill="#fff"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className="pause-btn"
+                    aria-pressed={panelsHidden}
+                    aria-label={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
+                    title={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
+                    onClick={() => {
+                      soundEngine.playClick();
+                      setPanelsHidden((v) => !v);
+                    }}
+                  >
+                    {panelsHidden ? (
+                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        <line x1="3" y1="3" x2="21" y2="21" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
                       </svg>
-                      {rejoinRequests.length > 0 && (
-                        <span className="mp-chat-badge">{rejoinRequests.length}</span>
+                    ) : (
+                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        <circle cx="12" cy="12" r="3" fill="#fff" />
+                      </svg>
+                    )}
+                  </button>
+                  <button type="button" className="pause-btn" aria-label="Kembali" title="Kembali" onClick={handleLeaveGame}>
+                    <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M20 6l-12 10 12 10v-6h8v-8h-8V6z" fill="#fff" /></svg>
+                  </button>
+                  <button
+                    type="button"
+                    className="pause-btn mp-fullscreen-btn"
+                    aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
+                    title={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
+                    onClick={toggleFullscreen}
+                  >
+                    {isFullscreen ? (
+                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 3v3H6v3H3V3h6zm6 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm15 0h3v6h-6v-3h3v-3z" fill="#fff" />
+                      </svg>
+                    ) : (
+                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 3h6v3H6v3H3V3zm12 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm18 0v6h-6v-3h3v-3h3z" fill="#fff" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+
+                {!panelsHidden && (
+                  <div className="mp-right-tool-rail">
+                    <div className="mp-tool-slot">
+                      <button
+                        type="button"
+                        className={`mp-icon-badge${!leaderboardMinimized ? ' is-active' : ''}`}
+                        aria-pressed={!leaderboardMinimized}
+                        aria-label={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
+                        title={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
+                        onClick={() => {
+                          soundEngine.playClick();
+                          setLeaderboardMinimized((v) => !v);
+                        }}
+                        onContextMenu={(e) => e.preventDefault()}
+                      >
+                        <span aria-hidden="true">🏆</span>
+                      </button>
+                      {!leaderboardMinimized && (
+                        <aside className="mp-dark-panel mp-leaderboard-box mp-tool-popover" aria-label="Papan peringkat" style={panelStyle('leaderboard')}>
+                          <h2
+                            className="mp-panel-heading mp-drag-handle"
+                            onPointerDown={(e) => startPanelDrag('leaderboard', e)}
+                            onPointerMove={movePanelDrag}
+                            onPointerUp={(e) => endPanelDrag(e)}
+                            onPointerCancel={(e) => endPanelDrag(e)}
+                          >
+                            <span className="mp-panel-heading-title">
+                              <span aria-hidden="true">🏆</span> Leaderboard
+                            </span>
+                            <button
+                              type="button"
+                              className="mp-win-btn"
+                              aria-label="Perkecil leaderboard"
+                              title="Perkecil"
+                              onClick={() => setLeaderboardMinimized(true)}
+                            >
+                              −
+                            </button>
+                          </h2>
+                          <ol className="mp-rank-list">
+                            {sortedPlayers.slice(0, 5).map((p, i) => (
+                              <li key={p.userId} className="mp-rank-row">
+                                <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
+                                <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
+                                <span className="rank-name">{p.username}</span>
+                                <span className="rank-score">{scores[p.userId] ?? 0}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        </aside>
                       )}
-                    </button>
+                    </div>
+
+                    <div className="mp-tool-slot">
+                      <button
+                        type="button"
+                        className={`mp-icon-badge${!missionMinimized ? ' is-active' : ''}`}
+                        aria-pressed={!missionMinimized}
+                        aria-label={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
+                        title={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
+                        onClick={() => {
+                          soundEngine.playClick();
+                          setMissionMinimized((v) => !v);
+                        }}
+                        onContextMenu={(e) => e.preventDefault()}
+                      >
+                        <span aria-hidden="true">🎯</span>
+                      </button>
+                      {!missionMinimized && (
+                        <aside className="mp-dark-panel mp-topic-card mp-tool-popover" aria-label="Progres misi" style={panelStyle('mission')}>
+                          <h3
+                            className="mp-panel-heading mp-drag-handle"
+                            onPointerDown={(e) => startPanelDrag('mission', e)}
+                            onPointerMove={movePanelDrag}
+                            onPointerUp={(e) => endPanelDrag(e)}
+                            onPointerCancel={(e) => endPanelDrag(e)}
+                          >
+                            <span className="mp-panel-heading-title">
+                              <span aria-hidden="true">🎯</span> Misi
+                            </span>
+                            <button
+                              type="button"
+                              className="mp-win-btn"
+                              aria-label="Perkecil misi"
+                              title="Perkecil misi"
+                              onClick={() => setMissionMinimized(true)}
+                            >
+                              −
+                            </button>
+                          </h3>
+                          <ul className="mp-topic-checklist">
+                            <li><span className="check-green" aria-hidden="true">✔</span> Masuk arena</li>
+                            <li>
+                              <span className={doneSteps > 0 ? 'check-green' : 'check-pending'} aria-hidden="true">
+                                {doneSteps > 0 ? '✔' : '○'}
+                              </span>{' '}
+                              Jawab tantangan soal ({doneSteps}/{totalSteps})
+                            </li>
+                          </ul>
+                          <div className="mp-goal-bar-row">
+                            <span aria-hidden="true">🚩</span>
+                            <div className="mp-goal-track">
+                              <div className="mp-goal-fill" style={{ width: `${(doneSteps / totalSteps) * 100}%` }} />
+                            </div>
+                            <span className="mp-goal-fraction">{doneSteps} / {totalSteps}</span>
+                          </div>
+                        </aside>
+                      )}
+                    </div>
+
                     <button
                       type="button"
-                      className="pause-btn mp-staff-btn mp-staff-danger"
-                      aria-label="Akhiri Sesi Game"
-                      title="Akhiri Sesi Game"
-                      onClick={endGame}
+                      className="mp-icon-badge"
+                      aria-label="Perbesar Kamera (Zoom In)"
+                      title="Perbesar (Zoom In)"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        soundEngine.playClick();
+                        cameraRef.current?.zoomBy(0.12);
+                      }}
+                      onContextMenu={(e) => e.preventDefault()}
                     >
-                      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          d="M12 3v9"
-                          fill="none"
-                          stroke="#fff"
-                          strokeWidth="2.6"
-                          strokeLinecap="round"
-                        />
-                        <path
-                          d="M7.05 6.05a8 8 0 1 0 9.9 0"
-                          fill="none"
-                          stroke="#fff"
-                          strokeWidth="2.4"
-                          strokeLinecap="round"
-                        />
+                      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
+                        <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
+                        <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
+                        <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
+                        <line x1="14" y1="10.5" x2="14" y2="17.5" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
+                      </svg>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="mp-icon-badge"
+                      aria-label="Perkecil Kamera (Zoom Out)"
+                      title="Perkecil (Zoom Out)"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        soundEngine.playClick();
+                        cameraRef.current?.zoomBy(-0.12);
+                      }}
+                      onContextMenu={(e) => e.preventDefault()}
+                    >
+                      <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
+                        <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
+                        <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
+                        <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#a8d8ff" strokeWidth="2.8" strokeLinecap="round" />
                       </svg>
                     </button>
                   </div>
                 )}
-                <button
-                  type="button"
-                  className="pause-btn"
-                  aria-pressed={settingsModalOpen}
-                  aria-label="Pengaturan Suara & Tombol"
-                  title="Pengaturan Suara & Tombol"
-                  onClick={() => {
-                    soundEngine.playClick();
-                    setSettingsModalOpen((v) => !v);
-                  }}
-                >
-                  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
-                      fill="#fff"
-                    />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className="pause-btn"
-                  aria-pressed={panelsHidden}
-                  aria-label={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
-                  title={panelsHidden ? 'Tampilkan semua panel' : 'Sembunyikan semua panel'}
-                  onClick={() => {
-                    soundEngine.playClick();
-                    setPanelsHidden((v) => !v);
-                  }}
-                >
-                  {panelsHidden ? (
-                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                      <line x1="3" y1="3" x2="21" y2="21" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
-                    </svg>
-                  ) : (
-                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-                      <circle cx="12" cy="12" r="3" fill="#fff" />
-                    </svg>
-                  )}
-                </button>
-                <button type="button" className="pause-btn" aria-label="Kembali" title="Kembali" onClick={handleLeaveGame}>
-                  <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M20 6l-12 10 12 10v-6h8v-8h-8V6z" fill="#fff" /></svg>
-                </button>
-                <button
-                  type="button"
-                  className="pause-btn mp-fullscreen-btn"
-                  aria-label={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
-                  title={isFullscreen ? 'Keluar layar penuh' : 'Layar penuh'}
-                  onClick={toggleFullscreen}
-                >
-                  {isFullscreen ? (
-                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M9 3v3H6v3H3V3h6zm6 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm15 0h3v6h-6v-3h3v-3z" fill="#fff" />
-                    </svg>
-                  ) : (
-                    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M3 3h6v3H6v3H3V3zm12 0h6v6h-3V6h-3V3zM3 15h3v3h3v3H3v-6zm18 0v6h-6v-3h3v-3h3z" fill="#fff" />
-                    </svg>
-                  )}
-                </button>
               </div>
-
-              {!panelsHidden && (
-                <div className="mp-right-tool-rail">
-                  <div className="mp-tool-slot">
-                    <button
-                      type="button"
-                      className={`mp-icon-badge${!leaderboardMinimized ? ' is-active' : ''}`}
-                      aria-pressed={!leaderboardMinimized}
-                      aria-label={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
-                      title={leaderboardMinimized ? 'Buka Leaderboard' : 'Tutup Leaderboard'}
-                      onClick={() => {
-                        soundEngine.playClick();
-                        setLeaderboardMinimized((v) => !v);
-                      }}
-                      onContextMenu={(e) => e.preventDefault()}
-                    >
-                      <span aria-hidden="true">🏆</span>
-                    </button>
-                    {!leaderboardMinimized && (
-                      <aside className="mp-dark-panel mp-leaderboard-box mp-tool-popover" aria-label="Papan peringkat" style={panelStyle('leaderboard')}>
-                        <h2
-                          className="mp-panel-heading mp-drag-handle"
-                          onPointerDown={(e) => startPanelDrag('leaderboard', e)}
-                          onPointerMove={movePanelDrag}
-                          onPointerUp={(e) => endPanelDrag(e)}
-                          onPointerCancel={(e) => endPanelDrag(e)}
-                        >
-                          <span className="mp-panel-heading-title">
-                            <span aria-hidden="true">🏆</span> Leaderboard
-                          </span>
-                          <button
-                            type="button"
-                            className="mp-win-btn"
-                            aria-label="Perkecil leaderboard"
-                            title="Perkecil"
-                            onClick={() => setLeaderboardMinimized(true)}
-                          >
-                            −
-                          </button>
-                        </h2>
-                        <ol className="mp-rank-list">
-                          {sortedPlayers
-                            .filter((p) => p.role !== 'admin')
-                            .slice(0, 5)
-                            .map((p, i) => {
-                              const liveP = playersRef.current.get(p.userId);
-                              const pFullName = p.fullName || liveP?.fullName;
-                              const pUsername = p.username;
-                              const rankDisplayName =
-                                pFullName && pFullName.trim().toLowerCase() !== pUsername.trim().toLowerCase()
-                                  ? `[${pUsername}] - ${pFullName.trim()}`
-                                  : `[${pUsername}]`;
-                              return (
-                                <li key={p.userId} className="mp-rank-row">
-                                  <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
-                                  <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
-                                  <span className="rank-name" title={rankDisplayName}>{rankDisplayName}</span>
-                                  <span className="rank-score">{scores[p.userId] ?? 0}</span>
-                                </li>
-                              );
-                            })}
-                        </ol>
-                      </aside>
-                    )}
-                  </div>
-
-                  <div className="mp-tool-slot">
-                    <button
-                      type="button"
-                      className={`mp-icon-badge${!missionMinimized ? ' is-active' : ''}`}
-                      aria-pressed={!missionMinimized}
-                      aria-label={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
-                      title={missionMinimized ? 'Buka Misi' : 'Tutup Misi'}
-                      onClick={() => {
-                        soundEngine.playClick();
-                        setMissionMinimized((v) => !v);
-                      }}
-                      onContextMenu={(e) => e.preventDefault()}
-                    >
-                      <span aria-hidden="true">🎯</span>
-                    </button>
-                    {!missionMinimized && (
-                      <aside className="mp-dark-panel mp-topic-card mp-tool-popover" aria-label="Progres misi" style={panelStyle('mission')}>
-                        <h3
-                          className="mp-panel-heading mp-drag-handle"
-                          onPointerDown={(e) => startPanelDrag('mission', e)}
-                          onPointerMove={movePanelDrag}
-                          onPointerUp={(e) => endPanelDrag(e)}
-                          onPointerCancel={(e) => endPanelDrag(e)}
-                        >
-                          <span className="mp-panel-heading-title">
-                            <span aria-hidden="true">🎯</span> Misi
-                          </span>
-                          <button
-                            type="button"
-                            className="mp-win-btn"
-                            aria-label="Perkecil misi"
-                            title="Perkecil misi"
-                            onClick={() => setMissionMinimized(true)}
-                          >
-                            −
-                          </button>
-                        </h3>
-                        <ul className="mp-topic-checklist">
-                          <li><span className="check-green" aria-hidden="true">✔</span> Masuk arena</li>
-                          <li>
-                            <span className={doneSteps > 0 ? 'check-green' : 'check-pending'} aria-hidden="true">
-                              {doneSteps > 0 ? '✔' : '○'}
-                            </span>{' '}
-                            Jawab tantangan soal ({doneSteps}/{totalSteps})
-                          </li>
-                        </ul>
-                        <div className="mp-goal-bar-row">
-                          <span aria-hidden="true">🚩</span>
-                          <div className="mp-goal-track">
-                            <div className="mp-goal-fill" style={{ width: `${(doneSteps / totalSteps) * 100}%` }} />
-                          </div>
-                          <span className="mp-goal-fraction">{doneSteps} / {totalSteps}</span>
-                        </div>
-                      </aside>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    className="mp-icon-badge"
-                    aria-label="Perbesar Kamera (Zoom In)"
-                    title="Perbesar (Zoom In)"
-                    onPointerDown={(e) => {
-                      e.preventDefault();
-                      soundEngine.playClick();
-                      cameraRef.current?.zoomBy(0.12);
-                    }}
-                    onContextMenu={(e) => e.preventDefault()}
-                  >
-                    <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
-                      <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
-                      <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
-                      <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
-                      <line x1="14" y1="10.5" x2="14" y2="17.5" stroke="#ffd338" strokeWidth="2.8" strokeLinecap="round" />
-                    </svg>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="mp-icon-badge"
-                    aria-label="Perkecil Kamera (Zoom Out)"
-                    title="Perkecil (Zoom Out)"
-                    onPointerDown={(e) => {
-                      e.preventDefault();
-                      soundEngine.playClick();
-                      cameraRef.current?.zoomBy(-0.12);
-                    }}
-                    onContextMenu={(e) => e.preventDefault()}
-                  >
-                    <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
-                      <circle cx="14" cy="14" r="8.5" fill="none" stroke="#fff" strokeWidth="3" />
-                      <line x1="20.5" y1="20.5" x2="27.5" y2="27.5" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
-                      <line x1="10.5" y1="14" x2="17.5" y2="14" stroke="#a8d8ff" strokeWidth="2.8" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
-
-          {stageBanner && (
-            <div className="mp-stage-banner-toast" role="status" aria-live="polite">
-              {stageBanner}
-            </div>
-          )}
 
           {editingControlsLayout && (
             <div className="hud-edit-banner" role="region" aria-label="Mode atur posisi tombol">
@@ -4561,24 +1878,7 @@ export default function GamePage() {
               onPointerUp={endControlGroupDrag}
               onPointerCancel={endControlGroupDrag}
             >
-              {editingControlsLayout && <span className="dpad-edit-tag">Aksi &amp; Lompat</span>}
-              {ammoCount > 0 && (
-              <button
-                type="button"
-                className={`ctrl-circle ctrl-shoot-btn has-ammo`}
-                aria-label="Tembak Laser"
-                title="Tembak Laser (F / X / E)"
-                onPointerDown={(e) => {
-                  if (editingControlsLayout) return;
-                  e.preventDefault();
-                  fireLaser();
-                }}
-                onContextMenu={(e) => e.preventDefault()}
-              >
-                <span className="ctrl-shoot-icon" aria-hidden="true">⚡</span>
-                <span className="ctrl-ammo-badge">{ammoCount}</span>
-              </button>
-              )}
+              {editingControlsLayout && <span className="dpad-edit-tag">Geser Lompat</span>}
               <button
                 type="button"
                 className="ctrl-circle"
@@ -4606,7 +1906,7 @@ export default function GamePage() {
           </div>
 
           {(!panelsHidden || hasVisibleQuestion) && (
-            <div className="mp-bottom-dock">
+          <div className="mp-bottom-dock">
               {!panelsHidden && !chatMinimized && (
                 <aside className="mp-dark-panel mp-chat-panel mp-chat-fixed" aria-label="Ruang obrolan">
                   <div className="mp-chat-header">
@@ -4628,52 +1928,14 @@ export default function GamePage() {
                   </div>
 
                   <div className="mp-chat-messages" ref={chatBoxRef} role="log" aria-live="polite">
-                    {displayChat.map((m) => {
-                      if (m.senderName === 'SYSTEM') {
-                        return (
-                          <div key={m.id} className="sys-chat-entry">
-                            <span className="font-bold">{m.text}</span>
-                          </div>
-                        );
-                      }
-
-                      const senderPlayer = (m.userId ? playersRef.current.get(m.userId) : null) ||
-                        roomRef.current?.players?.find((pl) => pl.userId === m.userId || pl.username === m.senderName);
-                      const isSenderAdmin = m.role === 'admin' || senderPlayer?.role === 'admin';
-
-                      // Format label: [Tag] - Nama Lengkap (tag/title bold)
-                      let senderTag = '';
-                      let senderName = '';
-                      if (isSenderAdmin) {
-                        senderTag = senderPlayer?.tag || 'Administrator';
-                        senderName = m.senderFullName || senderPlayer?.fullName || m.senderName;
-                      } else if (senderPlayer?.tag || m.role === 'teacher' || senderPlayer?.role === 'teacher') {
-                        senderTag = senderPlayer?.tag || 'Teacher';
-                        senderName = m.senderFullName || senderPlayer?.fullName || m.senderName;
-                      } else {
-                        const uname = m.senderName;
-                        const fname = m.senderFullName || senderPlayer?.fullName;
-                        senderName = fname && fname.trim().toLowerCase() !== uname.trim().toLowerCase()
-                          ? `${uname} - ${fname.trim()}`
-                          : uname;
-                      }
-
-                      return (
-                        <div key={m.id} className="chat-msg-item">
-                          <span>
-                            {senderTag ? (
-                              <>
-                                <span className={`chat-sender font-bold ${chipColor(m.senderName)}`}>[{senderTag}]</span>
-                                <span className={`chat-sender ${chipColor(m.senderName)}`}> - {senderName}</span>
-                              </>
-                            ) : (
-                              <span className={`chat-sender ${chipColor(m.senderName)}`}>[{senderName}]</span>
-                            )}
-                            <span className="chat-text">: {m.text}</span>
-                          </span>
-                        </div>
-                      );
-                    })}
+                    {displayChat.map((m) => (
+                      <div key={m.id} className="chat-msg-item">
+                        <span>
+                          <span className={`chat-sender ${chipColor(m.senderName)}`}>{m.senderName}</span>
+                          <span className="chat-text">: {m.text}</span>
+                        </span>
+                      </div>
+                    ))}
                   </div>
 
                   <form className="mp-chat-form" onSubmit={sendChat}>
@@ -4682,7 +1944,7 @@ export default function GamePage() {
                       id="mp-chat-input"
                       type="text"
                       className="mp-chat-input"
-                      placeholder={isStaff ? 'Ketik pesan atau /cmd...' : 'Ketik pesan...'}
+                      placeholder="Ketik pesan..."
                       maxLength={120}
                       autoComplete="off"
                       value={chatInput}
@@ -4702,35 +1964,18 @@ export default function GamePage() {
                 </aside>
               )}
 
-              {question && (!isStaff ? !answeredQuestionIds.includes(question.id) : Boolean(mirrorTargetRef.current)) && (
+              {question && myRole !== 'teacher' && !answeredQuestionIds.includes(question.id) && (
                 <section className="parchment-card mp-question-dock" aria-label="Tantangan soal" style={panelStyle('question')}>
                   <div
-                    className="mp-dock-ribbon mp-drag-handle flex items-center justify-between"
+                    className="mp-dock-ribbon mp-drag-handle"
                     onPointerDown={(e) => startPanelDrag('question', e)}
                     onPointerMove={movePanelDrag}
                     onPointerUp={(e) => endPanelDrag(e)}
                     onPointerCancel={(e) => endPanelDrag(e)}
                   >
                     <span className="mp-panel-heading-title">
-                      <span aria-hidden="true">📖</span> Tantangan Soal {isStaff && mirrorTarget && (
-                        <span className="text-xs text-yellow-300 font-normal ml-2">
-                          (Mirror: {mirrorTarget})
-                        </span>
-                      )}
+                      <span aria-hidden="true">📖</span> Tantangan Soal
                     </span>
-                    {isStaff && (
-                      <button
-                        type="button"
-                        className="mp-win-btn ml-auto text-sm font-bold text-slate-300 hover:text-white"
-                        title="Tutup Modal Soal (Guru/Admin)"
-                        onClick={() => {
-                          setQuestion(null);
-                          questionRef.current = null;
-                        }}
-                      >
-                        ✕
-                      </button>
-                    )}
                   </div>
 
                   <div className="mp-bonus-badge" aria-label={`Bonus ${question.points} poin`}>
@@ -4743,40 +1988,26 @@ export default function GamePage() {
 
                   <form onSubmit={submitAnswer}>
                     <div className="mp-options-grid-2x2" role="radiogroup" aria-label="Pilihan jawaban">
-                      {question.options.map((o, idx) => {
-                        const displayLabel = OPTION_DISPLAY_LABELS[idx] ?? o.label;
-                        const isCorrectKey = myRoleRef.current === 'admin' && Boolean(question.correctAnswer) && (
-                          question.correctAnswer === o.label ||
-                          question.correctAnswer === o.content ||
-                          question.correctAnswer?.toLowerCase() === o.label.toLowerCase() ||
-                          question.correctAnswer?.toLowerCase() === o.content.toLowerCase()
-                        );
-                        return (
-                          <button
-                            key={o.label}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected === o.label}
-                            className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}${isCorrectKey ? ' border-emerald-500 ring-2 ring-emerald-400' : ''}`}
-                            onClick={() => {
-                              soundEngine.playClick();
-                              setSelected(o.label);
-                            }}
-                          >
-                            <span className="opt-badge">{displayLabel}</span>
-                            <span className="flex-1 text-left">{o.content}</span>
-                            {isCorrectKey && (
-                              <span className="admin-key-badge ml-2" title="Kunci Jawaban Benar (Admin Only)">
-                                ✓ KUNCI JAWABAN
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
+                      {question.options.map((o) => (
+                        <button
+                          key={o.label}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected === o.label}
+                          className={`mp-grid-opt-btn${selected === o.label ? ' selected' : ''}`}
+                          onClick={() => {
+                            soundEngine.playClick();
+                            setSelected(o.label);
+                          }}
+                        >
+                          <span className="opt-badge">{o.label}</span>
+                          {o.content}
+                        </button>
+                      ))}
                     </div>
                     <div className="mt-3 flex items-center justify-end">
                       <button type="submit" className="btn-orange-action" disabled={!selected || submitting}>
-                        <span aria-hidden="true">✔</span> {submitting ? 'Mengirim...' : isStaff ? 'Bantu Jawab (Centang Biru)' : 'Submit'}
+                        <span aria-hidden="true">✔</span> {submitting ? 'Mengirim...' : 'Submit'}
                       </button>
                     </div>
                   </form>
@@ -4983,7 +2214,7 @@ export default function GamePage() {
           </div>
         )}
 
-        {kickModalOpen && isStaff && (
+        {kickModalOpen && myRole === 'teacher' && (
           <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Kelola Pemain" onClick={() => setKickModalOpen(false)}>
             <div className="parchment-card feedback-modal-card teacher-modal-card" onClick={(e) => e.stopPropagation()}>
               <div className="text-center">
@@ -4993,61 +2224,8 @@ export default function GamePage() {
                 Keluarkan peserta yang tidak dikenal dari ruang permainan.
               </p>
 
-              {sortedPlayers.filter((pl) => pl.userId !== myIdRef.current && pl.role !== 'admin' && pl.role !== 'teacher').length > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                  <button
-                    type="button"
-                    className="btn-orange-action"
-                    style={{ fontSize: 12, padding: '6px 14px', minHeight: 36 }}
-                    onClick={kickAllPlayers}
-                  >
-                    🚫 Kick Semua Pemain
-                  </button>
-                </div>
-              )}
-
               <div className="teacher-list-box">
-                {rejoinRequests.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div
-                      className="teacher-q-text"
-                      style={{ fontSize: 13, color: '#8c5308', marginBottom: 6 }}
-                    >
-                      Permintaan Masuk Kembali (Approve = Reset Soal &amp; Poin Sesi ke 0):
-                    </div>
-                    {rejoinRequests.map((req) => (
-                      <div key={req.userId} className="teacher-q-card" style={{ marginBottom: 6 }}>
-                        <div className="teacher-q-info">
-                          <div className="teacher-q-text">{req.username}</div>
-                          <div className="teacher-q-meta">
-                            <span>Ingin bergabung ulang setelah di-kick</span>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                          <button
-                            type="button"
-                            className="btn-green-action"
-                            style={{ fontSize: 12, padding: '6px 12px', minHeight: 36 }}
-                            onClick={() => approveRejoin(req.userId)}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            type="button"
-                            className="btn-orange-action"
-                            style={{ fontSize: 12, padding: '6px 10px', minHeight: 36 }}
-                            onClick={() => rejectRejoin(req.userId)}
-                          >
-                            Tolak
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {sortedPlayers.filter((pl) => pl.userId !== myIdRef.current).length === 0 &&
-                  rejoinRequests.length === 0 ? (
+                {sortedPlayers.filter((pl) => pl.userId !== myIdRef.current).length === 0 ? (
                   <p className="feedback-subtext text-center">Belum ada siswa di dalam ruang.</p>
                 ) : (
                   sortedPlayers
@@ -5055,24 +2233,19 @@ export default function GamePage() {
                     .map((pl) => (
                       <div key={pl.userId} className="teacher-q-card">
                         <div className="teacher-q-info">
-                          <div className="teacher-q-text">
-                            {pl.username}
-                            {pl.role === 'admin' ? ' (ADMIN)' : pl.role === 'teacher' ? ' (GURU)' : ''}
-                          </div>
+                          <div className="teacher-q-text">{pl.username}</div>
                           <div className="teacher-q-meta">
                             <span>Skor: {scores[pl.userId] ?? 0} poin</span>
                           </div>
                         </div>
-                        {pl.role !== 'admin' && pl.role !== 'teacher' && (
-                          <button
-                            type="button"
-                            className="btn-orange-action"
-                            style={{ fontSize: 13, padding: '6px 14px', minHeight: 38, flexShrink: 0 }}
-                            onClick={() => kickPlayer(pl.userId)}
-                          >
-                            Kick
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="btn-orange-action"
+                          style={{ fontSize: 13, padding: '6px 14px', minHeight: 38, flexShrink: 0 }}
+                          onClick={() => kickPlayer(pl.userId)}
+                        >
+                          Kick
+                        </button>
                       </div>
                     ))
                 )}
@@ -5125,48 +2298,6 @@ export default function GamePage() {
                 }}
               >
                 Oke <span aria-hidden="true">▶</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {room?.status === 'paused' && !exitNotice && (
-          <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Room Dijeda">
-            <div className="parchment-card feedback-modal-card">
-              <p className="feedback-subtext" style={{ marginTop: 4 }}>
-                {isStaff
-                  ? 'Room sedang dijeda. Semua pergerakan siswa dikunci.'
-                  : 'Room sedang dijeda, menunggu aksi dari guru...'}
-              </p>
-              {isStaff && (
-                <button
-                  type="button"
-                  className="btn-green-action"
-                  onClick={togglePauseGame}
-                >
-                  Lanjutkan Game
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {exitNotice && (
-          <div className="overlay-backdrop" role="dialog" aria-modal="true" aria-label="Notifikasi Ruang">
-            <div className="parchment-card feedback-modal-card">
-              <p className="feedback-subtext" style={{ marginTop: 4 }}>
-                {exitNotice === 'kicked'
-                  ? 'Kamu telah dikeluarkan dari ruang permainan ini oleh guru.'
-                  : 'Room game ini telah dihapus oleh guru.'}
-              </p>
-              <button
-                type="button"
-                className="btn-orange-action"
-                onClick={() => {
-                  router.replace(isStaff ? '/dashboard/teacher/rooms' : '/dashboard/student');
-                }}
-              >
-                Kembali ke Dashboard
               </button>
             </div>
           </div>

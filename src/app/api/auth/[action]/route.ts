@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
-import { login, logout } from '@/server/services/auth-service';
+import { register, login, logout } from '@/server/services/auth-service';
 import { getCurrentUser } from '@/server/auth/session';
-import { loginSchema } from '@/server/middleware/validation';
+import { registerSchema, loginSchema } from '@/server/middleware/validation';
 import { ok, fail, handleError } from '@/server/middleware/http';
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ action: string }> }) {
@@ -29,8 +29,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     const body = await req.json().catch(() => ({}));
 
     if (action === 'register') {
-      // Pendaftaran manual dinonaktifkan: semua user masuk via SSO Siakad
-      return fail('Pendaftaran akun baru dinonaktifkan. Masuk lewat akun Siakad.', 403);
+      const input = registerSchema.parse(body);
+      const user = await register(input);
+      return ok({ user }, 201);
     }
     if (action === 'login') {
       const input = loginSchema.parse(body);

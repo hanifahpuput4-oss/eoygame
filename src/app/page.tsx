@@ -21,7 +21,7 @@ export default async function LandingPage() {
         <nav className="flex items-center gap-3">
           {user ? (
             <Link
-              href={user.role === 'teacher' || user.role === 'admin' ? '/dashboard/teacher' : '/dashboard/student'}
+              href={user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student'}
               className="btn-primary text-sm"
             >
               Dashboard
@@ -48,7 +48,7 @@ export default async function LandingPage() {
           di dunia 2D yang seru.
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-          <Link href={user ? (user.role === 'teacher' || user.role === 'admin' ? '/dashboard/teacher' : '/dashboard/student') : '/register'} className="btn-primary text-lg">
+          <Link href={user ? (user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student') : '/register'} className="btn-primary text-lg">
             Mulai Main ▶
           </Link>
           <Link href="/login" className="btn-secondary text-lg">

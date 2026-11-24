@@ -21,11 +21,9 @@
 .mp-topbar {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: 1fr auto 1fr;
   align-items: start;
-  gap: 8px;
-  width: 100%;
-  max-width: 100%;
+  gap: 10px;
 }
 
 .mp-top-left {
@@ -33,9 +31,8 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   pointer-events: auto;
-  min-width: 0;
 }
 
 .mp-brand-pill {
@@ -171,9 +168,6 @@
   justify-self: center;
   pointer-events: auto;
   min-height: 48px;
-  min-width: 0;
-  width: fit-content;
-  max-width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -181,10 +175,11 @@
   background: linear-gradient(180deg, rgba(44, 57, 87, 0.94), rgba(29, 38, 61, 0.94));
   border: 2.5px solid #8ea8d6;
   border-radius: 14px;
-  padding: 5px 16px 6px;
+  padding: 5px 20px 6px;
   text-align: center;
   color: #fff;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  max-width: min(360px, 44vw);
 }
 
 .mp-stage-title {
@@ -192,193 +187,12 @@
   font-size: 0.95rem;
   font-weight: 700;
   line-height: 1.15;
-  margin-bottom: 0;
+  margin-bottom: 4px;
   color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
-}
-
-.mp-stage-switch-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  margin-top: 3px;
-}
-
-.mp-stage-badge-student {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1.5px solid rgba(251, 191, 36, 0.7);
-  color: #fef08a;
-  font-family: var(--font-fredoka), sans-serif;
-  font-size: 0.76rem;
-  font-weight: 700;
-  padding: 1px 10px;
-  border-radius: 999px;
-  line-height: 1.35;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-}
-
-.mp-stage-chip {
-  appearance: none;
-  border: 1.5px solid rgba(173, 198, 255, 0.35);
-  background: rgba(15, 23, 42, 0.55);
-  color: #cbd5e1;
-  font-family: var(--font-fredoka), sans-serif;
-  font-size: 0.7rem;
-  font-weight: 700;
-  padding: 1px 8px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  line-height: 1.3;
-}
-
-.mp-stage-chip:hover {
-  background: rgba(59, 130, 246, 0.35);
-  color: #fff;
-}
-
-.mp-stage-chip.is-active {
-  background: linear-gradient(180deg, #ffca28, #f59e0b);
-  border-color: #fde68a;
-  color: #1e1b4b;
-  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.4);
-}
-
-.mp-stage-chip.is-cleared {
-  border-color: #4ade80;
-}
-
-.mp-stage-chip-compact {
-  appearance: none;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 6px;
-  border: 1.5px solid rgba(173, 198, 255, 0.4);
-  background: rgba(15, 23, 42, 0.65);
-  color: #e2e8f0;
-  font-family: var(--font-fredoka), sans-serif;
-  font-size: 0.78rem;
-  font-weight: 800;
-  border-radius: 999px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-  line-height: 1;
-}
-
-.mp-stage-chip-compact:hover {
-  background: rgba(59, 130, 246, 0.45);
-  border-color: #93c5fd;
-  color: #fff;
-  transform: translateY(-1px);
-}
-
-.mp-stage-chip-compact.is-active {
-  background: linear-gradient(180deg, #ffca28, #f59e0b);
-  border-color: #fde68a;
-  color: #1e1b4b;
-  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.55);
-  transform: scale(1.08);
-}
-
-.mp-stage-chip-compact.is-cleared {
-  border-color: #4ade80;
-}
-
-.mirror-indicator-pill {
-  position: absolute;
-  top: 74px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 28;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 14px;
-  background: rgba(15, 23, 42, 0.92);
-  border: 2px solid #38bdf8;
-  border-radius: 999px;
-  color: #bae6fd;
-  font-size: 0.8rem;
-  font-weight: 700;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5), 0 0 12px rgba(56, 189, 248, 0.4);
-  animation: pulse-mirror 2s infinite alternate;
-}
-
-.mirror-close-btn {
-  background: rgba(239, 68, 68, 0.8);
-  border: none;
-  border-radius: 50%;
-  width: 18px;
-  height: 18px;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-
-.mirror-close-btn:hover {
-  background: #dc2626;
-}
-
-@keyframes pulse-mirror {
-  0% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 8px rgba(56, 189, 248, 0.3); }
-  100% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6), 0 0 16px rgba(56, 189, 248, 0.7); }
-}
-
-.admin-key-badge {
-  font-size: 0.68rem;
-  font-weight: 800;
-  padding: 2px 7px;
-  border-radius: 6px;
-  background: #059669;
-  color: #ecfdf5;
-  border: 1px solid #34d399;
-  box-shadow: 0 2px 6px rgba(5, 150, 105, 0.4);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-}
-
-.sys-chat-entry {
-  color: #fde047;
-  font-size: 0.82rem;
-  background: rgba(245, 158, 11, 0.12);
-  border-left: 2.5px solid #f59e0b;
-  padding: 3px 6px;
-  border-radius: 0 4px 4px 0;
-  margin: 2px 0;
-}
-
-.mp-stage-banner-toast {
-  position: absolute;
-  top: 76px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 35;
-  pointer-events: none;
-  background: linear-gradient(180deg, rgba(30, 27, 75, 0.95), rgba(15, 23, 42, 0.95));
-  border: 2.5px solid #fbbf24;
-  border-radius: 14px;
-  padding: 8px 18px;
-  color: #fef3c7;
-  font-family: var(--font-fredoka), sans-serif;
-  font-size: 0.92rem;
-  font-weight: 700;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
-  white-space: nowrap;
 }
 
 .mp-step-dots {
@@ -408,16 +222,12 @@
   align-items: flex-end;
   gap: 8px;
   pointer-events: auto;
-  min-width: 0;
-  max-width: 100%;
 }
 
 .mp-timer-row {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .mp-ping-pill {
@@ -485,7 +295,7 @@
 }
 
 .mp-leaderboard-box {
-  width: 300px;
+  width: 196px;
   padding: 8px 10px;
 }
 
@@ -1057,37 +867,19 @@
 .mp-teacher-actions {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
+}
+
+.mp-teacher-actions .mp-menu-btn {
+  width: auto;
+  min-height: 44px;
+  padding: 6px 14px;
+  font-size: 0.86rem;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
-}
-
-.mp-staff-btn {
-  transition: transform 0.08s ease, filter 0.12s ease;
-}
-
-.mp-staff-btn:hover {
-  filter: brightness(1.06);
-}
-
-.mp-staff-btn:active {
-  transform: translateY(1px);
-}
-
-.mp-staff-blue {
-  border-color: #0d2e57;
-  background: linear-gradient(180deg, #2572d0 0%, #154c91 100%);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #0a2242;
-}
-
-.mp-staff-green {
-  border-color: #0e3812;
-  background: linear-gradient(180deg, #2c9135 0%, #19611f 100%);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #0b2b0e;
-}
-
-.mp-staff-danger {
-  border-color: #5e1313;
-  background: linear-gradient(180deg, #e04444 0%, #b32424 100%);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #470d0d;
 }
 
 .teacher-modal-card {
@@ -1211,7 +1003,7 @@
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  bottom: 16px;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -1298,47 +1090,6 @@
 .ctrl-circle:active {
   background: rgba(234, 115, 23, 0.92);
   transform: scale(0.94);
-}
-
-.ctrl-shoot-btn {
-  background: rgba(15, 23, 42, 0.72);
-  border-color: rgba(56, 189, 248, 0.7);
-  position: relative;
-  font-size: calc(var(--ctrl-size, 84px) * 0.46);
-  line-height: 1;
-  color: #38bdf8;
-}
-
-.ctrl-shoot-btn.has-ammo {
-  background: rgba(14, 116, 144, 0.88);
-  border-color: #38bdf8;
-  color: #fde047;
-  box-shadow: 0 0 16px rgba(56, 189, 248, 0.75), inset 0 0 8px rgba(255, 255, 255, 0.4);
-  animation: pulse-shoot-hud 1.4s ease-in-out infinite alternate;
-}
-
-.ctrl-shoot-btn:active {
-  background: rgba(2, 132, 199, 0.95);
-  transform: scale(0.92);
-}
-
-.ctrl-ammo-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  background: #f59e0b;
-  color: #000;
-  font-size: 11px;
-  font-weight: 800;
-  border-radius: 10px;
-  padding: 1px 6px;
-  border: 1.5px solid #fff;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
-}
-
-@keyframes pulse-shoot-hud {
-  0% { transform: scale(1); box-shadow: 0 0 10px rgba(56, 189, 248, 0.6); }
-  100% { transform: scale(1.06); box-shadow: 0 0 22px rgba(56, 189, 248, 0.95); }
 }
 
 .hud-edit-banner {
@@ -1817,75 +1568,42 @@
         }
       }
 
-      /* Layar HP/tablet landscape atau lebar menengah: rapikan ukuran tombol & jarak agar utuh 1 layar */
-      @media (max-width: 960px), (max-height: 540px) {
+      /* Layar HP landscape (tinggi pendek): rapikan ukuran tombol & jarak vertikal agar lega dari tombol lompat */
+      @media (max-height: 520px) and (orientation: landscape) {
         .mp-hud-layer {
-          padding: 8px 10px;
-        }
-
-        .mp-topbar {
-          gap: 6px;
+          padding: 8px 12px;
         }
 
         .mp-brand-pill {
-          min-height: 40px;
-          padding: 3px 10px 3px 8px;
-          gap: 7px;
-          border-radius: 12px;
-        }
-
-        .mp-brand-pill svg {
-          width: 28px;
-          height: 28px;
+          min-height: 44px;
+          padding: 4px 12px 4px 9px;
         }
 
         .mp-brand-name {
-          font-size: 0.98rem;
+          font-size: 1.05rem;
         }
 
         .mp-brand-sub {
-          display: none;
+          font-size: 0.66rem;
         }
 
         .mp-center-stage-pill {
-          min-height: 40px;
-          padding: 3px 12px 4px;
-          border-radius: 12px;
+          min-height: 44px;
+          padding: 4px 16px 5px;
         }
 
         .mp-stage-title {
-          font-size: 0.84rem;
-          margin-bottom: 0;
-        }
-
-        .step-dot {
-          width: 9px;
-          height: 9px;
-        }
-
-        .mp-ping-pill {
-          padding: 4px 8px;
-          font-size: 0.72rem;
+          font-size: 0.88rem;
+          margin-bottom: 3px;
         }
 
         .pause-btn,
         .mp-icon-badge {
-          width: 40px;
-          height: 40px;
-          min-width: 40px;
-          min-height: 40px;
-          border-radius: 11px;
-        }
-
-        .pause-btn svg {
-          width: 19px;
-          height: 19px;
-        }
-
-        .mp-timer-row,
-        .mp-teacher-actions,
-        .mp-top-left {
-          gap: 5px;
+          width: 44px;
+          height: 44px;
+          min-width: 44px;
+          min-height: 44px;
+          border-radius: 13px;
         }
 
         .mp-top-right,

@@ -3,19 +3,10 @@ import crypto from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import {
-  getLiveRoomObstacles,
   getLiveRoomPositions,
-  getLiveRoomStatus,
-  getRejoinRequests,
-  isPlayerKicked,
-  isRoomDeleted,
-  recordRoomCrumble,
-  recordRoomPowerUp,
-  recordRoomStomp,
   removePresence,
   touchPresence,
   updateLivePlayerPosition,
-  clearRoomRopes,
 } from './presence-store';
 
 type WsClient = {
@@ -26,17 +17,6 @@ type WsClient = {
   username: string;
   avatar: string;
   role: string;
-  stage: number;
-  tag?: string | null;
-  colors?: { body?: string; tag?: string; nick?: string } | null;
-  ropedById?: string | null;
-};
-
-type SseClient = {
-  id: string;
-  roomId: string;
-  userId: string;
-  send: (jsonText: string) => boolean;
 };
 
 type WsHubState = {
@@ -44,11 +24,7 @@ type WsHubState = {
   port: number;
   starting: boolean;
   samePortHooked: boolean;
-  samePortHookedV3?: boolean;
-  upgradeHandler?: (req: http.IncomingMessage, socket: Duplex) => void;
-  rawHttpHandler?: (req: http.IncomingMessage, res: http.ServerResponse) => void;
   rooms: Map<string, Map<string, WsClient>>;
-  sseRooms?: Map<string, Map<string, SseClient>>;
 };
 
 const globalForWsHub = globalThis as unknown as {
@@ -140,33 +116,6 @@ function removeClientFromRoom(client: WsClient) {
   }
 }
 
-export function registerSseClient(
-  roomId: string,
-  userId: string,
-  send: (jsonText: string) => boolean,
-): () => void {
-  const hub = getHub();
-  if (!hub.sseRooms) {
-    hub.sseRooms = new Map();
-  }
-  let roomSse = hub.sseRooms.get(roomId);
-  if (!roomSse) {
-    roomSse = new Map();
-    hub.sseRooms.set(roomId, roomSse);
-  }
-  const id = `sse_${crypto.randomBytes(6).toString('hex')}`;
-  roomSse.set(id, { id, roomId, userId, send });
-
-  return () => {
-    const map = hub.sseRooms?.get(roomId);
-    if (!map) return;
-    map.delete(id);
-    if (map.size === 0) {
-      hub.sseRooms?.delete(roomId);
-    }
-  };
-}
-
 export function broadcastRoomEvent(
   roomId: string,
   payload: Record<string, unknown>,
@@ -175,36 +124,21 @@ export function broadcastRoomEvent(
 ) {
   const hub = getHub();
   const roomClients = hub.rooms.get(roomId);
-  const sseClients = hub.sseRooms?.get(roomId);
-  const hasWs = Boolean(roomClients && roomClients.size > 0);
-  const hasSse = Boolean(sseClients && sseClients.size > 0);
-  if (!hasWs && !hasSse) return;
+  if (!roomClients || roomClients.size === 0) return;
 
   const json = JSON.stringify(payload);
   let wsFrame: Buffer | null = null;
 
-  if (roomClients && roomClients.size > 0) {
-    for (const client of roomClients.values()) {
-      if (excludeClientId && client.id === excludeClientId) continue;
-      if (excludeUserId && client.userId === excludeUserId) continue;
+  for (const client of roomClients.values()) {
+    if (excludeClientId && client.id === excludeClientId) continue;
+    if (excludeUserId && client.userId === excludeUserId) continue;
 
-      if (!client.socket.destroyed && client.socket.writable) {
-        if (!wsFrame) wsFrame = encodeWsTextFrame(json);
-        try {
-          client.socket.write(wsFrame);
-        } catch {
-          // ignore write error on closing socket
-        }
-      }
-    }
-  }
-
-  if (sseClients && sseClients.size > 0) {
-    for (const sse of Array.from(sseClients.values())) {
-      if (excludeUserId && sse.userId && sse.userId === excludeUserId) continue;
-      const ok = sse.send(json);
-      if (!ok) {
-        sseClients.delete(sse.id);
+    if (!client.socket.destroyed && client.socket.writable) {
+      if (!wsFrame) wsFrame = encodeWsTextFrame(json);
+      try {
+        client.socket.write(wsFrame);
+      } catch {
+        // ignore write error on closing socket
       }
     }
   }
@@ -220,43 +154,14 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
 
   const t = msg.t;
 
-  // Sub-millisecond Ping / Pong + Piggybacked Room Status & Kick Flag
+  // Sub-millisecond Ping / Pong
   if (t === 'p') {
-    if (typeof msg.r === 'string' && msg.r && client.roomId !== msg.r) {
-      if (client.roomId) removeClientFromRoom(client);
-      client.roomId = msg.r;
-      addClientToRoom(client);
-    }
-    if (typeof msg.u === 'string' && msg.u) {
-      client.userId = msg.u;
-    }
-    if (typeof msg.rl === 'string' && msg.rl) {
-      client.role = msg.rl;
-    }
-
-    const rId = client.roomId;
-    const uId = client.userId;
-    const deleted = rId ? isRoomDeleted(rId) : false;
-    const kicked = rId && uId && client.role !== 'teacher' ? isPlayerKicked(rId, uId) : false;
-    const rs = rId ? getLiveRoomStatus(rId) : undefined;
-    const rq = rId && client.role === 'teacher' ? getRejoinRequests(rId) : undefined;
-
-    const reply = encodeWsTextFrame(
-      JSON.stringify({
-        t: 'po',
-        c: msg.c,
-        st: Date.now(),
-        rs: deleted ? 'deleted' : rs,
-        del: deleted ? 1 : 0,
-        k: kicked ? 1 : 0,
-        rq,
-      }),
-    );
+    const reply = encodeWsTextFrame(JSON.stringify({ t: 'po', c: msg.c }));
     if (!client.socket.destroyed && client.socket.writable) {
       client.socket.write(reply);
     }
-    if (rId && uId && !deleted && !kicked) {
-      touchPresence(rId, uId);
+    if (client.roomId && client.userId) {
+      touchPresence(client.roomId, client.userId);
     }
     return;
   }
@@ -265,23 +170,19 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
   if (t === 'join') {
     const roomId = typeof msg.roomId === 'string' ? msg.roomId : '';
     const userId = typeof msg.userId === 'string' ? msg.userId : '';
-    if (!roomId) return;
+    if (!roomId || !userId) return;
 
-    if (client.roomId && client.roomId !== roomId) {
+    if (client.roomId) {
       removeClientFromRoom(client);
     }
     client.roomId = roomId;
-    if (userId) client.userId = userId;
-    client.username = typeof msg.username === 'string' ? msg.username : client.username || 'Player';
-    client.avatar = typeof msg.avatar === 'string' ? msg.avatar : client.avatar || 'cat-orange';
-    client.role = typeof msg.role === 'string' ? msg.role : client.role || 'student';
-    client.stage = typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : client.stage || 1;
-    if (msg.tg === null || typeof msg.tg === 'string') client.tag = msg.tg;
-    if (msg.cl === null || (msg.cl && typeof msg.cl === 'object')) client.colors = msg.cl as WsClient['colors'];
+    client.userId = userId;
+    client.username = typeof msg.username === 'string' ? msg.username : 'Player';
+    client.avatar = typeof msg.avatar === 'string' ? msg.avatar : 'cat-orange';
+    client.role = typeof msg.role === 'string' ? msg.role : 'student';
 
     addClientToRoom(client);
-    if (!client.userId) return;
-    touchPresence(roomId, client.userId, true);
+    touchPresence(roomId, userId, true);
 
     if (typeof msg.x === 'number' && typeof msg.y === 'number') {
       updateLivePlayerPosition(roomId, {
@@ -289,15 +190,12 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         username: client.username,
         avatar: client.avatar,
         role: client.role,
-        stage: client.stage,
         x: msg.x,
         y: msg.y,
         vx: typeof msg.vx === 'number' ? msg.vx : 0,
         vy: typeof msg.vy === 'number' ? msg.vy : 0,
         facing: msg.f === -1 ? -1 : 1,
         onGround: Boolean(msg.g ?? true),
-        tag: client.tag,
-        colors: client.colors,
       });
     }
 
@@ -306,8 +204,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
       JSON.stringify({
         t: 'snapshot',
         players: snapshot,
-        obstacles: getLiveRoomObstacles(roomId),
-        st: Date.now(),
       }),
     );
     if (!client.socket.destroyed && client.socket.writable) {
@@ -322,9 +218,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         un: client.username,
         av: client.avatar,
         r: client.role,
-        stg: client.stage,
-        tg: client.tag,
-        cl: client.colors,
         x: typeof msg.x === 'number' ? msg.x : 120,
         y: typeof msg.y === 'number' ? msg.y : 600,
         f: msg.f === -1 ? -1 : 1,
@@ -337,139 +230,8 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
 
   if (!client.roomId || !client.userId) return;
 
-  if (t === 'obstacle') {
-    const op = typeof msg.op === 'string' ? msg.op : '';
-    const stg = typeof msg.stg === 'number' ? msg.stg : 1;
-    if (op === 'crumble' && typeof msg.idx === 'number') {
-      const at = typeof msg.at === 'number' ? msg.at : Date.now();
-      recordRoomCrumble(client.roomId, stg, msg.idx, at);
-      broadcastRoomEvent(
-        client.roomId,
-        {
-          t: 'obstacle',
-          op: 'crumble',
-          stg,
-          idx: msg.idx,
-          at,
-        },
-        client.userId,
-        client.id,
-      );
-    } else if (op === 'stomp' && typeof msg.id === 'string') {
-      const until = typeof msg.until === 'number' ? msg.until : Date.now() + 6000;
-      recordRoomStomp(client.roomId, stg, msg.id, until);
-      broadcastRoomEvent(
-        client.roomId,
-        {
-          t: 'obstacle',
-          op: 'stomp',
-          stg,
-          id: msg.id,
-          until,
-        },
-        client.userId,
-        client.id,
-      );
-    } else if (op === 'powerup' && typeof msg.id === 'string') {
-      const until = typeof msg.until === 'number' ? msg.until : Date.now() + 40000;
-      recordRoomPowerUp(client.roomId, stg, msg.id, until);
-      broadcastRoomEvent(
-        client.roomId,
-        {
-          t: 'obstacle',
-          op: 'powerup',
-          stg,
-          id: msg.id,
-          until,
-        },
-        client.userId,
-        client.id,
-      );
-    } else if (op === 'shoot' && typeof msg.pid === 'string') {
-      broadcastRoomEvent(
-        client.roomId,
-        {
-          t: 'obstacle',
-          op: 'shoot',
-          stg,
-          pid: msg.pid,
-          x: typeof msg.x === 'number' ? msg.x : 0,
-          y: typeof msg.y === 'number' ? msg.y : 0,
-          vx: typeof msg.vx === 'number' ? msg.vx : 14,
-          len: typeof msg.len === 'number' ? msg.len : undefined,
-          thk: typeof msg.thk === 'number' ? msg.thk : undefined,
-          color: typeof msg.color === 'string' ? msg.color : undefined,
-          glow: typeof msg.glow === 'string' ? msg.glow : undefined,
-          gun: typeof msg.gun === 'string' ? msg.gun : undefined,
-          dmg: typeof msg.dmg === 'number' ? msg.dmg : undefined,
-          weapon: typeof msg.weapon === 'string' ? msg.weapon : undefined,
-          shooterRole: typeof msg.shooterRole === 'string' ? msg.shooterRole : client.role,
-          shooterId: typeof msg.shooterId === 'string' ? msg.shooterId : client.userId,
-        },
-        client.userId,
-        client.id,
-      );
-    }
-    return;
-  }
-
-  if (t === 'cmd') {
-    if (msg.op !== 'hit' && client.role !== 'teacher' && client.role !== 'admin') return;
-    // rope_all_clear: server ikut melepas tali di live-state & connection semua client
-    // supaya snapshot/heartbeat berikutnya tidak mengembalikan tali yang sudah dilepas.
-    if (msg.op === 'rope_all_clear') {
-      clearRoomRopes(client.roomId);
-      client.ropedById = null;
-    }
-    if (msg.op === 'rope' && typeof msg.targetId === 'string') {
-      // Tali sekarang murni command-driven: live-state di-update di sini supaya
-      // snapshot player baru tetap tahu siapa yang sedang diikat tali.
-      const live = getLiveRoomPositions(client.roomId);
-      const entry = live.get(msg.targetId);
-      if (entry) {
-        updateLivePlayerPosition(client.roomId, {
-          userId: entry.userId,
-          username: entry.username ?? '',
-          avatar: entry.avatar ?? 'cat-orange',
-          role: entry.role ?? 'student',
-          stage: entry.stage ?? 1,
-          x: entry.x,
-          y: entry.y,
-          vx: entry.vx ?? 0,
-          vy: entry.vy ?? 0,
-          facing: entry.facing === -1 ? -1 : 1,
-          onGround: entry.onGround ?? true,
-          tag: entry.tag,
-          colors: entry.colors,
-          ropedById: msg.value === false ? null : (typeof msg.byId === 'string' ? msg.byId : 'admin'),
-        });
-      }
-    }
-    broadcastRoomEvent(client.roomId, { ...msg }, client.userId, client.id);
-    return;
-  }
-
   // High-frequency kinematics / movement packet (slimmed payload supported)
   if (t === 'm') {
-    if (isRoomDeleted(client.roomId)) {
-      if (!client.socket.destroyed && client.socket.writable) {
-        client.socket.write(
-          encodeWsTextFrame(JSON.stringify({ t: 'evt', name: 'room-status', data: { status: 'deleted' } })),
-        );
-      }
-      return;
-    }
-    if (client.role !== 'teacher' && isPlayerKicked(client.roomId, client.userId)) {
-      if (!client.socket.destroyed && client.socket.writable) {
-        client.socket.write(
-          encodeWsTextFrame(
-            JSON.stringify({ t: 'evt', name: 'kicked', data: { playerId: client.userId, left: false } }),
-          ),
-        );
-      }
-      removeClientFromRoom(client);
-      return;
-    }
     const x = typeof msg.x === 'number' ? msg.x : 0;
     const y = typeof msg.y === 'number' ? msg.y : 0;
     const vx = typeof msg.vx === 'number' ? msg.vx : 0;
@@ -479,15 +241,12 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
     const isDying = Boolean(msg.d);
     const deathStartedAt = typeof msg.ds === 'number' ? msg.ds : undefined;
     const burnUntil = typeof msg.b === 'number' ? msg.b : undefined;
-    const stage = typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : client.stage;
-    client.stage = stage;
 
     const updated = updateLivePlayerPosition(client.roomId, {
       userId: client.userId,
       username: client.username,
       avatar: client.avatar,
       role: client.role,
-      stage,
       x,
       y,
       vx,
@@ -497,11 +256,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
       isDying,
       deathStartedAt,
       burnUntil,
-      tag: msg.tg === null || typeof msg.tg === 'string' ? (client.tag = msg.tg) : client.tag,
-      colors:
-        msg.cl === null || (msg.cl && typeof msg.cl === 'object')
-          ? (client.colors = msg.cl as WsClient['colors'])
-          : client.colors,
     });
     if (!updated) return;
 
@@ -513,7 +267,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         un: client.username,
         av: client.avatar,
         r: client.role,
-        stg: stage,
         x,
         y,
         vx,
@@ -524,8 +277,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         ds: deathStartedAt,
         b: burnUntil,
         ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
-        tg: client.tag,
-        cl: client.colors,
       },
       client.userId,
       client.id,
@@ -560,7 +311,6 @@ function attachWsConnection(socket: Socket) {
     username: '',
     avatar: '',
     role: 'student',
-    stage: 1,
   };
 
   let buffer: Buffer = Buffer.alloc(0);
@@ -658,214 +408,18 @@ export function handleWsUpgrade(req: http.IncomingMessage, socket: Duplex) {
   attachWsConnection(socket as Socket);
 }
 
-function handleRawPosHttpRequest(req: http.IncomingMessage, res: http.ServerResponse) {
-  const wsPort = getHub().port || 3001;
-  const rawUrl = req.url || '/api/pos';
-
-  if (req.method === 'GET') {
-    if (rawUrl.includes('stream=1')) {
-      const qIdx = rawUrl.indexOf('?');
-      const params = new URLSearchParams(qIdx >= 0 ? rawUrl.slice(qIdx + 1) : '');
-      const roomId = params.get('r') ?? '';
-      const userId = params.get('u') ?? '';
-      if (!roomId) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end('{"error":"missing room"}');
-        return;
-      }
-
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
-      res.socket?.setNoDelay(true);
-
-      const sendRaw = (jsonText: string): boolean => {
-        if (res.writableEnded || res.destroyed) return false;
-        try {
-          res.write(`data: ${jsonText}\n\n`);
-          return true;
-        } catch {
-          return false;
-        }
-      };
-
-      const snapshot = Array.from(getLiveRoomPositions(roomId).values());
-      sendRaw(JSON.stringify({ t: 'snapshot', players: snapshot }));
-
-      const cleanupSse = registerSseClient(roomId, userId, sendRaw);
-      const keepAliveTimer = setInterval(() => {
-        if (res.writableEnded || res.destroyed) {
-          clearInterval(keepAliveTimer);
-          cleanupSse();
-          return;
-        }
-        try {
-          res.write(': keepalive\n\n');
-        } catch {
-          clearInterval(keepAliveTimer);
-          cleanupSse();
-        }
-      }, 15000);
-
-      req.on('close', () => {
-        clearInterval(keepAliveTimer);
-        cleanupSse();
-      });
-      return;
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-    });
-    res.end(JSON.stringify({ wsPort }));
-    return;
-  }
-
-  if (req.method === 'POST') {
-    let rawBody = '';
-    req.setEncoding('utf8');
-    req.on('data', (chunk: string) => {
-      if (rawBody.length < 16384) rawBody += chunk;
-    });
-    req.on('end', () => {
-      try {
-        const body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
-        const roomId = typeof body.r === 'string' ? body.r : '';
-        const userId = typeof body.u === 'string' ? body.u : '';
-        if (!roomId || !userId) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end('{"error":"invalid"}');
-          return;
-        }
-
-        if (isRoomDeleted(roomId)) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ wsPort, roomDeleted: true, rs: 'deleted', p: [] }));
-          return;
-        }
-        if (isPlayerKicked(roomId, userId)) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ wsPort, kicked: true, p: [] }));
-          return;
-        }
-
-        if (typeof body.x === 'number' && typeof body.y === 'number') {
-          const username = typeof body.un === 'string' ? body.un : 'Player';
-          const avatar = typeof body.av === 'string' ? body.av : 'cat-orange';
-          const role = typeof body.rl === 'string' ? body.rl : 'student';
-          const vx = typeof body.vx === 'number' ? body.vx : 0;
-          const vy = typeof body.vy === 'number' ? body.vy : 0;
-          const facing: 1 | -1 = body.f === -1 ? -1 : 1;
-          const onGround = Boolean(body.g ?? true);
-          const isDying = Boolean(body.d);
-          const deathStartedAt = typeof body.ds === 'number' ? body.ds : undefined;
-          const burnUntil = typeof body.b === 'number' ? body.b : undefined;
-
-          const updated = updateLivePlayerPosition(roomId, {
-            userId,
-            username,
-            avatar,
-            role,
-            x: body.x,
-            y: body.y,
-            vx,
-            vy,
-            facing,
-            onGround,
-            isDying,
-            deathStartedAt,
-            burnUntil,
-          });
-
-          if (updated) {
-            broadcastRoomEvent(
-              roomId,
-              {
-                t: 'm',
-                u: userId,
-                un: username,
-                av: avatar,
-                r: role,
-                x: body.x,
-                y: body.y,
-                vx,
-                vy,
-                f: facing,
-                g: onGround ? 1 : 0,
-                d: isDying ? 1 : 0,
-                ds: deathStartedAt,
-                b: burnUntil,
-                ts: Date.now(),
-              },
-              userId,
-            );
-          }
-        } else {
-          touchPresence(roomId, userId);
-        }
-
-        const liveMap = getLiveRoomPositions(roomId);
-        const peers: Record<string, unknown>[] = [];
-        const now = Date.now();
-        for (const p of liveMap.values()) {
-          if (p.userId === userId) continue;
-          if (now - p.updatedAt > 6000) continue;
-          peers.push({
-            u: p.userId,
-            un: p.username,
-            av: p.avatar,
-            rl: p.role,
-            x: p.x,
-            y: p.y,
-            vx: p.vx,
-            vy: p.vy,
-            f: p.facing,
-            g: p.onGround ? 1 : 0,
-            d: p.isDying ? 1 : 0,
-            ds: p.deathStartedAt,
-            b: p.burnUntil,
-          });
-        }
-
-        res.writeHead(200, {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-store',
-        });
-        res.end(JSON.stringify({ wsPort, rs: getLiveRoomStatus(roomId), p: peers }));
-      } catch {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end('{"p":[]}');
-      }
-    });
-    return;
-  }
-
-  res.writeHead(405);
-  res.end();
-}
-
 /**
- * Hooks directly into Next.js's main HTTP server (port 3000) so:
- * 1) Players can establish a Native WebSocket at `/ws-game` or `/api/pos` on port 3000.
- * 2) HTTP/SSE fallback requests to `/api/pos` are answered directly at the raw Node `http.Server` layer
- *    in ~0.1ms (completely bypassing Next.js App Router overhead!).
+ * Hooks directly into Next.js's main HTTP server (port 3000) so players outside LAN
+ * accessing via the school's Static IP / Port-Forward / Reverse Proxy on port 3000
+ * can establish a Native WebSocket at `ws://<IP_STATIC>:3000/ws-game` WITHOUT needing port 3001 opened!
  */
 function hookMainHttpServer(hub: WsHubState) {
-  hub.upgradeHandler = handleWsUpgrade;
-  hub.rawHttpHandler = handleRawPosHttpRequest;
-  if (hub.samePortHookedV3) return;
+  if (hub.samePortHooked) return;
   try {
     const proc = process as unknown as {
       _getActiveHandles?: () => Array<
         http.Server & {
           __llysSamePortWsHooked?: boolean;
-          __llysSamePortWsHookedV2?: boolean;
-          __llysSamePortWsHookedV3?: boolean;
-          __llysWsUpgradeHandler?: (req: http.IncomingMessage, socket: Duplex) => void;
         }
       >;
     };
@@ -877,12 +431,9 @@ function hookMainHttpServer(hub: WsHubState) {
       if (!addr || typeof addr !== 'object' || typeof addr.port !== 'number') continue;
       if (addr.port === hub.port && hub.port !== 0) continue;
 
-      h.__llysWsUpgradeHandler = handleWsUpgrade;
-
-      if (!h.__llysSamePortWsHookedV3) {
-        h.__llysSamePortWsHookedV3 = true;
-        h.__llysSamePortWsHookedV2 = true;
+      if (!h.__llysSamePortWsHooked) {
         h.__llysSamePortWsHooked = true;
+        // Enable TCP_NODELAY on every socket hitting main port 3000 too
         h.on('connection', (sock: Socket) => {
           try {
             sock.setNoDelay(true);
@@ -891,41 +442,20 @@ function hookMainHttpServer(hub: WsHubState) {
           }
         });
 
-        const prevEmit = h.emit.bind(h);
+        const origEmit = h.emit.bind(h);
         h.emit = ((event: string, ...args: unknown[]) => {
           if (event === 'upgrade') {
             const req = args[0] as http.IncomingMessage | undefined;
             const socket = args[1] as Duplex | undefined;
-            if (
-              req &&
-              socket &&
-              typeof req.url === 'string' &&
-              (req.url.startsWith('/ws-game') || req.url.startsWith('/api/pos'))
-            ) {
-              const handler = getHub().upgradeHandler ?? h.__llysWsUpgradeHandler ?? handleWsUpgrade;
-              handler(req, socket);
+            if (req && socket && typeof req.url === 'string' && req.url.startsWith('/ws-game')) {
+              handleWsUpgrade(req, socket);
               return true;
             }
           }
-          if (event === 'request') {
-            const req = args[0] as http.IncomingMessage | undefined;
-            const res = args[1] as http.ServerResponse | undefined;
-            if (
-              req &&
-              res &&
-              typeof req.url === 'string' &&
-              (req.url === '/api/pos' || req.url.startsWith('/api/pos?'))
-            ) {
-              const rawHandler = getHub().rawHttpHandler ?? handleRawPosHttpRequest;
-              rawHandler(req, res);
-              return true;
-            }
-          }
-          return prevEmit(event, ...args);
+          return origEmit(event, ...args);
         }) as typeof h.emit;
       }
       hub.samePortHooked = true;
-      hub.samePortHookedV3 = true;
     }
   } catch {
     // non-fatal if _getActiveHandles is unavailable

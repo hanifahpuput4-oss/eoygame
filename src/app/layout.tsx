@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Fredoka, Nunito } from 'next/font/google';
 import PwaInstaller from '@/components/pwa/pwa-installer';
-import SiteFooter from '@/components/site-footer';
 import './globals.css';
 
 const fredoka = Fredoka({
@@ -61,7 +60,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="id">
       <body className={`${fredoka.variable} ${nunito.variable}`}>
         {children}
-        <SiteFooter />
         <PwaInstaller />
       </body>
     </html>

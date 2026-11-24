@@ -19,7 +19,6 @@ export async function GET() {
         email: user.email,
         username: user.username,
         fullName: user.fullName,
-        externalId: user.externalId ?? null,
         role: user.role,
         avatar: user.avatar,
         totalPoints: user.totalPoints,
@@ -57,13 +56,14 @@ export async function PATCH(req: NextRequest) {
 
     if (body.action === 'update-profile') {
       const schema = z.object({
+        fullName: z.string().trim().min(2, 'Nama lengkap minimal 2 karakter').max(80),
         username: z
           .string()
           .trim()
           .toLowerCase()
           .min(3, 'Username minimal 3 karakter')
-          .max(24)
-          .regex(/^[a-z0-9_]+$/, 'Username hanya boleh huruf kecil, angka, dan underscore'),
+          .max(30)
+          .regex(/^[a-z0-9_.-]+$/, 'Username hanya boleh huruf kecil, angka, titik, strip, atau underscore'),
         avatar: avatarEnum.optional(),
       });
       const input = schema.parse(body);
@@ -80,6 +80,7 @@ export async function PATCH(req: NextRequest) {
       await db
         .update(users)
         .set({
+          fullName: input.fullName,
           username: input.username,
           avatar: nextAvatar,
           updatedAt: new Date(),
@@ -94,8 +95,7 @@ export async function PATCH(req: NextRequest) {
           id: user.id,
           email: user.email,
           username: input.username,
-          fullName: user.fullName,
-          externalId: user.externalId ?? null,
+          fullName: input.fullName,
           role: user.role,
           avatar: nextAvatar,
         },
@@ -118,37 +118,6 @@ export async function PATCH(req: NextRequest) {
         .where(eq(users.id, user.id));
       invalidateUserSessionCache(user.id);
       return ok({ success: true });
-    }
-
-    if (body.action === 'admin-set-nick') {
-      // Khusus Admin: ganti nickname user lain (persist, seperti tag)
-      if (user.role !== 'admin') {
-        return fail('Hanya Administrator yang bisa ganti nickname user lain', 403);
-      }
-      const schema = z.object({
-        targetId: z.string().min(1),
-        username: z
-          .string()
-          .trim()
-          .min(1, 'Nickname minimal 1 karakter')
-          .max(20),
-      });
-      const input = schema.parse(body);
-      const nick = input.username;
-      const dup = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(and(eq(sql`lower(${users.username})`, nick), ne(users.id, input.targetId)))
-        .limit(1);
-      if (dup[0]) {
-        return fail('Nickname sudah digunakan pengguna lain', 409);
-      }
-      await db
-        .update(users)
-        .set({ username: nick, fullName: nick, updatedAt: new Date() })
-        .where(eq(users.id, input.targetId));
-      invalidateUserSessionCache(input.targetId);
-      return ok({ username: nick, fullName: nick });
     }
 
     return handleError(new Error('Aksi tidak dikenal'));

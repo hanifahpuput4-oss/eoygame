@@ -18,18 +18,6 @@ export default function LoginPage() {
       if (params.get('reason') === 'session_replaced') {
         setError('Sesi Anda di perangkat ini telah keluar otomatis karena akun login di perangkat lain.');
       }
-      const ssoError = params.get('sso_error');
-      if (ssoError) {
-        const messages: Record<string, string> = {
-          missing_token: 'Tiket SSO tidak ditemukan. Silakan masuk lewat Siakad lagi.',
-          not_configured: 'Login via Siakad belum diaktifkan.',
-          siakad_unreachable: 'Tidak bisa menghubungi server Siakad. Coba lagi nanti.',
-          invalid_token: 'Tiket SSO tidak valid atau sudah kadaluarsa. Silakan masuk lewat Siakad lagi.',
-          bad_response: 'Respons Siakad tidak valid. Silakan coba lagi.',
-          bad_role: 'Role akun Siakad tidak dikenali.',
-        };
-        setError(messages[ssoError] ?? 'Login via Siakad gagal. Silakan coba lagi.');
-      }
     }
   }, []);
 
@@ -49,11 +37,7 @@ export default function LoginPage() {
         return;
       }
       clearCachedData();
-      router.push(
-        data.user.role === 'teacher' || data.user.role === 'admin'
-          ? '/dashboard/teacher'
-          : '/dashboard/student',
-      );
+      router.push(data.user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
     } catch {
       setError('Tidak dapat terhubung ke server');
     } finally {
@@ -76,10 +60,10 @@ export default function LoginPage() {
 
         <form onSubmit={onSubmit} className="space-y-4" autoComplete='off'>
           <div>
-            <label htmlFor="email" className="label-field">Email</label>
+            <label htmlFor="email" className="label-field">Email atau Username</label>
             <input
               id="email"
-              type="email"
+              type="text"
               required
               autoCapitalize="none"
               autoCorrect="off"
@@ -87,7 +71,7 @@ export default function LoginPage() {
               className="input-field lowercase"
               value={email}
               onChange={(e) => setEmail(e.target.value.toLowerCase())}
-              placeholder="email akun (huruf kecil)"
+              placeholder="username atau email (huruf kecil)"
             />
           </div>
           <div>
@@ -114,22 +98,12 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="my-5 flex items-center gap-3">
-          <div className="h-px flex-1 bg-gray-200" />
-          <span className="text-xs text-gray-400">atau</span>
-          <div className="h-px flex-1 bg-gray-200" />
-        </div>
-
-        <a
-          href="/api/auth/sso"
-          className="w-full rounded-xl border-2 border-[var(--blue-info)] bg-white px-4 py-2.5 text-center font-semibold text-[var(--blue-info)] transition hover:bg-[var(--blue-info)] hover:text-white"
-        >
-          🎓 Masuk via Siakad
-        </a>
-
-        <div className="mt-4 text-center text-sm text-[var(--wood-text)]/70">
-          Masuk lewat akun Siakad. Belum punya akses? Hubungi admin sekolah.
-        </div>
+        <p className="mt-4 text-center text-sm">
+          Belum punya akun?{' '}
+          <Link href="/register" className="font-semibold text-[var(--blue-info)] underline">
+            Daftar di sini
+          </Link>
+        </p>
       </div>
     </main>
   );

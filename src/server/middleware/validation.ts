@@ -20,7 +20,7 @@ export const registerSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email: z.string().trim().toLowerCase().email('Email tidak valid').min(1, 'Email wajib diisi'),
+  email: z.string().trim().toLowerCase().min(1, 'Email atau username wajib diisi'),
   password: z.string().min(1, 'Password wajib diisi'),
 });
 

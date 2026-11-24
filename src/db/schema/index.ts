@@ -25,9 +25,7 @@ export const users = sqliteTable(
     username: text('username').notNull(),
     fullName: text('full_name').notNull(),
     passwordHash: text('password_hash').notNull(),
-    // SSO: NIS/NIP dari Siakad. Null untuk user yang daftar manual.
-    externalId: text('external_id'),
-    role: text('role', { enum: ['admin', 'teacher', 'student'] }).notNull(),
+    role: text('role', { enum: ['teacher', 'student'] }).notNull(),
     avatar: text('avatar').notNull().default('cat-blue'),
     totalPoints: integer('total_points').notNull().default(0),
     totalStars: integer('total_stars').notNull().default(0),
@@ -36,7 +34,6 @@ export const users = sqliteTable(
   (t) => ({
     emailIdx: uniqueIndex('users_email_idx').on(t.email),
     usernameIdx: uniqueIndex('users_username_idx').on(t.username),
-    externalIdIdx: uniqueIndex('users_external_id_idx').on(t.externalId),
   }),
 );
 
@@ -298,7 +295,6 @@ export const playerAnswers = sqliteTable(
     answer: text('answer').notNull(),
     isCorrect: integer('is_correct', { mode: 'boolean' }).notNull(),
     pointsEarned: integer('points_earned').notNull().default(0),
-    assisted: integer('assisted', { mode: 'boolean' }).notNull().default(false),
     timeSpent: integer('time_spent').notNull().default(0),
     answeredAt: integer('answered_at', { mode: 'timestamp' })
       .notNull()

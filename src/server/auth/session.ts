@@ -118,22 +118,14 @@ export async function destroySession(): Promise<void> {
   cookieStore.delete(SESSION_COOKIE);
 }
 
-export function isStaffRole(role?: string | null): boolean {
-  return role === 'teacher' || role === 'admin';
-}
-
 export async function requireUser(): Promise<User> {
   const user = await getCurrentUser();
   if (!user) throw new AuthError('UNAUTHENTICATED');
   return user;
 }
 
-export async function requireRole(role: 'teacher' | 'student' | 'admin'): Promise<User> {
+export async function requireRole(role: 'teacher' | 'student'): Promise<User> {
   const user = await requireUser();
-  if (role === 'teacher') {
-    if (user.role !== 'teacher' && user.role !== 'admin') throw new AuthError('FORBIDDEN');
-    return user;
-  }
   if (user.role !== role) throw new AuthError('FORBIDDEN');
   return user;
 }
