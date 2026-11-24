@@ -20,6 +20,7 @@ type CachedProfile = {
   role?: string;
   fullName?: string;
   username?: string;
+  externalId?: string | null;
   avatar?: AvatarKey;
 };
 
@@ -31,16 +32,11 @@ export default function UserSettingsForm() {
   const [role, setRole] = useState(initialProfile?.role ?? '');
   const [fullName, setFullName] = useState(initialProfile?.fullName ?? '');
   const [username, setUsername] = useState(initialProfile?.username ?? '');
+  const [externalId, setExternalId] = useState(initialProfile?.externalId ?? '');
   const [avatar, setAvatar] = useState<AvatarKey>(initialProfile?.avatar ?? 'cat-blue');
 
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
-
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordSaving, setPasswordSaving] = useState(false);
-  const [passwordMsg, setPasswordMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   useEffect(() => {
     const persisted = getPersistedCache<CachedProfile>('user:profile');
@@ -49,6 +45,7 @@ export default function UserSettingsForm() {
       setRole(persisted.role ?? '');
       setFullName(persisted.fullName ?? '');
       setUsername(persisted.username ?? '');
+      setExternalId(persisted.externalId ?? '');
       if (persisted.avatar) setAvatar(persisted.avatar);
       setLoading(false);
     }
@@ -60,6 +57,7 @@ export default function UserSettingsForm() {
         setRole(profile.role ?? '');
         setFullName(profile.fullName ?? '');
         setUsername(profile.username ?? '');
+        setExternalId(profile.externalId ?? '');
         if (profile.avatar) setAvatar(profile.avatar as AvatarKey);
         setCachedData('user:profile', profile);
       }
@@ -78,7 +76,6 @@ export default function UserSettingsForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'update-profile',
-          fullName,
           username,
           avatar,
         }),
@@ -95,42 +92,6 @@ export default function UserSettingsForm() {
     }
   }
 
-  async function onSavePassword(e: FormEvent) {
-    e.preventDefault();
-    setPasswordMsg(null);
-    if (newPassword !== confirmPassword) {
-      setPasswordMsg({ type: 'err', text: 'Konfirmasi password baru tidak sama' });
-      return;
-    }
-    if (newPassword.length < 6) {
-      setPasswordMsg({ type: 'err', text: 'Password baru minimal 6 karakter' });
-      return;
-    }
-    setPasswordSaving(true);
-    try {
-      const res = await fetch('/api/profile', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'change-password',
-          currentPassword,
-          newPassword,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setPasswordMsg({ type: 'err', text: data.error ?? 'Gagal mengubah password' });
-        return;
-      }
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setPasswordMsg({ type: 'ok', text: 'Password berhasil diubah.' });
-    } finally {
-      setPasswordSaving(false);
-    }
-  }
-
   if (loading) {
     return <DashboardLoader label="Memuat pengaturan akun..." cards={1} />;
   }
@@ -140,7 +101,7 @@ export default function UserSettingsForm() {
       <div>
         <h1 className="font-display text-2xl font-bold sm:text-3xl">Pengaturan Akun</h1>
         <p className="mt-1 text-sm text-[var(--wood-text)]/70">
-          Ubah nama lengkap, username tampilan di dalam game, avatar, atau ganti password akun Anda.
+          Ubah username tampilan di dalam game atau avatar akun Anda. Nama lengkap & NIS terkunci, sinkron dengan Siakad.
         </p>
       </div>
 
@@ -170,19 +131,30 @@ export default function UserSettingsForm() {
           </div>
 
           <div>
+            <label htmlFor="settings-external-id" className="label-field">
+              NIS / NIP (Terkunci)
+            </label>
+            <input
+              id="settings-external-id"
+              type="text"
+              className="input-field bg-black/5 opacity-75"
+              value={externalId}
+              disabled
+              placeholder="Belum terhubung Siakad"
+            />
+          </div>
+
+          <div>
             <label htmlFor="settings-fullname" className="label-field">
-              Nama Lengkap
+              Nama Lengkap (Terkunci, sinkron Siakad)
             </label>
             <input
               id="settings-fullname"
               type="text"
-              className="input-field"
+              className="input-field bg-black/5 opacity-75"
               value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="Masukkan nama lengkap"
-              minLength={2}
-              maxLength={80}
-              required
+              disabled
+              placeholder="Nama lengkap dari Siakad"
             />
           </div>
 
@@ -198,10 +170,12 @@ export default function UserSettingsForm() {
               spellCheck={false}
               className="input-field lowercase"
               value={username}
-              onChange={(e) => setUsername(e.target.value.toLowerCase())}
+              onChange={(e) => setUsername(e.target.value.replace(/[^a-z0-9_]/g, '').slice(0, 24))}
               placeholder="contoh: pakbudi_guru"
               minLength={3}
-              maxLength={30}
+              maxLength={24}
+              pattern="[a-z0-9_]+"
+              title="Hanya huruf kecil, angka, dan underscore"
               required
             />
           </div>
@@ -247,80 +221,6 @@ export default function UserSettingsForm() {
           <div className="pt-1">
             <button type="submit" className="btn-primary w-full sm:w-auto" disabled={profileSaving}>
               {profileSaving ? 'Menyimpan...' : 'Simpan Profil'}
-            </button>
-          </div>
-        </form>
-
-        <form onSubmit={onSavePassword} className="card-panel space-y-4">
-          <div className="border-b border-black/10 pb-3">
-            <h2 className="font-display text-lg font-bold">Ganti Password</h2>
-            <p className="text-xs text-[var(--wood-text)]/70">Gunakan minimal 6 karakter untuk keamanan akun.</p>
-          </div>
-
-          <div>
-            <label htmlFor="settings-current-pw" className="label-field">
-              Password Lama
-            </label>
-            <input
-              id="settings-current-pw"
-              type="password"
-              className="input-field"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              placeholder="Masukkan password saat ini"
-              autoComplete="current-password"
-              required
-            />
-          </div>
-
-          <div>
-            <label htmlFor="settings-new-pw" className="label-field">
-              Password Baru
-            </label>
-            <input
-              id="settings-new-pw"
-              type="password"
-              className="input-field"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Minimal 6 karakter"
-              minLength={6}
-              autoComplete="new-password"
-              required
-            />
-          </div>
-
-          <div>
-            <label htmlFor="settings-confirm-pw" className="label-field">
-              Konfirmasi Password Baru
-            </label>
-            <input
-              id="settings-confirm-pw"
-              type="password"
-              className="input-field"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Ketik ulang password baru"
-              minLength={6}
-              autoComplete="new-password"
-              required
-            />
-          </div>
-
-          {passwordMsg && (
-            <div
-              role="status"
-              className={`rounded-xl px-3.5 py-2.5 text-sm font-semibold ${
-                passwordMsg.type === 'ok' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'
-              }`}
-            >
-              {passwordMsg.text}
-            </div>
-          )}
-
-          <div className="pt-1">
-            <button type="submit" className="btn-secondary w-full sm:w-auto" disabled={passwordSaving}>
-              {passwordSaving ? 'Memperbarui...' : 'Ubah Password'}
             </button>
           </div>
         </form>

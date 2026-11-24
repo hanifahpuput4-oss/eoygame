@@ -24,6 +24,11 @@ export type Player = {
   deathStartedAt?: number;
   burnUntil?: number;
   blasterAmmo?: number;
+  frozenUntil?: number;
+  frozenDeathAt?: number;
+  stunnedUntil?: number;
+  frozenByShooterId?: string;
+  frozenByWeapon?: string;
   blasterUntil?: number;
   isGodMode?: boolean;
   lastPacketAt?: number;
@@ -32,8 +37,8 @@ export type Player = {
   jailedUntil?: number;
   gun?: string | null;
   tag?: string | null;
+  originalFullName?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
-  clone?: { username: string; fullName?: string } | null;
   ropedById?: string | null;
   // Posisi terakhir admin yang mengikat tali (untuk safe-respawn di belakang admin)
   adminAnchor?: { x: number; y: number };
@@ -55,6 +60,9 @@ export type Projectile = {
   glow?: string;
   length?: number;
   thickness?: number;
+  weapon?: 'minigun' | 'laser' | 'megalaser' | 'ice' | 'stunt';
+  // Role-based hit rules: role penembak (admin/teacher/student), dibawa juga di projectile remote
+  shooterRole?: string;
 };
 
 export type BossProjectile = {
@@ -294,6 +302,26 @@ export function updateStageEntities(
 
 export type PhysicsSoundEvent = 'jump' | 'bounce' | 'burn' | 'death' | 'bossSpit';
 
+// Rule tembakan antar player:
+// 1. Siswa gabisa nembak ke player lain
+// 2. Guru bisa nembak ke siswa, tapi gabisa ke admin (dan sesama guru)
+// 3. Admin bisa nembak kesiapapun, baik siswa maupun guru
+export function canShooterHitTarget(shooterRole: string | undefined, targetRole: string | undefined): boolean {
+  const sRole = (shooterRole ?? 'student').toLowerCase();
+  const tRole = (targetRole ?? 'student').toLowerCase();
+
+  if (sRole === 'student') {
+    return false;
+  }
+  if (sRole === 'teacher') {
+    return tRole === 'student';
+  }
+  if (sRole === 'admin') {
+    return true;
+  }
+  return false;
+}
+
 export function updatePlayerPhysics(
   p: Player,
   input: { left: boolean; right: boolean; jump: boolean },
@@ -321,23 +349,58 @@ export function updatePlayerPhysics(
     ) => void;
     onCollectPowerUp?: (pu: StagePowerUp) => void;
     bossProjectiles?: BossProjectile[];
-    playerRounds?: { x: number; y: number; shooterId: string; damage?: number; len?: number; w?: number; h?: number }[];
-    onPlayerHitByRound?: (victimId: string, shooterId: string, dmg: number) => void;
+    playerRounds?: { id?: string; x: number; y: number; vx?: number; shooterId: string; damage?: number; len?: number; w?: number; h?: number; weapon?: string; shooterRole?: string }[];
+    onPlayerHitByRound?: (victimId: string, shooterId: string, dmg: number, weapon?: string, projId?: string) => void;
+    myPlayerId?: string;
   },
 ) {
   const now = Date.now();
 
-  // Admin weapon rounds: cek dulu sebelum jail early-return, biar player yang dibekukan admin tetap bisa ditembak & respawn
-  if (!p.isGodMode && !p.ropedById) {
+  // Incoming weapon rounds kena ke local player `p` (cek dulu sebelum jail early-return)
+  // Mode God kebal rintangan map (duri/monster/lahar), tapi tetap bisa ditembak oleh player
+  if (!p.ropedById && !p.isDying) {
     const pBox = { x: p.x, y: p.y, w: PLAYER_W, h: PLAYER_H };
     for (const pr of stageOptions?.playerRounds ?? []) {
       if (pr.shooterId === p.id) continue;
+      const shooterRole = pr.shooterRole ?? 'student';
+      if (!canShooterHitTarget(shooterRole, p.role)) continue;
+
       const rW = pr.w ?? 28;
       const rH = pr.h ?? 18;
       const isBigRound = (pr.len ?? 0) > 100;
       const bigH = isBigRound ? Math.max(rH, 120) : rH;
-      const rBox = { x: pr.x - (pr.len ?? rW), y: pr.y - bigH / 2, w: rW + (pr.len ?? 0), h: bigH };
+      const len = pr.len ?? rW;
+      const dir = (pr.vx ?? 1) >= 0 ? 1 : -1;
+      const rX = dir === 1 ? pr.x - len : pr.x;
+      const rBox = { x: rX, y: pr.y - bigH / 2, w: Math.max(rW, len), h: bigH };
+
       if (rectsOverlap(rBox, pBox)) {
+        const isIce = pr.weapon === 'ice';
+        const isStunt = pr.weapon === 'stunt';
+        if (isIce) {
+          p.isDying = false;
+          p.frozenUntil = now + 1200;
+          p.frozenDeathAt = now + 1200;
+          p.frozenByShooterId = pr.shooterId;
+          p.frozenByWeapon = 'ice';
+          p.vx = (p.x < pr.x ? -4 : 4);
+          p.vy = -3.5;
+          p.onGround = false;
+          stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1, 'ice', pr.id);
+          return;
+        }
+        if (isStunt) {
+          p.isDying = false;
+          p.frozenUntil = now + 1200;
+          p.frozenDeathAt = now + 1200;
+          p.stunnedUntil = now + 1200;
+          p.frozenByShooterId = pr.shooterId;
+          p.frozenByWeapon = 'stunt';
+          p.vx = 0;
+          p.vy = 0;
+          stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1, 'stunt', pr.id);
+          return;
+        }
         p.isDying = true;
         p.deathStartedAt = now;
         p.vx = 0;
@@ -348,17 +411,47 @@ export function updatePlayerPhysics(
         p.ridingPlatform = null;
         p.jailedUntil = undefined;
         onSoundEvent?.('death');
-        stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1);
+        stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1, pr.weapon, pr.id);
         return;
       }
     }
   }
-
   // Jailed: dibekukan admin, tidak bisa gerak & lompat sampai jailedUntil lewat
   if (p.jailedUntil && p.jailedUntil > now) {
     p.vx = 0;
     p.vy = 0;
     return;
+  }
+
+  // Ice/Stunt weapon effect: player dibekukan/dikejut sesaat (1.2s) lalu mati
+  if (p.frozenUntil && p.frozenUntil > now) {
+    if (p.stunnedUntil && p.stunnedUntil > now) {
+      // Stunt: getar kecil di tempat (efek kena listrik)
+      p.vx = (Math.random() - 0.5) * 1.2;
+      p.vy = 0;
+    }
+    // Ice: biarkan momentum dorongan jalan (nx dorongan mundur), ga bisa input
+    if (p.frozenDeathAt && now >= p.frozenDeathAt) {
+      p.isDying = true;
+      p.deathStartedAt = now;
+      p.vx = 0;
+      p.vy = -13.2;
+      p.onGround = false;
+      p.frozenUntil = undefined;
+      p.frozenDeathAt = undefined;
+      p.stunnedUntil = undefined;
+      onSoundEvent?.('death');
+      stageOptions?.onPlayerHitByRound?.(p.id, p.frozenByShooterId ?? '', 1, p.frozenByWeapon);
+      return;
+    }
+    return;
+  }
+  if (p.frozenUntil && p.frozenUntil <= now) {
+    p.frozenUntil = undefined;
+    p.frozenDeathAt = undefined;
+    p.stunnedUntil = undefined;
+    p.frozenByShooterId = undefined;
+    p.frozenByWeapon = undefined;
   }
 
   // Super Mario Bros style death animation sequence when hitting spikes or enemies
@@ -679,35 +772,35 @@ export function updatePlayerPhysics(
     }
   }
 
-  // Player-on-player stacking (gendong-gendongan)
+  // Player-on-player stacking (gendong-gendongan) & shooter hitting other
   for (const other of otherPlayers) {
     if (other.id === p.id) continue;
     if ((other.stage ?? 1) !== (p.stage ?? 1)) continue;
 
-    // Admin weapon rounds (laser/minigun/mega laser): kena player lain = KO (kecuali god mode)
-    for (const pr of stageOptions?.playerRounds ?? []) {
-      if (pr.shooterId === p.id) continue;
-      const rW = pr.w ?? 28;
-      const rH = pr.h ?? 18;
-      const isBigRound = (pr.len ?? 0) > 100;
-      const bigH = isBigRound ? Math.max(rH, 120) : rH;
-      const rBox = { x: pr.x - (pr.len ?? rW), y: pr.y - bigH / 2, w: rW + (pr.len ?? 0), h: bigH };
-      if (rectsOverlap(rBox, box) && !p.isGodMode && !p.ropedById) {
-        p.isDying = true;
-        p.deathStartedAt = now;
-        p.vx = 0;
-        p.vy = -13.2;
-        p.onGround = false;
-        p.ridingPlayerId = null;
-        p.lastCarrierX = undefined;
-        p.ridingPlatform = null;
-        p.jailedUntil = undefined;
-        onSoundEvent?.('death');
-        stageOptions?.onPlayerHitByRound?.(p.id, pr.shooterId, pr.damage ?? 1);
-        return;
+    // Cek apakah peluru yang ditembakkan `p` mengenai `other`
+    // Mode God kebal rintangan map, tapi tetap bisa ditembak oleh player
+    if (!other.ropedById && !other.isDying) {
+      const otherBox = { x: other.x, y: other.y, w: PLAYER_W, h: PLAYER_H };
+      for (const pr of stageOptions?.playerRounds ?? []) {
+        if (pr.shooterId !== p.id) continue;
+        const shooterRole = pr.shooterRole ?? p.role ?? 'student';
+        if (!canShooterHitTarget(shooterRole, other.role)) continue;
+
+        const rW = pr.w ?? 28;
+        const rH = pr.h ?? 18;
+        const isBigRound = (pr.len ?? 0) > 100;
+        const bigH = isBigRound ? Math.max(rH, 120) : rH;
+        const len = pr.len ?? rW;
+        const dir = (pr.vx ?? 1) >= 0 ? 1 : -1;
+        const rX = dir === 1 ? pr.x - len : pr.x;
+        const rBox = { x: rX, y: pr.y - bigH / 2, w: Math.max(rW, len), h: bigH };
+
+        if (rectsOverlap(rBox, otherBox)) {
+          stageOptions?.onPlayerHitByRound?.(other.id, p.id, pr.damage ?? 1, pr.weapon, pr.id);
+          break;
+        }
       }
     }
-
     // Diikat tali: no stacking, biar ga bisa "mengangkat"/terbang di atas admin
     if (p.ropedById || other.ropedById) continue;
 

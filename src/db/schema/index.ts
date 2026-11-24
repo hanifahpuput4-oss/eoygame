@@ -25,6 +25,8 @@ export const users = sqliteTable(
     username: text('username').notNull(),
     fullName: text('full_name').notNull(),
     passwordHash: text('password_hash').notNull(),
+    // SSO: NIS/NIP dari Siakad. Null untuk user yang daftar manual.
+    externalId: text('external_id'),
     role: text('role', { enum: ['admin', 'teacher', 'student'] }).notNull(),
     avatar: text('avatar').notNull().default('cat-blue'),
     totalPoints: integer('total_points').notNull().default(0),
@@ -34,6 +36,7 @@ export const users = sqliteTable(
   (t) => ({
     emailIdx: uniqueIndex('users_email_idx').on(t.email),
     usernameIdx: uniqueIndex('users_username_idx').on(t.username),
+    externalIdIdx: uniqueIndex('users_external_id_idx').on(t.externalId),
   }),
 );
 

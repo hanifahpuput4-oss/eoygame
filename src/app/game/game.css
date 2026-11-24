@@ -1211,7 +1211,7 @@
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   display: flex;
   align-items: flex-end;
   justify-content: space-between;

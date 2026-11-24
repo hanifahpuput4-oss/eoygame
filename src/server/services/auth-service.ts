@@ -60,17 +60,12 @@ export async function login(input: LoginInput) {
   const rows = await db
     .select()
     .from(users)
-    .where(
-      or(
-        eq(sql`lower(${users.email})`, identifier),
-        eq(sql`lower(${users.username})`, identifier),
-      ),
-    )
+    .where(eq(sql`lower(${users.email})`, identifier))
     .limit(1);
 
   const user = rows[0];
   if (!user || !verifyPassword(input.password, user.passwordHash)) {
-    throw new AuthServiceError('Email/username atau password salah', 401);
+    throw new AuthServiceError('Email atau password salah', 401);
   }
 
   await createSession(user.id);

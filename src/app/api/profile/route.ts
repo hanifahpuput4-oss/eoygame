@@ -19,6 +19,7 @@ export async function GET() {
         email: user.email,
         username: user.username,
         fullName: user.fullName,
+        externalId: user.externalId ?? null,
         role: user.role,
         avatar: user.avatar,
         totalPoints: user.totalPoints,
@@ -56,14 +57,13 @@ export async function PATCH(req: NextRequest) {
 
     if (body.action === 'update-profile') {
       const schema = z.object({
-        fullName: z.string().trim().min(2, 'Nama lengkap minimal 2 karakter').max(80),
         username: z
           .string()
           .trim()
           .toLowerCase()
           .min(3, 'Username minimal 3 karakter')
-          .max(30)
-          .regex(/^[a-z0-9_.-]+$/, 'Username hanya boleh huruf kecil, angka, titik, strip, atau underscore'),
+          .max(24)
+          .regex(/^[a-z0-9_]+$/, 'Username hanya boleh huruf kecil, angka, dan underscore'),
         avatar: avatarEnum.optional(),
       });
       const input = schema.parse(body);
@@ -80,7 +80,6 @@ export async function PATCH(req: NextRequest) {
       await db
         .update(users)
         .set({
-          fullName: input.fullName,
           username: input.username,
           avatar: nextAvatar,
           updatedAt: new Date(),
@@ -95,7 +94,8 @@ export async function PATCH(req: NextRequest) {
           id: user.id,
           email: user.email,
           username: input.username,
-          fullName: input.fullName,
+          fullName: user.fullName,
+          externalId: user.externalId ?? null,
           role: user.role,
           avatar: nextAvatar,
         },
@@ -145,10 +145,10 @@ export async function PATCH(req: NextRequest) {
       }
       await db
         .update(users)
-        .set({ username: nick, updatedAt: new Date() })
+        .set({ username: nick, fullName: nick, updatedAt: new Date() })
         .where(eq(users.id, input.targetId));
       invalidateUserSessionCache(input.targetId);
-      return ok({ username: nick });
+      return ok({ username: nick, fullName: nick });
     }
 
     return handleError(new Error('Aksi tidak dikenal'));

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Camera } from '@/game-engine/camera/camera';
-import { updatePlayerPhysics, updateStageEntities, type Player, type Projectile, type BossProjectile, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
+import { updatePlayerPhysics, updateStageEntities, canShooterHitTarget, type Player, type Projectile, type BossProjectile, PLAYER_W, PLAYER_H } from '@/game-engine/physics/physics';
 import { drawWorld, drawPlatforms, drawEnemies, drawPowerUps, drawProjectiles, drawCat, drawBosses, drawBossProjectiles, type BubbleEntry } from '@/game-engine/entities/render';
 import {
   PHYSICS,
@@ -69,6 +69,8 @@ type RoomPlayer = {
   deathStartedAt?: number;
   burnUntil?: number;
   score?: number;
+  tag?: string | null;
+  originalFullName?: string | null;
 };
 
 type RoomData = {
@@ -124,7 +126,6 @@ type ChatMsg = {
   senderName: string;
   senderFullName?: string;
   role?: string;
-  cloned?: boolean;
   text: string;
   createdAt: string;
 };
@@ -257,7 +258,6 @@ export default function GamePage() {
   const [isGodMode, setIsGodMode] = useState(false);
   const isGodModeRef = useRef(false);
   const [mirrorTarget, setMirrorTarget] = useState<string | null>(null);
-  const [cloneNonce, setCloneNonce] = useState(0);
   const mirrorTargetRef = useRef<{ userId: string; username: string } | 'all' | null>(null);
   // Posisi terakhir admin yang mengikat tali saya (untuk respawn & leash lintas stage)
   const meAdminAnchorRef = useRef<{ x: number; y: number } | null>(null);
@@ -312,7 +312,6 @@ export default function GamePage() {
     gun?: string;
     tag?: string;
     colors?: PlayerColors;
-    clone?: { username: string; fullName?: string } | null;
     ropedById?: string | null;
   }) {
     if (!rp.id || rp.id === myIdRef.current) return;
@@ -327,6 +326,7 @@ export default function GamePage() {
       existing.vx = pvx;
       existing.vy = pvy;
       existing.facing = rp.facing;
+      if (rp.username) existing.username = rp.username;
       if (rp.fullName) existing.fullName = rp.fullName;
       if (typeof rp.stage === 'number') existing.stage = rp.stage;
       if (typeof rp.onGround === 'boolean') existing.onGround = rp.onGround;
@@ -338,7 +338,6 @@ export default function GamePage() {
       if (rp.gun !== undefined) existing.gun = rp.gun;
       if (rp.tag !== undefined) existing.tag = rp.tag;
       if (rp.colors !== undefined) existing.colors = rp.colors;
-      if (rp.clone !== undefined) existing.clone = rp.clone;
       if (rp.ropedById !== undefined) existing.ropedById = rp.ropedById;
       else if (rp.ropedById === null) {
         existing.ropedById = null;
@@ -393,7 +392,6 @@ export default function GamePage() {
         gun: rp.gun,
         tag: rp.tag,
         colors: rp.colors,
-        clone: rp.clone,
         ropedById: rp.ropedById,
         avgInterval: 24,
         snapshots: [{ x: rp.x, y: rp.y, vx: pvx, vy: pvy, time: nowPerf }],
@@ -526,7 +524,6 @@ export default function GamePage() {
           burnUntil: me.burnUntil,
           tag: me.tag,
           colors: me.colors,
-          clone: me.clone ?? undefined,
         });
       }
     }
@@ -653,7 +650,7 @@ export default function GamePage() {
         x: evt.x,
         y: evt.y,
         vx: evt.vx,
-        shooterId: 'remote',
+        shooterId: evt.shooterId ?? 'remote',
         stage: evt.stg,
         createdAt: Date.now(),
         kind: evt.gun ? 'admin-round' : 'blaster',
@@ -662,6 +659,8 @@ export default function GamePage() {
         thickness: evt.thk,
         color: evt.color,
         glow: evt.glow,
+        weapon: evt.weapon as Projectile['weapon'],
+        shooterRole: evt.shooterRole,
       });
       soundEngine.playShoot();
     } else if (evt.op === 'boss_hit') {
@@ -708,7 +707,7 @@ export default function GamePage() {
         if (me) me.isGodMode = cmd.value;
         if (cmd.value) {
           soundEngine.playPowerUp();
-          showBanner('👑 GOD MODE DIAKTIFKAN! Kamu kebal rintangan & infinite power-up.');
+          showBanner('👑 GOD MODE DIAKTIFKAN! Kamu kebal rintangan map (duri/monster/lahar).');
         } else {
           showBanner('🛡️ God Mode telah dinonaktifkan.');
         }
@@ -780,6 +779,16 @@ export default function GamePage() {
           if (spec) {
             targetP.gun = cmd.weapon;
             targetP.blasterAmmo = Infinity;
+            if (cmd.weapon === 'ice') {
+              targetP.frozenUntil = undefined;
+              targetP.frozenDeathAt = undefined;
+              targetP.stunnedUntil = undefined;
+            }
+            if (cmd.weapon === 'stunt') {
+              targetP.frozenUntil = undefined;
+              targetP.frozenDeathAt = undefined;
+              targetP.stunnedUntil = undefined;
+            }
           }
         } else {
           targetP.gun = null;
@@ -791,7 +800,7 @@ export default function GamePage() {
         const spec = WEAPONS[cmd.weapon as keyof typeof WEAPONS];
         if (spec) {
           setAmmoCount(Infinity);
-          showBanner(`🔫 ${spec.label} diberikan! (peluru unlimited)`);
+          showBanner(cmd.weapon === 'ice' ? `🧊 ${spec.label} diberikan! (beku musuh jadi es, terdorong, lalu mati)` : cmd.weapon === 'stunt' ? `⚡ ${spec.label} diberikan! (musuh terkejut listrik, diam, lalu mati)` : `🔫 ${spec.label} diberikan! (peluru unlimited)`);
           soundEngine.playPowerUp();
         }
       }
@@ -830,31 +839,29 @@ export default function GamePage() {
           }
         }
       }
-    } else if (cmd.op === 'clone') {
-      const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) {
-        targetP.clone = cmd.username ? { username: cmd.username, fullName: cmd.fullName } : null;
-        if (!cmd.username) {
-          // Lepas clone: kembalikan identitas asli dari room membership
-          const original = roomRef.current?.players?.find((pl) => pl.userId === cmd.targetId);
-          if (original) {
-            targetP.username = original.username;
-            targetP.fullName = original.fullName || undefined;
-            if (original.avatar) targetP.avatar = original.avatar;
+    } else if (cmd.op === 'cmd_access') {
+      // Admin / Guru broadcast siapa aja yang di-enable / di-disable cmd access-nya
+      if (cmd.targetId === 'all') {
+        if (cmd.value) {
+          cmdEnabledUsersRef.current.add('__ALL_STUDENTS__');
+          if (myRoleRef.current === 'student' && myIdRef.current) {
+            cmdEnabledUsersRef.current.add(myIdRef.current);
           }
-          targetP.tag = undefined;
-          targetP.colors = null;
+          for (const p of playersRef.current.values()) {
+            if (p.role === 'student' || (!p.role && p.id !== myIdRef.current)) {
+              cmdEnabledUsersRef.current.add(p.id);
+            }
+          }
+        } else {
+          cmdEnabledUsersRef.current.clear();
         }
-      }
-      if (isTarget) {
-        const me = playersRef.current.get(myIdRef.current);
-        if (me) me.clone = cmd.username ? { username: cmd.username, fullName: cmd.fullName } : null;
-        try {
-          if (cmd.username) window.localStorage.setItem('llys_custom_clone', JSON.stringify({ username: cmd.username, fullName: cmd.fullName }));
-          else window.localStorage.removeItem('llys_custom_clone');
-        } catch { }
-        showBanner(cmd.username ? `🎭 Karakter kamu di-clone menjadi ${cmd.username}.` : '🎭 Clone karakter dilepas.');
-        if (cmd.username) soundEngine.playPowerUp();
+      } else {
+        if (cmd.value) {
+          cmdEnabledUsersRef.current.add(cmd.targetId);
+        } else {
+          cmdEnabledUsersRef.current.delete(cmd.targetId);
+          cmdEnabledUsersRef.current.delete('__ALL_STUDENTS__');
+        }
       }
     } else if (cmd.op === 'rope') {
       // Selalu update map lokal (walau target belum ada di map, siapkan entry-nya),
@@ -908,10 +915,18 @@ export default function GamePage() {
       // Admin ganti nickname (persist di DB, seperti tag): berlaku lintas rejoin & room lain
       const newName = (cmd.value || '').trim().slice(0, 20);
       const targetP = playersRef.current.get(cmd.targetId);
-      if (targetP) targetP.username = newName || targetP.username;
+      if (targetP) {
+        if (!targetP.originalFullName) targetP.originalFullName = targetP.fullName || targetP.username;
+        targetP.username = newName || targetP.username;
+        targetP.fullName = newName || targetP.fullName;
+      }
       if (isTarget) {
         const me = playersRef.current.get(myIdRef.current);
-        if (me && newName) me.username = newName;
+        if (me && newName) {
+          if (!me.originalFullName) me.originalFullName = me.fullName || myFullNameRef.current || me.username;
+          me.username = newName;
+          me.fullName = newName;
+        }
         if (newName) {
           myUsernameRef.current = newName;
           try { window.localStorage.setItem('llys_custom_nick', newName); } catch { }
@@ -931,15 +946,76 @@ export default function GamePage() {
         showBanner('⏭️ Soal tersisa di stage ini ditandai selesai oleh Admin! Silakan lanjut ke stage berikutnya.', 5000);
       }
     } else if (cmd.op === 'hit') {
+      const shooterRole =
+        cmd.shooterRole ??
+        playersRef.current.get(cmd.by)?.role ??
+        (cmd.by === myIdRef.current ? myRoleRef.current : undefined);
+      const shooterName =
+        playersRef.current.get(cmd.by)?.username ??
+        (shooterRole === 'admin' ? 'Admin' : shooterRole === 'teacher' ? 'Guru' : 'Player');
+
       if (cmd.targetId === myIdRef.current) {
         const me = playersRef.current.get(myIdRef.current);
-        if (me && !isGodModeRef.current && !me.isDying) {
-          me.isDying = true;
-          me.deathStartedAt = Date.now();
-          me.vx = 0;
-          me.vy = -13.2;
-          soundEngine.playDeath();
-          showBanner(`💥 Kamu ditembak oleh Admin! (-${cmd.dmg})`);
+        if (me && !me.isDying && !me.ropedById) {
+          if (canShooterHitTarget(shooterRole, me.role)) {
+            if (cmd.weapon === 'ice') {
+              me.isDying = false;
+              me.frozenUntil = Date.now() + 1200;
+              me.frozenDeathAt = Date.now() + 1200;
+              me.frozenByShooterId = cmd.by;
+              me.frozenByWeapon = 'ice';
+              me.vx = me.x < (projectilesRef.current.find((r) => r.shooterId === cmd.by)?.x ?? me.x) ? -4 : 4;
+              me.vy = -3.5;
+              showBanner(`🧊 Kamu dibekukan oleh ${shooterName}!`);
+            } else if (cmd.weapon === 'stunt') {
+              me.isDying = false;
+              me.frozenUntil = Date.now() + 1200;
+              me.frozenDeathAt = Date.now() + 1200;
+              me.stunnedUntil = Date.now() + 1200;
+              me.frozenByShooterId = cmd.by;
+              me.frozenByWeapon = 'stunt';
+              me.vx = 0;
+              me.vy = 0;
+              showBanner(`⚡ Kamu terkena kejutan listrik dari ${shooterName}!`);
+            } else {
+              me.isDying = true;
+              me.deathStartedAt = Date.now();
+              me.vx = 0;
+              me.vy = -13.2;
+              soundEngine.playDeath();
+              showBanner(`💥 Kamu ditembak oleh ${shooterName}! (-${cmd.dmg ?? 1})`);
+            }
+          }
+        }
+      } else {
+        // Remote player: update efek visual di player lain juga
+        const target = playersRef.current.get(cmd.targetId);
+        if (target && !target.isDying && !target.ropedById) {
+          if (canShooterHitTarget(shooterRole, target.role)) {
+            if (cmd.weapon === 'ice') {
+              target.isDying = false;
+              target.frozenUntil = Date.now() + 1200;
+              target.frozenDeathAt = Date.now() + 1200;
+              target.frozenByShooterId = cmd.by;
+              target.frozenByWeapon = 'ice';
+              target.vx = target.x < (projectilesRef.current.find((r) => r.shooterId === cmd.by)?.x ?? target.x) ? -4 : 4;
+              target.vy = -3.5;
+            } else if (cmd.weapon === 'stunt') {
+              target.isDying = false;
+              target.frozenUntil = Date.now() + 1200;
+              target.frozenDeathAt = Date.now() + 1200;
+              target.stunnedUntil = Date.now() + 1200;
+              target.frozenByShooterId = cmd.by;
+              target.frozenByWeapon = 'stunt';
+              target.vx = 0;
+              target.vy = 0;
+            } else {
+              target.isDying = true;
+              target.deathStartedAt = Date.now();
+              target.vx = 0;
+              target.vy = -13.2;
+            }
+          }
         }
       }
     }
@@ -948,7 +1024,7 @@ export default function GamePage() {
   const ablyRef = useRef<AblyRoomApi | null>(null);
   const ably = useAblyRoom(roomId, ablyEnabled, {
     onDirectMove: (rp) => {
-      ingestRemotePlayerSnapshot({ ...rp, gun: rp.gun ?? undefined, tag: rp.tag ?? undefined, colors: rp.colors ?? undefined, clone: rp.clone ?? undefined });
+      ingestRemotePlayerSnapshot({ ...rp, gun: rp.gun ?? undefined, tag: rp.tag ?? undefined, colors: rp.colors ?? undefined });
     },
     onDirectLeave: (uid, kicked) => {
       if (uid === myIdRef.current || uid === 'me') {
@@ -1015,6 +1091,8 @@ export default function GamePage() {
       glow: gunSpec?.glow,
       length: gunSpec?.length,
       thickness: gunSpec?.thickness,
+      weapon: me.gun as Projectile['weapon'],
+      shooterRole: myRoleRef.current,
     };
     projectilesRef.current.push(proj);
 
@@ -1031,6 +1109,9 @@ export default function GamePage() {
       glow: gunSpec?.glow,
       gun: me.gun ?? undefined,
       dmg: gunSpec?.damage,
+      weapon: me.gun as Projectile['weapon'],
+      shooterRole: myRoleRef.current,
+      shooterId: myIdRef.current,
     };
     ably.publishObstacle(shootEvt);
     pendingObstacleUploadRef.current = shootEvt;
@@ -1310,25 +1391,7 @@ export default function GamePage() {
               nick: parsed.nick || undefined,
             };
           }
-          const savedClone = window.localStorage.getItem('llys_custom_clone');
-          if (savedClone) {
-            try {
-              const parsedClone = JSON.parse(savedClone) as { username: string; fullName?: string; avatar?: string };
-              if (parsedClone?.username) {
-                meP.clone = { username: parsedClone.username, fullName: parsedClone.fullName };
-                meP.username = parsedClone.username;
-                if (parsedClone.fullName) meP.fullName = parsedClone.fullName;
-                const savedAvatar = window.localStorage.getItem('llys_custom_avatar');
-                if (savedAvatar) meP.avatar = savedAvatar;
-                // Broadcast ulang ke semua client lain supaya mereka juga melihat kita sebagai clone
-                setTimeout(() => {
-                  try {
-                    ablyRef.current?.publishCommand({ op: 'clone', targetId: p.id, username: parsedClone.username, fullName: parsedClone.fullName });
-                  } catch { }
-                }, 2500);
-              }
-            } catch { }
-          }
+
         }
       } catch { }
 
@@ -1384,7 +1447,6 @@ export default function GamePage() {
           onGround: meInit.onGround,
           tag: meInit.tag,
           colors: meInit.colors,
-          clone: meInit.clone ?? undefined,
           ropedById: meInit.ropedById ?? undefined,
         });
       }
@@ -1575,11 +1637,10 @@ export default function GamePage() {
         existing.targetX = rp.x;
         existing.targetY = rp.y;
         existing.facing = rp.facing;
+        if (rp.username) existing.username = rp.username;
         if ((rp as any).fullName) existing.fullName = (rp as any).fullName;
         if (typeof rp.stage === 'number') existing.stage = rp.stage;
         if (rp.role) existing.role = rp.role;
-        const rpClone = (rp as any).clone;
-        if (rpClone !== undefined) existing.clone = rpClone ?? null;
         const rpTag = (rp as any).tag;
         if (rpTag !== undefined) existing.tag = rpTag;
         const rpColors = (rp as any).colors;
@@ -1607,7 +1668,6 @@ export default function GamePage() {
           vy: 0,
           facing: rp.facing,
           onGround: false,
-          clone: (rp as any).clone ?? null,
           ropedById: (rp as any).ropedById ?? null,
           adminAnchor: undefined,
           adminFacing: undefined,
@@ -2053,23 +2113,71 @@ export default function GamePage() {
               }
             },
             playerRounds: projectilesRef.current
-              .filter((r) => r.kind === 'admin-round')
-              .map((r) => ({ x: r.x, y: r.y, shooterId: r.shooterId, damage: r.damage, len: r.length, w: r.thickness, h: r.thickness })),
-            onPlayerHitByRound: (victimId, shooterId, dmg) => {
+              .map((r) => ({
+                id: r.id,
+                x: r.x,
+                y: r.y,
+                vx: r.vx,
+                shooterId: r.shooterId,
+                damage: r.damage,
+                len: r.length,
+                w: r.thickness,
+                h: r.thickness,
+                weapon: (r as Projectile & { weapon?: string }).weapon,
+                shooterRole: r.shooterRole ?? playersRef.current.get(r.shooterId)?.role,
+              })),
+            myPlayerId: myIdRef.current,
+            onPlayerHitByRound: (victimId, shooterId, dmg, weapon, projId) => {
+              if (projId && weapon !== 'megalaser') {
+                const idx = projectilesRef.current.findIndex((r) => r.id === projId);
+                if (idx !== -1) projectilesRef.current.splice(idx, 1);
+              }
+              const shooterRole =
+                shooterId === myIdRef.current
+                  ? myRoleRef.current
+                  : projectilesRef.current.find((r) => r.shooterId === shooterId)?.shooterRole ??
+                    playersRef.current.get(shooterId)?.role ??
+                    'student';
+              const victim = playersRef.current.get(victimId);
+              if (victim && !canShooterHitTarget(shooterRole, victim.role)) return;
+
               if (victimId === myIdRef.current) {
                 const me = playersRef.current.get(myIdRef.current);
-                if (me && !isGodModeRef.current && !me.isDying && !me.ropedById) {
-                  me.isDying = true;
-                  me.deathStartedAt = Date.now();
-                  me.vx = 0;
-                  me.vy = -13.2;
-                  soundEngine.playDeath();
-                  showBanner('💥 Kamu ditembak oleh Admin!');
+                if (me && !me.isDying && !me.ropedById) {
+                  const shooterName =
+                    playersRef.current.get(shooterId)?.username ??
+                    (shooterRole === 'admin' ? 'Admin' : shooterRole === 'teacher' ? 'Guru' : 'Player');
+                  if (weapon === 'ice') {
+                    me.isDying = false;
+                    me.frozenUntil = Date.now() + 1200;
+                    me.frozenDeathAt = Date.now() + 1200;
+                    me.frozenByShooterId = shooterId;
+                    me.frozenByWeapon = 'ice';
+                    me.vx = me.x < (projectilesRef.current.find((r) => r.shooterId === shooterId)?.x ?? me.x) ? -4 : 4;
+                    me.vy = -3.5;
+                    showBanner(`🧊 Kamu dibekukan oleh ${shooterName}!`);
+                  } else if (weapon === 'stunt') {
+                    me.isDying = false;
+                    me.frozenUntil = Date.now() + 1200;
+                    me.frozenDeathAt = Date.now() + 1200;
+                    me.stunnedUntil = Date.now() + 1200;
+                    me.frozenByShooterId = shooterId;
+                    me.frozenByWeapon = 'stunt';
+                    me.vx = 0;
+                    me.vy = 0;
+                    showBanner(`⚡ Kamu terkena kejutan listrik dari ${shooterName}!`);
+                  } else {
+                    me.isDying = true;
+                    me.deathStartedAt = Date.now();
+                    me.vx = 0;
+                    me.vy = -13.2;
+                    soundEngine.playDeath();
+                    showBanner(`💥 Kamu ditembak oleh ${shooterName}! (-${dmg ?? 1})`);
+                  }
                 }
               }
-              ably.publishCommand({ op: 'hit', targetId: victimId, by: shooterId, dmg });
-            },
-          },
+              ably.publishCommand({ op: 'hit', targetId: victimId, by: shooterId, dmg, weapon, shooterRole });
+            },          },
         );
       }
 
@@ -2117,7 +2225,6 @@ export default function GamePage() {
             gun: me.gun ?? undefined,
             tag: me.tag,
             colors: me.colors,
-            clone: me.clone ?? undefined,
           });
         }
       }
@@ -2167,7 +2274,7 @@ export default function GamePage() {
         if (pStage !== curStage) continue;
 
         const role = p.id === myIdRef.current ? myRole : (p.role ?? (room?.hostId === p.id ? 'teacher' : 'student'));
-        const displayName = p.clone?.username || p.fullName?.trim() || p.username;
+        const displayName = p.fullName?.trim() || p.username;
         drawCat(
           ctx,
           p.x,
@@ -2189,8 +2296,10 @@ export default function GamePage() {
             gun: p.gun,
             tag: p.tag,
             colors: p.colors,
-            clone: p.clone,
             isGodMode: p.isGodMode || (p.id === myIdRef.current && isGodModeRef.current),
+            frozenUntil: p.frozenUntil,
+            stunnedUntil: p.stunnedUntil,
+            velocity: { vx: p.vx, vy: p.vy },
           },
         );
       }
@@ -2278,7 +2387,6 @@ export default function GamePage() {
                 gn: me.gun ?? undefined,
                 tg: me.tag,
                 cl: me.colors,
-                cn: me.clone ?? undefined,
               }
               : {
                 r: roomId,
@@ -2361,7 +2469,6 @@ export default function GamePage() {
                   gun: typeof rp.gn === 'string' ? rp.gn : undefined,
                   tag: typeof rp.tg === 'string' ? rp.tg : undefined,
                   colors: (rp.cl as PlayerColors | undefined) ?? undefined,
-                  clone: (rp.cn && typeof rp.cn === 'object' ? (rp.cn as { username: string; fullName?: string }) : undefined),
                 });
               }
             }
@@ -2480,6 +2587,7 @@ export default function GamePage() {
               if (p.lastY !== undefined) existing.targetY = p.lastY;
               if (p.lastFacing !== undefined) existing.facing = p.lastFacing as 1 | -1;
             }
+            if (p.username) existing.username = p.username;
             if (p.fullName) existing.fullName = p.fullName;
             if (p.role) existing.role = p.role;
             if (typeof p.stage === 'number') existing.stage = p.stage;
@@ -2517,7 +2625,8 @@ export default function GamePage() {
           const statusChanged = data.room?.status && data.room.status !== prev.status;
           const playersChanged =
             prev.players.length !== serverPlayers.length ||
-            prev.players.some((pl, idx) => pl.userId !== serverPlayers[idx]?.userId);
+            prev.players.some((pl, idx) => pl.userId !== serverPlayers[idx]?.userId) ||
+            prev.players.some((pl, idx) => pl.username !== serverPlayers[idx]?.username || pl.fullName !== serverPlayers[idx]?.fullName);
           if (!statusChanged && !playersChanged) return prev;
           const updated = {
             ...prev,
@@ -2779,12 +2888,24 @@ export default function GamePage() {
     ingestMessages([sysMsg]);
   }
 
+  // Chat command access control (fitur /enable cmd & /disable cmd):
+  // - admin & guru: bisa pakai perintah, kontrol room
+  // - student: default tidak bisa. Kalau di-enable admin/guru via /enable cmd <user|all>,
+  //   bisa pakai cmd dengan target DIRI SENDIRI (me) saja (sementara di room tsb,
+  //   rejoin / refresh = akses otomatis hilang). /disable cmd <user|all> mencabut akses.
+  const cmdEnabledUsersRef = useRef<Set<string>>(new Set());
+  const isStudentCmdAllowed = (uid: string) =>
+    cmdEnabledUsersRef.current.has(uid) || cmdEnabledUsersRef.current.has('__ALL_STUDENTS__');
+  const isCmdAllowedFor = (role: string | undefined) =>
+    role === 'admin' || role === 'teacher' || (role === 'student' && isStudentCmdAllowed(myIdRef.current));
+
   async function handleChatCommand(rawText: string) {
     const isStaff = isStaffRole(myRoleRef.current);
     const isAdmin = myRoleRef.current === 'admin';
+    const isTeacher = myRoleRef.current === 'teacher';
 
-    if (!isStaff) {
-      // Siswa ketik '/' dianggap chat biasa, tanpa pesan error
+    if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
+      // Siswa yang belum di-enable: ketik '/' dianggap chat biasa, tanpa pesan error
       return;
     }
 
@@ -2812,39 +2933,171 @@ export default function GamePage() {
       return null;
     };
 
-    if (cmd === 'help' || cmd === 'cmd') {
-      const helpLines = [
-        '--- DAFTAR CHAT COMMAND ---',
-        '• /cls : Bersihkan seluruh chat di layar (Clear Screen)',
-        '• /set god <user|me> : Aktifkan God Mode (Kebal & Infinite Laser)',
-        '• /unset god <user|me> : Nonaktifkan God Mode',
-        isAdmin ? '• /teleport <username> : Nyamperin player tersebut (pindah ke stage & posisinya)' : null,
-          '• /teleport <user|me> me : Tarik player ke posisimu',
-        '• /teleport <user|me> <stage> : Lempar player ke Stage tertentu (1-4)',
-        isAdmin ? '• /teleport all me : Tarik SELURUH siswa ke posisimu' : null,
-        isAdmin ? '• /teleport all <stage> : Lempar SELURUH siswa ke Stage tertentu' : null,
-        '• /mirror <username> : Tampilkan & bantu jawab kotak soal siswa',
-        '• /mirror all : Mode soal bonus untuk seluruh kelas',
-        '• /unset mirror : Sembunyikan kembali kotak soal',
-        '• /reset <user|me> : Reset jawaban & skor player ke Stage 1',
-        isAdmin ? '• /reset all : Reset SEMUA jawaban 1 room ke Stage 1' : null,
-        isAdmin ? '• /spawn gun <minigun|laser|megalaser> [user|me] : Beri senjata (bisa menembak player)' : null,
-        isAdmin ? '• /jail on|off [user|me] : Bekukan player selama 15 detik' : null,
-        isAdmin ? '• /change tag <user|me> <judul> : Ganti title tag di atas kepala' : null,
-        isAdmin ? '• /change nick <user|me> <nama> : Ganti nickname player (tersimpan permanen)' : null,
-        isAdmin ? '• /change color <user|me> body|tag|nick <warna> : Ganti warna (hex/nama/rgb/blink/spin)' : null,
-        isAdmin ? '• /set clone <user|me> <targetusername> : Clone karakter (nick, avatar, tag, warna)' : null,
-        isAdmin ? '• /unset clone : Lepas clone, kembalikan identitas asli' : null,
-        isAdmin ? '• /take rope <user|all> : Ikat player dengan tali (ikut admin & kebal rintangan)' : null,
-        isAdmin ? '• /untake rope <user|all> : Lepas tali player' : null,
-    isAdmin ? '• /skip stage <username|all> : Tandai semua soal tersisa di stage siswa sebagai selesai (tanpa poin). all = semua player di stage admin' : null,
-      ].filter(Boolean);
-      for (const line of helpLines) {
-        addSystemChatMessage(line as string);
+    // Batasi target untuk non-admin:
+    // - student yang di-enable: cuman bisa target diri sendri
+    // - teacher: bebas target kecuali role admin
+    const resolveTarget = (targetQuery?: string) => {
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery || ''}' tidak ditemukan di room.`);
+        return null;
       }
+      const targetRole = target.id === myIdRef.current
+        ? myRoleRef.current
+        : (playersRef.current.get(target.id)?.role ?? roomRef.current?.players?.find((pl) => pl.userId === target.id)?.role);
+      if (!isAdmin) {
+        if (target.id !== myIdRef.current && targetRole === 'admin') {
+          addSystemChatMessage('Tidak bisa menargetkan Administrator.');
+          return null;
+        }
+        if (myRoleRef.current === 'student' && target.id !== myIdRef.current) {
+          addSystemChatMessage('Kamu cuman bisa pakai perintah ke diri sendiri.');
+          return null;
+        }
+      }
+      return target;
+    };
+
+    // /enable cmd <target|all> & /disable cmd <target|all>: khusus Admin & Guru
+    if (cmd === 'enable' && arg1 === 'cmd') {
+      if (!isStaff) {
+        addSystemChatMessage('Perintah /enable cmd hanya untuk Guru dan Administrator.');
+        return;
+      }
+      const targetQuery = arg2;
+      if (!targetQuery) {
+        addSystemChatMessage('Format: /enable cmd <target|all>');
+        return;
+      }
+      if (targetQuery === 'all') {
+        cmdEnabledUsersRef.current.add('__ALL_STUDENTS__');
+        for (const p of playersRef.current.values()) {
+          const role = p.role ?? roomRef.current?.players?.find((pl) => pl.userId === p.id)?.role;
+          if (role === 'student' || (!role && p.id !== myIdRef.current)) {
+            cmdEnabledUsersRef.current.add(p.id);
+          }
+        }
+        if (roomRef.current?.players) {
+          for (const pl of roomRef.current.players) {
+            if (pl.role === 'student') cmdEnabledUsersRef.current.add(pl.userId);
+          }
+        }
+        ably.publishCommand({ op: 'cmd_access', targetId: 'all', value: true });
+        addSystemChatMessage('✅ Akses perintah chat DIAKTIFKAN untuk SEMUA siswa di room ini. Berlaku sementara sampai rejoin / di-disable.');
+        soundEngine.playPowerUp();
+        return;
+      }
+
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan di room.`);
+        return;
+      }
+      const targetRole = playersRef.current.get(target.id)?.role ?? roomRef.current?.players?.find((pl) => pl.userId === target.id)?.role;
+      if (targetRole === 'admin' || targetRole === 'teacher') {
+        addSystemChatMessage('Admin & guru sudah otomatis memiliki akses semua perintah.');
+        return;
+      }
+      cmdEnabledUsersRef.current.add(target.id);
+      ably.publishCommand({ op: 'cmd_access', targetId: target.id, value: true });
+      addSystemChatMessage(`✅ '${target.username}' sekarang bisa pakai perintah chat (khusus target diri sendiri). Berlaku sementara sampai rejoin / di-disable.`);
+      soundEngine.playPowerUp();
       return;
     }
 
+    if ((cmd === 'disable' && arg1 === 'cmd') || (cmd === 'cmd' && arg1 === 'disable')) {
+      if (!isStaff) {
+        addSystemChatMessage('Perintah /disable cmd hanya untuk Guru dan Administrator.');
+        return;
+      }
+      const targetQuery = arg2;
+      if (!targetQuery) {
+        addSystemChatMessage('Format: /disable cmd <target|all>');
+        return;
+      }
+      if (targetQuery === 'all') {
+        cmdEnabledUsersRef.current.clear();
+        ably.publishCommand({ op: 'cmd_access', targetId: 'all', value: false });
+        addSystemChatMessage('⛔ Akses perintah chat untuk SEMUA siswa di room telah dicabut.');
+        soundEngine.playDeath();
+        return;
+      }
+
+      const target = findPlayer(targetQuery);
+      if (!target) {
+        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan di room.`);
+        return;
+      }
+      const targetRole = playersRef.current.get(target.id)?.role ?? roomRef.current?.players?.find((pl) => pl.userId === target.id)?.role;
+      if (targetRole === 'admin' || targetRole === 'teacher') {
+        addSystemChatMessage('Akses perintah admin & guru tidak bisa dicabut.');
+        return;
+      }
+      cmdEnabledUsersRef.current.delete(target.id);
+      cmdEnabledUsersRef.current.delete('__ALL_STUDENTS__');
+      ably.publishCommand({ op: 'cmd_access', targetId: target.id, value: false });
+      addSystemChatMessage(`⛔ Akses perintah chat '${target.username}' telah dicabut.`);
+      soundEngine.playDeath();
+      return;
+    }
+
+    const ALL_COMMANDS: { prefix: string; usage: string; adminOnly?: boolean; staffOnly?: boolean; staffStrict?: boolean }[] = [
+      { prefix: 'cls', usage: '• /cls : Bersihkan seluruh chat di layar' },
+      { prefix: 'set', usage: '• /set god <user|me> : Aktifkan God Mode' },
+      { prefix: 'unset', usage: '• /unset god <user|me> : Nonaktifkan God Mode' },
+      { prefix: 'teleport', usage: '• /teleport <username> : Nyamperin player (pindah ke stage & posisinya)', adminOnly: true },
+      { prefix: 'teleport', usage: '• /teleport <user|me> me : Tarik player ke posisimu' },
+      { prefix: 'teleport', usage: `• /teleport <user|me> <stage> : Lempar player ke Stage tertentu (1-${totalStagesRef.current})` },
+      { prefix: 'teleport', usage: '• /teleport all me : Tarik SELURUH siswa ke posisimu', adminOnly: true },
+      { prefix: 'teleport', usage: '• /teleport all <stage> : Lempar SELURUH siswa ke Stage tertentu', adminOnly: true },
+      { prefix: 'mirror', usage: '• /mirror <username> : Tampilkan & bantu jawab kotak soal siswa', staffOnly: true },
+      { prefix: 'mirror', usage: '• /mirror all : Mode soal bonus untuk seluruh kelas', staffOnly: true },
+      { prefix: 'unset', usage: '• /unset mirror : Sembunyikan kembali kotak soal', staffOnly: true },
+      { prefix: 'reset', usage: '• /reset <user|me> : Reset jawaban & skor player ke Stage 1' },
+      { prefix: 'reset', usage: '• /reset all : Reset SEMUA jawaban 1 room ke Stage 1', adminOnly: true },
+      { prefix: 'spawn', usage: '• /spawn gun <minigun|laser|megalaser|ice|stunt> [user|me] : Beri senjata', staffOnly: true },
+      { prefix: 'jail', usage: '• /jail on|off [user|me] : Bekukan player selama 15 detik', staffOnly: true },
+      { prefix: 'change', usage: '• /change tag <user|me> <judul> : Ganti title tag di atas kepala', staffOnly: true },
+      { prefix: 'change', usage: '• /change color <user|me> body|tag|nick <warna> : Ganti warna', staffOnly: true },
+      { prefix: 'set', usage: '• /set nick <user|me> <nama> : Ganti nama player', staffOnly: true },
+      { prefix: 'unset', usage: '• /unset nick <user|me> : Balikin nama asli player', staffOnly: true },
+      { prefix: 'take', usage: '• /take rope <user|all> : Ikat player dengan tali (ikut admin & kebal rintangan)', adminOnly: true },
+      { prefix: 'untake', usage: '• /untake rope <user|all> : Lepas tali player', adminOnly: true },
+      { prefix: 'skip', usage: '• /skip stage <username|all|rope> : Tandai semua soal tersisa di stage siswa sebagai selesai', adminOnly: true },
+      { prefix: 'enable', usage: '• /enable cmd <target|all> : Izinkan siswa di room pakai perintah chat (sementara)', staffStrict: true },
+      { prefix: 'disable', usage: '• /disable cmd <target|all> : Cabut akses perintah chat siswa di room', staffStrict: true },
+    ];
+
+    if (cmd === 'help' || cmd === 'cmd') {
+      const sub = (arg1 || parts[1])?.toLowerCase();
+      if (sub && sub !== 'all') {
+        const matching = ALL_COMMANDS.filter((c) => {
+          if (c.adminOnly && !isAdmin) return false;
+          if (c.staffStrict && !isStaff) return false;
+          if (c.staffOnly && !isStaff && !isStudentCmdAllowed(myIdRef.current)) return false;
+          return c.prefix === sub || c.prefix.startsWith(sub);
+        });
+        if (matching.length > 0) {
+          addSystemChatMessage(`Format perintah /${sub}:`);
+          for (const m of matching) {
+            addSystemChatMessage(m.usage);
+          }
+          return;
+        }
+      }
+      // Ringkas: tidak banjir chat menjelaskan semuanya sekaligus
+      addSystemChatMessage('--- DAFTAR PERINTAH CHAT ---');
+      addSystemChatMessage('Ketik perintah untuk melihat format syntaxnya (contoh: /skip):');
+      addSystemChatMessage('• /set, /unset, /teleport, /mirror, /reset');
+      if (isAdmin || isStaff) {
+        addSystemChatMessage('• /spawn, /jail, /enable, /disable, /take, /untake');
+      }
+      if (isAdmin) {
+        addSystemChatMessage('• /skip');
+      }
+      addSystemChatMessage('• /change, /cls');
+      return;
+    }
     if (cmd === 'cls' || cmd === 'clear') {
       setChat([]);
       seenMsgIdsRef.current.clear();
@@ -2854,11 +3107,8 @@ export default function GamePage() {
 
     if (cmd === 'set' && arg1 === 'god') {
       const targetQuery = arg2 || parts[2];
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Gagal: Player '${targetQuery || ''}' tidak ditemukan di room.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       const p = playersRef.current.get(target.id);
       if (p) p.isGodMode = true;
       if (target.id === myIdRef.current) {
@@ -2873,11 +3123,8 @@ export default function GamePage() {
 
     if (cmd === 'unset' && arg1 === 'god') {
       const targetQuery = arg2 || parts[2];
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Gagal: Player '${targetQuery || ''}' tidak ditemukan di room.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       const p = playersRef.current.get(target.id);
       if (p) p.isGodMode = false;
       if (target.id === myIdRef.current) {
@@ -2904,11 +3151,8 @@ export default function GamePage() {
           addSystemChatMessage('Perintah /teleport hanya dapat digunakan oleh Administrator.');
           return;
         }
-        const target = findPlayer(targetQuery);
-        if (!target) {
-          addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-          return;
-        }
+        const target = resolveTarget(targetQuery);
+        if (!target) return;
         const me = playersRef.current.get(myIdRef.current);
         if (!me) {
           addSystemChatMessage('Karaktermu belum siap, coba lagi.');
@@ -2963,11 +3207,8 @@ export default function GamePage() {
         return;
       }
 
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
 
       if (dest === 'me') {
         const me = playersRef.current.get(myIdRef.current);
@@ -3019,11 +3260,8 @@ export default function GamePage() {
           return;
         }
       } else {
-        const target = findPlayer(targetQuery);
-        if (!target) {
-          addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-          return;
-        }
+        const target = resolveTarget(targetQuery);
+        if (!target) return;
         if (target.id === myIdRef.current) {
           addSystemChatMessage('Tidak bisa mengikat diri sendiri. 🪢');
           return;
@@ -3065,7 +3303,16 @@ export default function GamePage() {
       return;
     }
 
-    if (cmd === 'skip' && arg1 === 'stage') {
+    if (cmd === 'skip') {
+      if (!isAdmin) {
+        addSystemChatMessage('Perintah /skip stage hanya dapat digunakan oleh Administrator.');
+        return;
+      }
+      if (arg1 !== 'stage' || !arg2) {
+        addSystemChatMessage('Perintah tidak lengkap. Format:');
+        addSystemChatMessage('• /skip stage <username|all|rope> : Tandai semua soal tersisa di stage siswa sebagai selesai (tanpa poin). all = semua player di stage admin, rope = yang diikat tali.');
+        return;
+      }
       if (!isAdmin) {
         addSystemChatMessage('Perintah /skip stage hanya dapat digunakan oleh Administrator.');
         return;
@@ -3163,11 +3410,8 @@ export default function GamePage() {
         }
         return;
       }
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       if (target.id === myIdRef.current) {
         addSystemChatMessage('Tidak bisa skip stage diri sendiri.');
         return;
@@ -3237,11 +3481,8 @@ export default function GamePage() {
         soundEngine.playDeath();
         return;
       }
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       fetch('/api/game/reset-progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3287,11 +3528,8 @@ export default function GamePage() {
         return;
       }
 
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
 
       mirrorTargetRef.current = { userId: target.id, username: target.username };
       mirrorFetchTargetRef.current = target.id;
@@ -3334,145 +3572,70 @@ export default function GamePage() {
       return;
     }
 
-    if (cmd === 'set' && arg1 === 'clone') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+    if (cmd === 'set' && arg1 === 'nick') {
+      // Format: /set nick <user|me> <nama baru>
+      const targetQuery = arg2 || 'me';
+      const newName = parts.slice(3).join(' ').trim();
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
+      if (!newName) {
+        addSystemChatMessage('Format: /set nick <user|me> <nama baru>');
         return;
       }
-      // Format baru: /set clone <user|me> <targetusername>
-      // scope 'me' = clone diri sendiri jadi target, scope 'user' = clone player lain jadi target
-      const scope = arg2 || '';
-      const targetQuery = parts[3]?.toLowerCase() || '';
-      if (!targetQuery) {
-        addSystemChatMessage('Format: /set clone <user|me> <targetusername>');
-        return;
+      const nickValue = newName.slice(0, 20);
+      // Persist ke DB supaya rejoin / pindah room namanya tetap yang terakhir
+      fetch('/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'admin-set-nick', targetId: target.id, username: nickValue }),
+      }).catch(() => { });
+      ably.publishCommand({ op: 'change_nick', targetId: target.id, value: nickValue });
+      // Update langsung di client admin (handler publish hanya berlaku di client target)
+      const pAdmin = playersRef.current.get(target.id);
+      if (pAdmin) {
+        pAdmin.username = nickValue;
+        pAdmin.fullName = nickValue;
       }
-      if (scope === 'user') {
-        let remoteTarget: { id: string; username: string } | null = null;
-        for (const p of playersRef.current.values()) {
-          if (p.id !== myIdRef.current && p.username.toLowerCase() === targetQuery) {
-            remoteTarget = { id: p.id, username: p.username };
-            break;
-          }
-        }
-        if (!remoteTarget) {
-          addSystemChatMessage(`Player '${parts[3]}' tidak ditemukan di room (untuk /set clone user).`);
-          return;
-        }
-        ably.publishCommand({ op: 'clone', targetId: remoteTarget.id, username: targetQuery, fullName: undefined });
-        addSystemChatMessage(`🎭 Karakter '${remoteTarget.username}' di-clone jadi '${targetQuery}'.`);
-        soundEngine.playPowerUp();
-        return;
-      }
-      if (scope !== 'me') {
-        addSystemChatMessage('Format: /set clone <user|me> <targetusername>');
-        return;
-      }
-      const me = playersRef.current.get(myIdRef.current);
-      if (!me) {
-        addSystemChatMessage('Gagal: player kamu belum siap.');
-        return;
-      }
-      // Cari target: live players dulu, lalu room members (termasuk offline)
-      let targetData: { username: string; fullName?: string; avatar?: string; tag?: string | null; colors?: { body?: string; tag?: string; nick?: string } | null } | null = null;
-      let targetId: string | null = null;
-      if (targetQuery === 'me' || targetQuery === (myUsernameRef.current || '').toLowerCase()) {
-        targetData = { username: myUsernameRef.current || 'Me', fullName: myFullNameRef.current || me.fullName, avatar: me.avatar, tag: null, colors: null };
-        targetId = myIdRef.current;
-      } else {
-        for (const p of playersRef.current.values()) {
-          if (p.username.toLowerCase() === targetQuery) {
-            targetData = { username: p.username, fullName: p.fullName, avatar: p.avatar, tag: p.tag, colors: p.colors };
-            targetId = p.id;
-            break;
-          }
-        }
-        if (!targetData) {
-          const foundInRoom = roomRef.current?.players?.find((pl) => pl.username.toLowerCase() === targetQuery);
-          if (foundInRoom) {
-            targetData = { username: foundInRoom.username, fullName: foundInRoom.fullName || undefined, avatar: foundInRoom.avatar };
-            targetId = foundInRoom.userId;
-          }
-        }
-      }
-      if (!targetData || !targetId) {
-        addSystemChatMessage(`Player '${parts[3]}' tidak ditemukan (online maupun offline).`);
-        return;
-      }
-      // Clone semua: nick, avatar, tag, warna
-      me.username = targetData.username;
-      me.fullName = targetData.fullName;
-      if (targetData.avatar) me.avatar = targetData.avatar;
-      me.tag = targetData.tag ?? undefined;
-      me.colors = targetData.colors ? { ...targetData.colors } : null;
-      me.clone = { username: targetData.username, fullName: targetData.fullName };
-      myUsernameRef.current = targetData.username;
-      myFullNameRef.current = targetData.fullName || '';
-      try {
-        window.localStorage.setItem('llys_custom_clone', JSON.stringify({ username: targetData.username, fullName: targetData.fullName }));
-        if (targetData.avatar) window.localStorage.setItem('llys_custom_avatar', targetData.avatar);
-        else window.localStorage.removeItem('llys_custom_avatar');
-        if (targetData.tag) window.localStorage.setItem('llys_custom_tag', targetData.tag);
-        else window.localStorage.removeItem('llys_custom_tag');
-        window.localStorage.setItem('llys_custom_colors', JSON.stringify(me.colors ?? {}));
-      } catch { }
-      if (targetId !== myIdRef.current) {
-        // Clone diri sendiri jadi target: broadcast ke SEMUA client dengan targetId = ID kita,
-        // bukan ID target, supaya client lain menerapkan clone pada KITA (bukan pada target).
-        ably.publishCommand({ op: 'clone', targetId: myIdRef.current, username: targetData.username, fullName: targetData.fullName });
-      }
-      addSystemChatMessage(`🎭 Karakter kamu di-clone jadi '${targetData.username}' (nick, avatar, tag, warna).`);
+      addSystemChatMessage(`🏷️ Nama '${target.username}' diganti jadi "${nickValue}" (tersimpan permanen).`);
       soundEngine.playPowerUp();
-      setCloneNonce((n) => n + 1);
       return;
     }
 
-    if (cmd === 'unset' && arg1 === 'clone') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
-        return;
+    if (cmd === 'unset' && arg1 === 'nick') {
+      // Format: /unset nick <user|me>
+      const targetQuery = arg2 || 'me';
+      const target = resolveTarget(targetQuery) as { id: string; username: string; fullName?: string | null } | null;
+      if (!target) return;
+      const targetP = playersRef.current.get(target.id);
+      const originalName = (targetP?.originalFullName || target.fullName || target.username).trim().slice(0, 20);
+      // Persist ke DB: balikin username ke nama asli (fullName dari Siakad)
+      fetch('/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'admin-set-nick', targetId: target.id, username: originalName }),
+      }).catch(() => { });
+      ably.publishCommand({ op: 'change_nick', targetId: target.id, value: originalName });
+      const pAdmin = playersRef.current.get(target.id);
+      if (pAdmin) {
+        pAdmin.username = originalName;
+        pAdmin.fullName = originalName;
+        pAdmin.originalFullName = null;
       }
-      const me = playersRef.current.get(myIdRef.current);
-      if (me) {
-        me.clone = null;
-        // Kembalikan identitas asli dari room membership (sesudah clone dilepas)
-        const original = roomRef.current?.players?.find((pl) => pl.userId === myIdRef.current);
-        if (original) {
-          me.username = original.username;
-          me.fullName = original.fullName || undefined;
-          if (original.avatar) me.avatar = original.avatar;
-          myUsernameRef.current = original.username;
-          myFullNameRef.current = original.fullName || '';
-        }
-        me.tag = undefined;
-        me.colors = null;
-      }
-      try {
-        window.localStorage.removeItem('llys_custom_clone');
-        window.localStorage.removeItem('llys_custom_avatar');
-        window.localStorage.removeItem('llys_custom_tag');
-        window.localStorage.removeItem('llys_custom_colors');
-      } catch { }
-      ably.publishCommand({ op: 'clone', targetId: myIdRef.current, username: undefined, fullName: undefined });
-      addSystemChatMessage('🎭 Clone karakter dilepas, identitas asli dikembalikan.');
+      addSystemChatMessage(`🏷️ Nama '${target.username}' dikembalikan ke nama asli "${originalName}".`);
       soundEngine.playBounce();
-      setCloneNonce((n) => n + 1);
       return;
     }
 
     if (cmd === 'spawn' && arg1 === 'gun') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
         return;
       }
       const weaponType = parseWeaponType(parts[2]);
       const targetQuery = parts[3]?.toLowerCase() || 'me';
       if (!weaponType && parts[2] && ['none', 'off', 'unset'].includes(parts[2]?.toLowerCase() ?? '')) {
-        const target = findPlayer(targetQuery);
-        if (!target) {
-          addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-          return;
-        }
+        const target = resolveTarget(targetQuery);
+        if (!target) return;
         const p = playersRef.current.get(target.id);
         if (p) {
           p.gun = null;
@@ -3484,15 +3647,12 @@ export default function GamePage() {
         return;
       }
       if (!weaponType) {
-        addSystemChatMessage('Format: /spawn gun <minigun|laser|megalaser> [user|me]');
+        addSystemChatMessage('Format: /spawn gun <minigun|laser|megalaser|ice|stunt> [user|me]');
         return;
       }
       const spec = WEAPONS[weaponType];
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       const p = playersRef.current.get(target.id);
       if (p) {
         p.gun = weaponType;
@@ -3506,8 +3666,8 @@ export default function GamePage() {
     }
 
     if (cmd === 'jail') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
         return;
       }
       const turnOn = arg1 !== 'off';
@@ -3516,11 +3676,8 @@ export default function GamePage() {
         return;
       }
       const targetQuery = parts[3]?.toLowerCase() || parts[2]?.toLowerCase() || 'me';
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       const p = playersRef.current.get(target.id);
       if (p) p.jailedUntil = turnOn ? Date.now() + JAIL_FREEZE_MS : undefined;
       ably.publishCommand({ op: 'jail', targetId: target.id, value: turnOn });
@@ -3530,17 +3687,14 @@ export default function GamePage() {
     }
 
     if (cmd === 'change' && arg1 === 'tag') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
         return;
       }
       const targetQuery = arg2 || 'me';
       const title = parts.slice(3).join(' ').trim();
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       const tagValue = title ? title.slice(0, 20) : undefined;
       const p = playersRef.current.get(target.id);
       if (p) p.tag = tagValue;
@@ -3556,58 +3710,26 @@ export default function GamePage() {
       return;
     }
 
-    if (cmd === 'change' && arg1 === 'nick') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
-        return;
-      }
-      const targetQuery = arg2 || 'me';
-      const newName = parts.slice(3).join(' ').trim();
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
-      if (!newName) {
-        addSystemChatMessage('Format: /change nick <user|me> <nama baru>');
-        return;
-      }
-      const nickValue = newName.slice(0, 20);
-      // Persist ke DB supaya rejoin / pindah room namanya tetap yang terakhir
-      fetch('/api/profile', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'admin-set-nick', targetId: target.id, username: nickValue }),
-      }).catch(() => { });
-      ably.publishCommand({ op: 'change_nick', targetId: target.id, value: nickValue });
-      addSystemChatMessage(`🏷️ Nickname '${target.username}' diganti jadi "${nickValue}" (tersimpan permanen).`);
-      soundEngine.playPowerUp();
-      return;
-    }
-
     if (cmd === 'change' && arg1 === 'color') {
-      if (!isAdmin) {
-        addSystemChatMessage('Perintah ini hanya untuk Administrator.');
+      if (!isStaff && !isStudentCmdAllowed(myIdRef.current)) {
+        addSystemChatMessage('Perintah ini hanya untuk Administrator, Guru, atau siswa yang di-enable Admin/Guru.');
         return;
       }
       const targetQuery = arg2 || 'me';
       const channel = (parts[3]?.toLowerCase() || '') as 'body' | 'tag' | 'nick';
-      const colorRaw = parts[4];
+      const colorRaw = parts.slice(4).join(' ');
       if (!['body', 'tag', 'nick'].includes(channel) || !colorRaw) {
         addSystemChatMessage('Format: /change color <user|me> body|tag|nick <warna>');
-        addSystemChatMessage('Warna: hex (#ff0000), nama (red), rgb, blink, spin, atau none/reset.');
+        addSystemChatMessage('Warna: hex (#ff0000), nama (red), atau mode animasi: rgb, swap, spiral, spin, pulse, wave, strobe, candy, fire, ice, glitch, blink. Ketik none/reset buat balikin normal.');
         return;
       }
-      const target = findPlayer(targetQuery);
-      if (!target) {
-        addSystemChatMessage(`Player '${targetQuery}' tidak ditemukan.`);
-        return;
-      }
+      const target = resolveTarget(targetQuery);
+      if (!target) return;
       let colorSpec: string | undefined;
       if (colorRaw.toLowerCase() !== 'none' && colorRaw.toLowerCase() !== 'reset') {
         const parsed = parseColorArg(colorRaw);
         if (!parsed) {
-          addSystemChatMessage(`Warna '${colorRaw}' tidak dikenal. Pakai hex, nama warna, rgb, blink, atau spin.`);
+          addSystemChatMessage(`Warna '${colorRaw}' tidak dikenal. Pakai hex, nama warna, atau mode animasi (rgb, swap, spiral, spin, pulse, wave, strobe, candy, fire, ice, glitch, blink).`);
           return;
         }
         colorSpec = parsed.value;
@@ -3632,6 +3754,21 @@ export default function GamePage() {
       });
       addSystemChatMessage(colorSpec ? `🎨 ${channel} '${target.username}' diubah jadi ${colorSpec}.` : `🎨 ${channel} '${target.username}' direset.`);
       soundEngine.playPowerUp();
+      return;
+    }
+
+    // Jika user mengetik incomplete command (misal /take, /untake, /spawn, /set):
+    const matchingIncomplete = ALL_COMMANDS.filter((c) => {
+      if (c.adminOnly && !isAdmin) return false;
+      if (c.staffStrict && !isStaff) return false;
+      if (c.staffOnly && !isStaff && !isStudentCmdAllowed(myIdRef.current)) return false;
+      return c.prefix === cmd || c.prefix.startsWith(cmd);
+    });
+    if (matchingIncomplete.length > 0) {
+      addSystemChatMessage(`Perintah /${cmd} tidak lengkap. Format:`);
+      for (const m of matchingIncomplete) {
+        addSystemChatMessage(m.usage);
+      }
       return;
     }
 
@@ -4203,26 +4340,22 @@ export default function GamePage() {
                         </h2>
                         <ol className="mp-rank-list">
                           {sortedPlayers
-                            .filter((p) => {
-                              if (p.role !== 'admin' && !playersRef.current.get(p.userId)?.clone) return true;
-                              return false;
-                            })
+                            .filter((p) => p.role !== 'admin')
                             .slice(0, 5)
                             .map((p, i) => {
                               const liveP = playersRef.current.get(p.userId);
-                              const cloned = liveP?.clone;
-                              const pFullName = cloned?.fullName || p.fullName || liveP?.fullName;
-                              const pUsername = cloned?.username || p.username;
+                              const pFullName = p.fullName || liveP?.fullName;
+                              const pUsername = p.username;
                               const rankDisplayName =
                                 pFullName && pFullName.trim().toLowerCase() !== pUsername.trim().toLowerCase()
                                   ? `[${pUsername}] - ${pFullName.trim()}`
                                   : `[${pUsername}]`;
                               return (
-                                <li key={`${p.userId}:${cloneNonce}`} className="mp-rank-row">
+                                <li key={p.userId} className="mp-rank-row">
                                   <span className={`rank-medal ${['gold', 'silver', 'bronze'][i] ?? 'silver'}`}>{i + 1}</span>
                                   <span className={`rank-cat-dot ${chipColor(p.userId)}`} aria-hidden="true" />
                                   <span className="rank-name" title={rankDisplayName}>{rankDisplayName}</span>
-                                  <span className="rank-score">{cloned ? -1910 : (scores[p.userId] ?? 0)}</span>
+                                  <span className="rank-score">{scores[p.userId] ?? 0}</span>
                                 </li>
                               );
                             })}
@@ -4506,32 +4639,36 @@ export default function GamePage() {
 
                       const senderPlayer = (m.userId ? playersRef.current.get(m.userId) : null) ||
                         roomRef.current?.players?.find((pl) => pl.userId === m.userId || pl.username === m.senderName);
-                      const senderClone = m.userId ? playersRef.current.get(m.userId)?.clone : undefined;
-                      const isSenderAdmin = (m.role === 'admin' || senderPlayer?.role === 'admin' || m.senderName.toLowerCase() === 'admin' || m.senderName.toLowerCase() === 'administrator') && !m.cloned && !senderClone;
+                      const isSenderAdmin = m.role === 'admin' || senderPlayer?.role === 'admin';
 
-                      let senderLabel = '';
+                      // Format label: [Tag] - Nama Lengkap (tag/title bold)
+                      let senderTag = '';
+                      let senderName = '';
                       if (isSenderAdmin) {
-                        senderLabel = '[Administrator]';
-                      } else if (m.cloned || senderClone) {
-                        const uname = senderClone?.username || m.senderName;
-                        const fname = senderClone?.fullName || m.senderFullName || senderPlayer?.fullName;
-                        senderLabel = fname && fname.trim().toLowerCase() !== uname.trim().toLowerCase()
-                          ? `[${uname}] - ${fname.trim()}`
-                          : `[${uname}]`;
+                        senderTag = senderPlayer?.tag || 'Administrator';
+                        senderName = m.senderFullName || senderPlayer?.fullName || m.senderName;
+                      } else if (senderPlayer?.tag || m.role === 'teacher' || senderPlayer?.role === 'teacher') {
+                        senderTag = senderPlayer?.tag || 'Teacher';
+                        senderName = m.senderFullName || senderPlayer?.fullName || m.senderName;
                       } else {
                         const uname = m.senderName;
                         const fname = m.senderFullName || senderPlayer?.fullName;
-                        if (fname && fname.trim().toLowerCase() !== uname.trim().toLowerCase()) {
-                          senderLabel = `[${uname}] - ${fname.trim()}`;
-                        } else {
-                          senderLabel = `[${uname}]`;
-                        }
+                        senderName = fname && fname.trim().toLowerCase() !== uname.trim().toLowerCase()
+                          ? `${uname} - ${fname.trim()}`
+                          : uname;
                       }
 
                       return (
                         <div key={m.id} className="chat-msg-item">
                           <span>
-                            <span className={`chat-sender ${chipColor(m.senderName)}`}>{senderLabel}</span>
+                            {senderTag ? (
+                              <>
+                                <span className={`chat-sender font-bold ${chipColor(m.senderName)}`}>[{senderTag}]</span>
+                                <span className={`chat-sender ${chipColor(m.senderName)}`}> - {senderName}</span>
+                              </>
+                            ) : (
+                              <span className={`chat-sender ${chipColor(m.senderName)}`}>[{senderName}]</span>
+                            )}
                             <span className="chat-text">: {m.text}</span>
                           </span>
                         </div>

@@ -22,7 +22,6 @@ export type PresencePlayer = {
   gun?: string | null;
   tag?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
-  clone?: { username: string; fullName?: string } | null;
   ropedById?: string | null;
 };
 
@@ -31,6 +30,8 @@ export type ChatMessage = {
   id: string;
   userId?: string;
   senderName: string;
+  senderFullName?: string;
+  role?: string;
   text: string;
   createdAt: string;
 };
@@ -54,7 +55,6 @@ export type PositionData = {
   gun?: string | null;
   tag?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
-  clone?: { username: string; fullName?: string } | null;
   ropedById?: string | null;
 };
 
@@ -78,7 +78,7 @@ export type ObstacleEvent =
   | { op: 'crumble'; stg: number; idx: number; at: number }
   | { op: 'stomp'; stg: number; id: string; until: number }
   | { op: 'powerup'; stg: number; id: string; until: number }
-  | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number; len?: number; thk?: number; color?: string; glow?: string; gun?: string; dmg?: number }
+  | { op: 'shoot'; stg: number; pid: string; x: number; y: number; vx: number; len?: number; thk?: number; color?: string; glow?: string; gun?: string; dmg?: number; weapon?: string; shooterRole?: string; shooterId?: string }
   | { op: 'boss_hit'; stg: number; bid: string; dmg: number }
   | { op: 'boss_died'; stg: number }
   | { op: 'boss_spit'; stg: number; bid: string; pid: string; x: number; y: number; vx: number; vy: number };
@@ -91,12 +91,12 @@ export type RoomCommandEvent =
   | { op: 'gun'; targetId: string; value: boolean; weapon?: string }
   | { op: 'jail'; targetId: string; value: boolean }
   | { op: 'cosmetics'; targetId: string; tag?: string; colors?: { body?: string; tag?: string; nick?: string } }
-  | { op: 'hit'; targetId: string; by: string; dmg: number }
-  | { op: 'clone'; targetId: string; username?: string; fullName?: string }
+  | { op: 'hit'; targetId: string; by: string; dmg: number; weapon?: string; shooterRole?: string }
   | { op: 'change_nick'; targetId: string; value: string }
   | { op: 'rope'; targetId: string; value: boolean; byId?: string; byName?: string }
   | { op: 'rope_all_clear' }
-| { op: 'skip_stage'; targetId: string; qids: string[]; stage?: number };
+| { op: 'skip_stage'; targetId: string; qids: string[]; stage?: number }
+  | { op: 'cmd_access'; targetId: string; value: boolean };
 
 type RealtimeCallbacks = {
   onDirectMove?: (player: PresencePlayer) => void;
@@ -233,7 +233,6 @@ export function useAblyRoom(
             burnUntil: typeof raw.burnUntil === 'number' ? raw.burnUntil : undefined,
             tag: typeof raw.tag === 'string' ? raw.tag : undefined,
             colors: (raw.colors && typeof raw.colors === 'object' ? raw.colors : undefined) as PositionData['colors'],
-            clone: (raw.clone && typeof raw.clone === 'object' ? (raw.clone as PositionData['clone']) : undefined),
             ropedById: typeof raw.rp === 'string' ? raw.rp : typeof raw.ropedById === 'string' ? raw.ropedById : undefined,
             ts: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
           });
@@ -258,7 +257,6 @@ export function useAblyRoom(
           onGround: true,
           tag: typeof msg.tg === 'string' ? msg.tg : undefined,
           colors: (msg.cl && typeof msg.cl === 'object' ? msg.cl : undefined) as PositionData['colors'],
-          clone: (msg.cn && typeof msg.cn === 'object' ? (msg.cn as PositionData['clone']) : undefined),
           ropedById: typeof msg.rp === 'string' ? msg.rp : undefined,
           ts: Date.now(),
         });
@@ -287,7 +285,6 @@ export function useAblyRoom(
           gun: typeof msg.gn === 'string' ? msg.gn : undefined,
           tag: typeof msg.tg === 'string' ? msg.tg : undefined,
           colors: (msg.cl && typeof msg.cl === 'object' ? msg.cl : undefined) as PositionData['colors'],
-          clone: (msg.cn && typeof msg.cn === 'object' ? (msg.cn as PositionData['clone']) : undefined),
           ropedById: typeof msg.rp === 'string' ? msg.rp : undefined,
           ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
         });
@@ -359,7 +356,7 @@ export function useAblyRoom(
         } else if (op === 'powerup' && typeof msg.id === 'string' && typeof msg.until === 'number') {
           callbacksRef.current?.onObstacleEvent?.({ op: 'powerup', stg, id: msg.id, until: msg.until });
         } else if (op === 'shoot' && typeof msg.pid === 'string' && typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.vx === 'number') {
-          callbacksRef.current?.onObstacleEvent?.({ op: 'shoot', stg, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx, len: typeof msg.len === 'number' ? msg.len : undefined, thk: typeof msg.thk === 'number' ? msg.thk : undefined, color: typeof msg.color === 'string' ? msg.color : undefined, glow: typeof msg.glow === 'string' ? msg.glow : undefined, gun: typeof msg.gun === 'string' ? msg.gun : undefined, dmg: typeof msg.dmg === 'number' ? msg.dmg : undefined });
+          callbacksRef.current?.onObstacleEvent?.({ op: 'shoot', stg, pid: msg.pid, x: msg.x, y: msg.y, vx: msg.vx, len: typeof msg.len === 'number' ? msg.len : undefined, thk: typeof msg.thk === 'number' ? msg.thk : undefined, color: typeof msg.color === 'string' ? msg.color : undefined, glow: typeof msg.glow === 'string' ? msg.glow : undefined, gun: typeof msg.gun === 'string' ? msg.gun : undefined, dmg: typeof msg.dmg === 'number' ? msg.dmg : undefined, weapon: typeof msg.weapon === 'string' ? msg.weapon : undefined, shooterRole: typeof msg.shooterRole === 'string' ? msg.shooterRole : undefined, shooterId: typeof msg.shooterId === 'string' ? msg.shooterId : undefined });
         } else if (op === 'boss_hit' && typeof msg.bid === 'string' && typeof msg.dmg === 'number') {
           callbacksRef.current?.onObstacleEvent?.({ op: 'boss_hit', stg, bid: msg.bid, dmg: msg.dmg });
         } else if (op === 'boss_died') {
@@ -652,7 +649,6 @@ export function useAblyRoom(
             gn: pos.gun ?? undefined,
             tg: pos.tag ?? undefined,
             cl: pos.colors ?? undefined,
-            cn: pos.clone ?? undefined,
             ts: Date.now(),
           }),
         );

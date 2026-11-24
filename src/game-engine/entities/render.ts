@@ -35,10 +35,12 @@ export type CatHazardState = {
   blasterUntil?: number;
   isGodMode?: boolean;
   jailedUntil?: number;
+  frozenUntil?: number;
+  stunnedUntil?: number;
+  velocity?: { vx?: number; vy?: number };
   gun?: string | null;
   tag?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
-  clone?: { username: string; fullName?: string } | null;
 };
 
 function drawCat(
@@ -59,16 +61,25 @@ function drawCat(
   const deathElapsed = isDying ? now - (hazard?.deathStartedAt ?? now) : 0;
   const isBurning = Boolean(!isDying && hazard?.burnUntil && hazard.burnUntil > now);
   const burnRemainingMs = isBurning ? (hazard!.burnUntil! - now) : 0;
+  // Ice weapon: player dibekukan jadi es (1.2s) sebelum mati
+  const isFrozen = Boolean(!isDying && hazard?.frozenUntil && hazard.frozenUntil > now);
+  // Stunt weapon: player terkena kejutan listrik (1.2s) sebelum mati
+  const isStunned = Boolean(!isDying && hazard?.stunnedUntil && hazard.stunnedUntil > now);
 
   const base = AVATAR_COLORS[avatar] ?? AVATAR_COLORS['cat-blue'];
   const hue = hashHue(name + avatar);
   const flickerFire = isBurning && Math.floor(now / 70) % 2 === 0;
   const bodySpec = hazard?.colors?.body;
   const bodyOverride = bodySpec ? toHexColor(resolvePlayerColor(bodySpec, now) ?? bodySpec) : null;
-  const cloned = Boolean(hazard?.clone);
-  const effRole = cloned ? 'student' : role;
+  const effRole = role;
   const colors = bodyOverride
     ? { body: bodyOverride, belly: bodyOverride, ear: bodyOverride }
+    : isFrozen
+    ? { body: '#a5f3fc', belly: '#cffafe', ear: '#67e8f9' }
+    : isStunned
+    ? (Math.floor(now / 80) % 2 === 0
+      ? { body: '#fde047', belly: '#fef9c3', ear: '#facc15' }
+      : { body: '#f59e0b', belly: '#fde68a', ear: '#d97706' })
     : isBurning
     ? flickerFire
       ? { body: '#ea580c', belly: '#fed7aa', ear: '#9a3412' }
@@ -96,6 +107,65 @@ function drawCat(
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
+  }
+
+  // Ice crystal aura: shard mengelilingi player yang dibekukan
+  if (isFrozen) {
+    ctx.save();
+    for (let i = 0; i < 6; i += 1) {
+      const ang = (now * 0.0012 + (i * Math.PI) / 3) % (Math.PI * 2);
+      const ox = drawX + w / 2 + Math.cos(ang) * (w * 0.62);
+      const oy = y + h / 2 + Math.sin(ang) * (h * 0.55);
+      const s = 3.5 + Math.sin(now * 0.008 + i) * 1.2;
+      ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy - s);
+      ctx.lineTo(ox + s * 0.6, oy);
+      ctx.lineTo(ox, oy + s);
+      ctx.lineTo(ox - s * 0.6, oy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    // Frost glow di sekitar body
+    ctx.strokeStyle = 'rgba(165, 243, 252, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(drawX - 3, y - 3, w + 6, h + 6);
+    // Frosty trail saat terdorong mundur
+    const hv = hazard?.velocity;
+    if (Math.abs(hv?.vx ?? 0) > 0.5) {
+      ctx.fillStyle = 'rgba(207, 250, 254, 0.5)';
+      for (let i = 0; i < 4; i += 1) {
+        ctx.beginPath();
+        ctx.arc(drawX + w / 2 - (hv?.vx ?? 0) * i * 4, y + h / 2 - (hv?.vy ?? 0) * i * 2, 3 - i * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Electric spark aura: zigzag kuning acak di sekitar player yang terkejut
+  if (isStunned) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(253, 224, 71, ${0.55 + Math.random() * 0.4})`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i += 1) {
+      const sx = drawX + Math.random() * w;
+      const sy = y + Math.random() * h;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + (Math.random() - 0.5) * 16, sy + (Math.random() - 0.5) * 16);
+      ctx.lineTo(sx + (Math.random() - 0.5) * 22, sy + (Math.random() - 0.5) * 22);
+      ctx.lineTo(sx + (Math.random() - 0.5) * 14, sy + (Math.random() - 0.5) * 14);
+      ctx.stroke();
+    }
+    // Glow listrik di sekeliling body
+    ctx.strokeStyle = `rgba(250, 204, 21, ${0.3 + Math.random() * 0.3})`;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(drawX - 4, y - 4, w + 8, h + 8);
     ctx.restore();
   }
 
@@ -196,7 +266,7 @@ function drawCat(
     ctx.restore();
   }
 
-  const hasStaffTitle = !cloned && (role === 'teacher' || role === 'admin');
+  const hasStaffTitle = role === 'teacher' || role === 'admin';
   const isSuperCat = Boolean(hazard?.blasterUntil && hazard.blasterUntil > now);
   const isGodMode = Boolean(hazard?.isGodMode);
 
@@ -251,7 +321,7 @@ function drawCat(
     ctx.restore();
   }
 
-  const displayName = hazard?.clone?.username ?? name;
+  const displayName = name;
   const nickOverride = hazard?.colors?.nick
     ? resolvePlayerColor(hazard.colors.nick, now)
     : undefined;
@@ -263,9 +333,11 @@ function drawCat(
   const tagOverride = hazard?.tag;
   const tagColor = hazard?.colors?.tag ? resolvePlayerColor(hazard.colors.tag, now) : undefined;
   const hasGun = Boolean(hazard?.gun);
-  const showGunBadge = hasGun && (isSuperCat || hasStaffTitle || hazard?.blasterUntil);
+  const isStaffPlayer = effRole === 'admin' || effRole === 'teacher' || role === 'admin' || role === 'teacher';
+  // Keterangan di atas kepala jika sedang pegang senjata: HANYA untuk Admin dan Guru
+  const showGunBadge = hasGun && isStaffPlayer;
 
-  if (isSuperCat && !hasStaffTitle && !tagOverride) {
+  if (isSuperCat && isStaffPlayer && !tagOverride) {
     const ammoText = `⚡ LASER x${hazard?.blasterAmmo ?? 0}`;
     ctx.font = 'bold 9px Nunito, sans-serif';
     const tw = ctx.measureText(ammoText).width + 10;
@@ -295,8 +367,10 @@ function drawCat(
   }
 
   if (showGunBadge && !tagOverride) {
-    // Senjata admin aktif: label ammo dengan warna sesuai weapon
-    const gunLabel = `🔫 ${String(hazard!.gun).toUpperCase()} x${hazard?.blasterAmmo ?? 0}`;
+    // Senjata admin/guru aktif: label ammo dengan warna sesuai weapon (selalu infinity bila unlimited)
+    const ammoCount = hazard?.blasterAmmo;
+    const ammoDisplay = ammoCount === Infinity || typeof ammoCount !== 'number' || ammoCount <= 0 ? '∞' : String(ammoCount);
+    const gunLabel = `🔫 ${String(hazard!.gun).toUpperCase()} x${ammoDisplay}`;
     ctx.font = 'bold 9px Nunito, sans-serif';
     const tw = ctx.measureText(gunLabel).width + 10;
     const bx = drawX + w / 2 - tw / 2;
@@ -310,7 +384,6 @@ function drawCat(
     ctx.fillStyle = '#fdba74';
     ctx.fillText(gunLabel, drawX + w / 2, by - 1);
   }
-
   // Jail: kurung es + rantai di sekitar kucing, sisa detik di atas kepala
   const isJailed = Boolean(hazard?.jailedUntil && hazard.jailedUntil > now);
   if (isJailed) {

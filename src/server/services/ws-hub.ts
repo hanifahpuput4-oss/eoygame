@@ -29,7 +29,6 @@ type WsClient = {
   stage: number;
   tag?: string | null;
   colors?: { body?: string; tag?: string; nick?: string } | null;
-  clone?: { username: string; fullName?: string } | null;
   ropedById?: string | null;
 };
 
@@ -279,7 +278,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
     client.stage = typeof msg.stg === 'number' ? msg.stg : typeof msg.stage === 'number' ? msg.stage : client.stage || 1;
     if (msg.tg === null || typeof msg.tg === 'string') client.tag = msg.tg;
     if (msg.cl === null || (msg.cl && typeof msg.cl === 'object')) client.colors = msg.cl as WsClient['colors'];
-    if (msg.cn === null || (msg.cn && typeof msg.cn === 'object')) client.clone = msg.cn as WsClient['clone'];
 
     addClientToRoom(client);
     if (!client.userId) return;
@@ -300,7 +298,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         onGround: Boolean(msg.g ?? true),
         tag: client.tag,
         colors: client.colors,
-        clone: client.clone,
       });
     }
 
@@ -328,7 +325,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         stg: client.stage,
         tg: client.tag,
         cl: client.colors,
-        cn: client.clone,
         x: typeof msg.x === 'number' ? msg.x : 120,
         y: typeof msg.y === 'number' ? msg.y : 600,
         f: msg.f === -1 ? -1 : 1,
@@ -406,6 +402,9 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
           glow: typeof msg.glow === 'string' ? msg.glow : undefined,
           gun: typeof msg.gun === 'string' ? msg.gun : undefined,
           dmg: typeof msg.dmg === 'number' ? msg.dmg : undefined,
+          weapon: typeof msg.weapon === 'string' ? msg.weapon : undefined,
+          shooterRole: typeof msg.shooterRole === 'string' ? msg.shooterRole : client.role,
+          shooterId: typeof msg.shooterId === 'string' ? msg.shooterId : client.userId,
         },
         client.userId,
         client.id,
@@ -415,7 +414,7 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
   }
 
   if (t === 'cmd') {
-    if (client.role !== 'teacher' && client.role !== 'admin') return;
+    if (msg.op !== 'hit' && client.role !== 'teacher' && client.role !== 'admin') return;
     // rope_all_clear: server ikut melepas tali di live-state & connection semua client
     // supaya snapshot/heartbeat berikutnya tidak mengembalikan tali yang sudah dilepas.
     if (msg.op === 'rope_all_clear') {
@@ -442,7 +441,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
           onGround: entry.onGround ?? true,
           tag: entry.tag,
           colors: entry.colors,
-          clone: entry.clone,
           ropedById: msg.value === false ? null : (typeof msg.byId === 'string' ? msg.byId : 'admin'),
         });
       }
@@ -504,10 +502,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         msg.cl === null || (msg.cl && typeof msg.cl === 'object')
           ? (client.colors = msg.cl as WsClient['colors'])
           : client.colors,
-      clone:
-        msg.cn === null || (msg.cn && typeof msg.cn === 'object')
-          ? (client.clone = msg.cn as WsClient['clone'])
-          : client.clone,
     });
     if (!updated) return;
 
@@ -532,7 +526,6 @@ function handleIncomingMessage(client: WsClient, rawText: string) {
         ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
         tg: client.tag,
         cl: client.colors,
-        cn: client.clone,
       },
       client.userId,
       client.id,

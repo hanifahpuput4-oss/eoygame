@@ -213,7 +213,7 @@ export default function DashboardShell({
         </nav>
 
         {/* User Footer */}
-        <div className="border-t border-white/10 p-3.5">
+        <div className="border-t border-white/10 p-3.5 pb-[calc(0.875rem+env(safe-area-inset-bottom))]">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-xs font-semibold text-white">{userFullName}</div>
@@ -232,7 +232,7 @@ export default function DashboardShell({
 
       {/* Main Content */}
       <div className="lg:pl-60">
-        <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <main className="mx-auto max-w-6xl px-4 py-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-8">
           <div key={pathname} className="animate-page-enter">
             {children}
           </div>
